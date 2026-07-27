@@ -916,7 +916,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             final CardEntry entry = entries.get(viewType);
             final SearchItem item = entry.item;
             MediaCardView card = card(item, entry.positionMs, entry.durationMs);
-            card.setLayoutParams(new RecyclerView.LayoutParams(dp(164), dp(292)));
+            // Leanback converts generic params to its required GridLayoutManager.LayoutParams.
+            card.setLayoutParams(new ViewGroup.LayoutParams(dp(164), dp(292)));
             card.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     if (entry.resume && entry.library != null && !entry.library.episodeId.isEmpty()) {
