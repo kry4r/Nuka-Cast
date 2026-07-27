@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Keep the platform sans default: API 19 misreads inherited fontFamily strings. -->
     <style name="AppThemeBase" parent="android:style/Theme.Holo.NoActionBar">
-        <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/surface</item>
@@ -11,7 +11,6 @@
     <style name="AppTheme" parent="@style/AppThemeBase" />
 
     <style name="AppThemeLight" parent="android:style/Theme.Holo.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowDisablePreview">true</item>
