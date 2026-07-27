@@ -8,6 +8,9 @@ export type Status = {
   activeMedia: string
   sourceCount: number
   siteCount: number
+  storageMountCount: number
+  libraryItemCount: number
+  storageScanning: boolean
   webAddress: string
   pairingRequired: boolean
   airPlayName: string
@@ -142,6 +145,34 @@ export type Player = {
   error: string
 }
 
+export type StorageMount = {
+  id: string
+  name: string
+  type: "local" | "webdav" | "smb"
+  uri: string
+  username: string
+  enabled: boolean
+  lastScanAt: number
+  fileCount: number
+  error: string
+}
+
+export type MediaEntry = {
+  id: string
+  mountId: string
+  mountName: string
+  title: string
+  fileName: string
+  uri: string
+  poster: string
+  typeName: string
+  year: string
+  season: number
+  episode: number
+  size: number
+  modifiedAt: number
+}
+
 async function request<T>(path: string, init?: RequestInit, authenticated = true): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set("Content-Type", "application/json")
@@ -176,6 +207,12 @@ export const api = {
   }),
   removeSource: (id: string) => request<{ removed: boolean }>(`/api/sources/${id}`, { method: "DELETE" }),
   refreshSources: () => request<{ refreshing: boolean }>("/api/sources/refresh", { method: "POST" }),
+  storageMounts: () => request<StorageMount[]>("/api/storage/mounts"),
+  addStorageMount: (payload: { name: string; type: string; uri: string; username: string; password: string }) =>
+    request<StorageMount>("/api/storage/mounts", { method: "POST", body: JSON.stringify(payload) }),
+  removeStorageMount: (id: string) => request<{ removed: boolean }>(`/api/storage/mounts/${id}`, { method: "DELETE" }),
+  scanStorage: () => request<{ scanning: boolean }>("/api/storage/scan", { method: "POST" }),
+  storageLibrary: () => request<MediaEntry[]>("/api/storage/library"),
   search: (payload: Record<string, unknown>) => request<SearchResponse>("/api/search", {
     method: "POST",
     body: JSON.stringify(payload),

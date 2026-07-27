@@ -3,6 +3,7 @@ package com.nukacast.app.tvbox;
 import android.content.Context;
 
 import com.google.gson.Gson;
+import com.nukacast.app.BuildConfig;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.tvbox.model.ConfigSource;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
@@ -117,7 +118,7 @@ public final class TvBoxRepository {
     public TvBoxConfig refresh(ConfigSource source) throws IOException {
         Request request = new Request.Builder()
                 .url(source.url)
-                .header("User-Agent", "NukaCast/0.1 TVBox/API17")
+                .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
                 .header("Accept", "application/json,text/plain,*/*")
                 .build();
         byte[] bytes;

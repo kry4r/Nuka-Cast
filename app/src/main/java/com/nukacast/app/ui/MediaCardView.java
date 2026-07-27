@@ -16,6 +16,12 @@ import com.nukacast.app.R;
 import com.nukacast.app.tvbox.model.SearchItem;
 
 public final class MediaCardView extends LinearLayout {
+    public interface PreviewListener {
+        void onPreview(SearchItem item);
+    }
+
+    private PreviewListener previewListener;
+
     public MediaCardView(Context context, SearchItem item, int positionMs, int durationMs,
                          PosterImageLoader images) {
         super(context);
@@ -23,12 +29,12 @@ public final class MediaCardView extends LinearLayout {
         setFocusable(true);
         setClickable(true);
         setPadding(dp(4), dp(4), dp(4), dp(5));
-        setBackgroundResource(R.drawable.bg_media_card);
+        setBackgroundDrawable(TvTheme.card(context));
         setClipChildren(false);
 
         FrameLayout artwork = new FrameLayout(context);
-        artwork.setBackgroundResource(R.drawable.bg_poster);
-        addView(artwork, new LayoutParams(LayoutParams.MATCH_PARENT, dp(184)));
+        artwork.setBackgroundColor(TvTheme.soft(context));
+        addView(artwork, new LayoutParams(LayoutParams.MATCH_PARENT, dp(224)));
 
         ImageView poster = new ImageView(context);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -61,7 +67,7 @@ public final class MediaCardView extends LinearLayout {
             artwork.addView(progress, progressParams);
         }
 
-        TextView title = text(14, getResources().getColor(R.color.text_primary));
+        TextView title = text(14, TvTheme.primary(context));
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
@@ -70,7 +76,7 @@ public final class MediaCardView extends LinearLayout {
         titleParams.topMargin = dp(7);
         addView(title, titleParams);
 
-        TextView meta = text(11, getResources().getColor(R.color.text_secondary));
+        TextView meta = text(11, TvTheme.secondary(context));
         meta.setSingleLine(true);
         meta.setEllipsize(TextUtils.TruncateAt.END);
         meta.setText(meta(item));
@@ -78,11 +84,18 @@ public final class MediaCardView extends LinearLayout {
 
         setOnFocusChangeListener(new OnFocusChangeListener() {
             @Override public void onFocusChange(View view, boolean focused) {
-                view.animate().scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                        .setDuration(120L).start();
-                if (focused) view.bringToFront();
+                view.animate().scaleX(focused ? 1.07f : 1f).scaleY(focused ? 1.07f : 1f)
+                        .setDuration(150L).start();
+                if (focused) {
+                    view.bringToFront();
+                    if (previewListener != null) previewListener.onPreview(item);
+                }
             }
         });
+    }
+
+    public void setPreviewListener(PreviewListener listener) {
+        previewListener = listener;
     }
 
     private TextView text(int sp, int color) {

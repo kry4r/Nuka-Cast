@@ -26,19 +26,20 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, type Device, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status } from "@/lib/api"
+import { api, type Device, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "search" | "live" | "sources" | "device"
+type View = "overview" | "search" | "live" | "sources" | "storage" | "device"
 
 const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "overview", label: "总览", icon: Gauge },
   { id: "search", label: "影视", icon: Film },
   { id: "live", label: "直播", icon: Radio },
   { id: "sources", label: "源管理", icon: Library },
+  { id: "storage", label: "存储", icon: HardDrive },
   { id: "device", label: "设备", icon: MonitorCog },
 ]
 
@@ -104,6 +105,7 @@ export default function App() {
         {view === "search" && <SearchView setError={setError} />}
         {view === "live" && <LiveView setError={setError} />}
         {view === "sources" && <SourcesView onChanged={refreshStatus} setError={setError} />}
+        {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
         {view === "device" && <DeviceView setError={setError} />}
       </main>
     </div>
@@ -449,6 +451,74 @@ function SourcesView({ onChanged, setError }: { onChanged: () => void; setError:
             <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="font-medium">{source.name}</span><Badge variant={source.error ? "destructive" : "secondary"}>{source.error ? "异常" : "已启用"}</Badge></div><div className="mt-1 truncate text-xs text-muted-foreground">{source.url}</div>{source.error && <div className="mt-1 text-xs text-destructive">{source.error}</div>}</div>
             <div className="shrink-0 text-xs text-muted-foreground">{source.contentHash ? source.contentHash.slice(0, 10) : "未缓存"}</div>
             <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 /></Button>
+          </div>
+        ))}
+      </section>
+    </>
+  )
+}
+
+function StorageView({ onChanged, setError }: { onChanged: () => void; setError: (value: string) => void }) {
+  const [mounts, setMounts] = useState<StorageMount[]>([])
+  const [name, setName] = useState("")
+  const [type, setType] = useState("local")
+  const [uri, setUri] = useState("")
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(() => api.storageMounts().then(setMounts).catch((reason) => setError(message(reason))), [setError])
+  useEffect(() => { load() }, [load])
+
+  async function add(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    try {
+      await api.addStorageMount({ name, type, uri, username, password })
+      setName(""); setUri(""); setUsername(""); setPassword("")
+      await load(); onChanged()
+    } catch (reason) { setError(message(reason)) } finally { setBusy(false) }
+  }
+
+  async function remove(id: string) {
+    try { await api.removeStorageMount(id); await load(); onChanged() } catch (reason) { setError(message(reason)) }
+  }
+
+  async function scan() {
+    setBusy(true)
+    try {
+      await api.scanStorage()
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        const status = await api.status()
+        if (!status.storageScanning) break
+      }
+      await load(); onChanged()
+    } catch (reason) { setError(message(reason)) } finally { setBusy(false) }
+  }
+
+  return (
+    <>
+      <PageHeader title="存储与片库" action={<Button variant="outline" disabled={busy} onClick={scan}>{busy ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}扫描片库</Button>} />
+      <form onSubmit={add} className="grid gap-2 border-y py-4 lg:grid-cols-[120px_160px_1fr_160px_160px_auto]">
+        <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="名称" />
+        <select value={type} onChange={(event) => setType(event.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring">
+          <option value="local">本机 / U 盘</option><option value="webdav">WebDAV</option><option value="smb">SMB</option>
+        </select>
+        <Input value={uri} onChange={(event) => setUri(event.target.value)} placeholder={type === "local" ? "/storage/usb1/Movies" : type === "smb" ? "smb://192.168.8.1/Movies/" : "https://nas/dav/Movies/"} />
+        <Input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名" autoComplete="username" />
+        <Input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="密码" type="password" autoComplete="current-password" />
+        <Button disabled={busy || !name.trim() || !uri.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Plus />}挂载</Button>
+      </form>
+      <section className="mt-5 divide-y rounded-md border">
+        {mounts.map((mount) => (
+          <div key={mount.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2"><span className="font-medium">{mount.name}</span><Badge variant={mount.error ? "destructive" : "secondary"}>{mount.type.toUpperCase()}</Badge></div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">{mount.uri}</div>
+              {mount.error && <div className="mt-1 text-xs text-destructive">{mount.error}</div>}
+            </div>
+            <div className="shrink-0 text-xs text-muted-foreground">{mount.fileCount} 个媒体文件</div>
+            <Button variant="ghost" size="icon" title="删除" onClick={() => remove(mount.id)}><Trash2 /></Button>
           </div>
         ))}
       </section>

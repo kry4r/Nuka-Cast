@@ -3,6 +3,7 @@ package com.nukacast.app.tvbox;
 import android.content.Context;
 
 import com.nukacast.app.spider.SpiderManager;
+import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.SearchItem;
 import com.nukacast.app.tvbox.model.SearchQuery;
 import com.nukacast.app.tvbox.model.SearchResponse;
@@ -25,14 +26,21 @@ public final class SearchEngine {
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     private final SpiderSiteSearcher spiderSearcher;
+    private final StorageLibrary storageLibrary;
 
     public SearchEngine(Context context, TvBoxRepository repository) {
-        this(context, repository, new SpiderManager(context));
+        this(context, repository, new SpiderManager(context), null);
     }
 
     public SearchEngine(Context context, TvBoxRepository repository, SpiderManager spiderManager) {
+        this(context, repository, spiderManager, null);
+    }
+
+    public SearchEngine(Context context, TvBoxRepository repository, SpiderManager spiderManager,
+                        StorageLibrary storageLibrary) {
         this.repository = repository;
         this.spiderSearcher = new SpiderSiteSearcher(spiderManager);
+        this.storageLibrary = storageLibrary;
     }
 
     public SearchEngine(TvBoxRepository repository) {
@@ -61,6 +69,7 @@ public final class SearchEngine {
         response.keyword = query.keyword;
         response.searchedSites = sites.size();
         List<List<SearchItem>> successfulItems = new ArrayList<List<SearchItem>>();
+        if (storageLibrary != null) successfulItems.add(storageLibrary.search(query));
         for (int i = 0; i < futures.size(); i++) {
             Future<SiteOutcome> future = futures.get(i);
             if (future.isCancelled()) {

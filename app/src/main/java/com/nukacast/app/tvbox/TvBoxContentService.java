@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.spider.SpiderManager;
+import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.MediaDetail;
 import com.nukacast.app.tvbox.model.PlaybackInfo;
 import com.nukacast.app.tvbox.model.SearchItem;
@@ -34,15 +35,23 @@ import okhttp3.Response;
 public final class TvBoxContentService {
     private final TvBoxRepository repository;
     private final SpiderManager spiders;
+    private final StorageLibrary storageLibrary;
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     private final ExecutorService homeExecutor = Executors.newFixedThreadPool(4);
 
     public TvBoxContentService(TvBoxRepository repository, SpiderManager spiders) {
+        this(repository, spiders, null);
+    }
+
+    public TvBoxContentService(TvBoxRepository repository, SpiderManager spiders,
+                               StorageLibrary storageLibrary) {
         this.repository = repository;
         this.spiders = spiders;
+        this.storageLibrary = storageLibrary;
     }
 
     public MediaDetail detail(String sourceId, String siteKey, String vodId) throws Exception {
+        if (isStorage(sourceId)) return requireStorage().detail(vodId);
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);
         String body = site.type == 3
                 ? spiders.detail(site, Collections.singletonList(vodId))
@@ -99,6 +108,7 @@ public final class TvBoxContentService {
 
     public PlaybackInfo resolve(String sourceId, String siteKey, String flag, String episodeId,
                                 String title) throws Exception {
+        if (isStorage(sourceId)) return requireStorage().resolve(episodeId, title);
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);
         PlaybackInfo info = site.type == 3
                 ? PlaybackInfoParser.parse(spiders.play(site, safe(flag), episodeId), episodeId)
@@ -164,6 +174,15 @@ public final class TvBoxContentService {
         TvBoxConfig.Site site = repository.findSite(sourceId, siteKey);
         if (site == null) throw new IllegalArgumentException("找不到影视站点");
         return site;
+    }
+
+    private StorageLibrary requireStorage() {
+        if (storageLibrary == null) throw new IllegalStateException("片库服务未启用");
+        return storageLibrary;
+    }
+
+    private static boolean isStorage(String sourceId) {
+        return sourceId != null && sourceId.startsWith("storage:");
     }
 
     private static String xmlToJson(String body) throws Exception {

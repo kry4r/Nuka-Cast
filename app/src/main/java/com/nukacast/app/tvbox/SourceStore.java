@@ -78,7 +78,7 @@ public final class SourceStore {
     private void ensureDefaults() {
         if (!preferences.contains(KEY_SOURCES)) {
             List<ConfigSource> defaults = new ArrayList<ConfigSource>();
-            defaults.add(new ConfigSource("巧技", "http://cdn.qiaoji8.com/tvbox.json"));
+            defaults.add(new ConfigSource("饭太硬", "http://www.饭太硬.com/tv"));
             save(defaults);
         }
     }

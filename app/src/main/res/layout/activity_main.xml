@@ -10,25 +10,27 @@
         android:layout_height="match_parent"
         android:baselineAligned="false"
         android:orientation="horizontal"
-        android:padding="24dp">
+        android:padding="28dp">
 
         <LinearLayout
-            android:layout_width="184dp"
+            android:layout_width="232dp"
             android:layout_height="match_parent"
             android:orientation="vertical"
-            android:paddingEnd="20dp">
+            android:paddingEnd="28dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="4dp"
+                android:layout_marginBottom="18dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
                 <ImageView
-                    android:layout_width="38dp"
-                    android:layout_height="38dp"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
                     android:layout_marginEnd="10dp"
+                    android:background="@drawable/bg_logo_tile"
                     android:contentDescription="@null"
+                    android:padding="6dp"
                     android:src="@drawable/nukacast_logo" />
                 <TextView
                     android:layout_width="0dp"
@@ -36,24 +38,22 @@
                     android:layout_weight="1"
                     android:text="@string/app_name"
                     android:textColor="@color/text_primary"
-                    android:textSize="24sp"
+                    android:textSize="26sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="28dp"
-                android:text="@string/product_subtitle"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
-
-            <Button android:id="@+id/navHome" style="@style/NavButton" android:text="@string/nav_home" />
-            <Button android:id="@+id/navMovies" style="@style/NavButton" android:text="@string/nav_movies" />
-            <Button android:id="@+id/navCast" style="@style/NavButton" android:text="@string/nav_cast" />
-            <Button android:id="@+id/navSettings" style="@style/NavButton" android:text="@string/nav_settings" />
-
-            <Space android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:clipChildren="false"
+                android:orientation="vertical"
+                android:weightSum="4">
+                <Button android:id="@+id/navHome" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_home" android:text="@string/nav_home" />
+                <Button android:id="@+id/navMovies" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_movies" android:text="@string/nav_movies" />
+                <Button android:id="@+id/navCast" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_cast" android:text="@string/nav_cast" />
+                <Button android:id="@+id/navSettings" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_settings" android:text="@string/nav_settings" />
+            </LinearLayout>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -242,9 +242,20 @@
                             <Button android:id="@+id/refreshSourcesButton" style="@style/ActionButton" android:text="@string/refresh_sources" />
                         </LinearLayout>
                         <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="存储与片库" />
+                            <TextView android:id="@+id/storageSummary" style="@style/PanelValue" android:text="尚未挂载存储" />
+                            <TextView style="@style/PanelBody" android:text="挂载由局域网网页端管理" />
+                            <Button android:id="@+id/scanStorageButton" style="@style/ActionButton" android:text="扫描片库" />
+                        </LinearLayout>
+                        <LinearLayout style="@style/SettingsBand">
                             <TextView style="@style/PanelTitle" android:text="@string/privacy_title" />
                             <TextView style="@style/PanelBody" android:text="@string/privacy_note" />
                             <Button android:id="@+id/clearPairingButton" style="@style/ActionButton" android:text="@string/clear_pairing" />
+                        </LinearLayout>
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="外观" />
+                            <TextView style="@style/PanelBody" android:text="深色与浅色主题" />
+                            <Button android:id="@+id/themeToggleButton" style="@style/ActionButton" android:text="切换主题" />
                         </LinearLayout>
                     </LinearLayout>
                 </ScrollView>

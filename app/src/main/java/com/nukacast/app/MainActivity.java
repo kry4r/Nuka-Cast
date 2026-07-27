@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
@@ -20,7 +19,7 @@ import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -41,6 +40,11 @@ import com.nukacast.app.tvbox.model.SearchQuery;
 import com.nukacast.app.tvbox.model.SearchResponse;
 import com.nukacast.app.ui.MediaCardView;
 import com.nukacast.app.ui.PosterImageLoader;
+import com.nukacast.app.ui.TvTheme;
+
+import androidx.leanback.widget.BaseGridView;
+import androidx.leanback.widget.HorizontalGridView;
+import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -77,8 +81,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView deviceSummary;
     private TextView codecSummary;
     private TextView sourceSummary;
+    private TextView storageSummary;
+    private View featuredPanel;
+    private TextView featuredEyebrow;
+    private TextView featuredTitle;
+    private TextView featuredMeta;
+    private TextView featuredPlot;
+    private ImageView featuredPoster;
     private SurfaceView videoSurface;
     private Button refreshSourcesButton;
+    private Button scanStorageButton;
+    private Button themeToggleButton;
     private String currentPage = PAGE_HOME;
     private String currentMovieFilter = "";
     private boolean homeRequestRunning;
@@ -87,6 +100,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        setTheme(TvTheme.isLight(this) ? R.style.AppThemeLight : R.style.AppTheme);
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
@@ -96,6 +110,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         runtime = ((NukaCastApp) getApplication()).runtime();
         bindViews();
+        TvTheme.apply(this, appShell);
         bindNavigation();
         videoSurface.getHolder().addCallback(this);
         runtime.getState().addListener(this);
@@ -198,7 +213,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         deviceSummary = (TextView) findViewById(R.id.deviceSummary);
         codecSummary = (TextView) findViewById(R.id.codecSummary);
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
+        storageSummary = (TextView) findViewById(R.id.storageSummary);
         refreshSourcesButton = (Button) findViewById(R.id.refreshSourcesButton);
+        scanStorageButton = (Button) findViewById(R.id.scanStorageButton);
+        themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
         videoSurface = (SurfaceView) findViewById(R.id.videoSurface);
     }
 
@@ -227,6 +245,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
+        });
+        scanStorageButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { scanStorage(); }
+        });
+        themeToggleButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                TvTheme.toggle(MainActivity.this);
+                recreate();
+            }
         });
         findViewById(R.id.clearPairingButton).setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
@@ -280,9 +307,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 List<SearchItem> loaded;
                 try {
-                    loaded = runtime.getContentService().home(8, 72);
+                    loaded = new ArrayList<SearchItem>();
+                    loaded.addAll(runtime.getStorageLibrary().home(36));
+                    loaded.addAll(runtime.getContentService().home(8, 72));
                 } catch (Exception ignored) {
-                    loaded = Collections.emptyList();
+                    loaded = runtime.getStorageLibrary().home(36);
                 }
                 final List<SearchItem> result = loaded;
                 runOnUiThread(new Runnable() {
@@ -302,12 +331,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void renderHome() {
         if (homeContent == null) return;
         homeContent.removeAllViews();
+        List<LibraryItem> history = runtime.getMediaLibrary().history();
+        List<LibraryItem> favorites = runtime.getMediaLibrary().favorites();
+        SearchItem spotlight = !history.isEmpty() ? history.get(0).toSearchItem()
+                : (!favorites.isEmpty() ? favorites.get(0).toSearchItem()
+                : (!homeItems.isEmpty() ? homeItems.get(0) : null));
+        addFeaturedPanel(spotlight);
         addQuickBrowse();
 
-        List<LibraryItem> history = runtime.getMediaLibrary().history();
         if (!history.isEmpty()) addLibrarySection("继续观看", history, true);
 
-        List<LibraryItem> favorites = runtime.getMediaLibrary().favorites();
         if (!favorites.isEmpty()) addLibrarySection("我的收藏", favorites, false);
 
         if (!homeItems.isEmpty()) {
@@ -319,6 +352,88 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             empty.setPadding(0, dp(28), 0, 0);
             homeContent.addView(empty);
         }
+    }
+
+    private void addFeaturedPanel(SearchItem item) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.HORIZONTAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(dp(28), dp(22), dp(22), dp(22));
+        panel.setBackgroundDrawable(TvTheme.panel(this));
+        panel.setClipChildren(false);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+
+        featuredEyebrow = featuredText(12, TvTheme.accent(this), true);
+        featuredTitle = featuredText(32, TvTheme.primary(this), true);
+        featuredTitle.setSingleLine(true);
+        featuredTitle.setEllipsize(TextUtils.TruncateAt.END);
+        featuredMeta = featuredText(14, TvTheme.secondary(this), false);
+        featuredPlot = featuredText(14, TvTheme.secondary(this), false);
+        featuredPlot.setMaxLines(2);
+        featuredPlot.setEllipsize(TextUtils.TruncateAt.END);
+        featuredPlot.setLineSpacing(0, 1.15f);
+
+        copy.addView(featuredEyebrow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(24)));
+        copy.addView(featuredTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48)));
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(28));
+        metaParams.topMargin = dp(3);
+        copy.addView(featuredMeta, metaParams);
+        LinearLayout.LayoutParams plotParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+        plotParams.topMargin = dp(5);
+        copy.addView(featuredPlot, plotParams);
+        panel.addView(copy, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+        featuredPoster = new ImageView(this);
+        featuredPoster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        featuredPoster.setBackgroundColor(TvTheme.soft(this));
+        LinearLayout.LayoutParams posterParams = new LinearLayout.LayoutParams(dp(122), dp(174));
+        posterParams.leftMargin = dp(28);
+        panel.addView(featuredPoster, posterParams);
+
+        featuredPanel = panel;
+        LinearLayout.LayoutParams panelParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(218));
+        panelParams.bottomMargin = dp(22);
+        homeContent.addView(panel, panelParams);
+        updateFeatured(item);
+    }
+
+    private TextView featuredText(int sizeSp, int color, boolean bold) {
+        TextView text = new TextView(this);
+        text.setTextSize(sizeSp);
+        text.setTextColor(color);
+        text.setGravity(Gravity.CENTER_VERTICAL);
+        if (bold) text.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return text;
+    }
+
+    private void updateFeatured(SearchItem item) {
+        if (featuredPanel == null || featuredTitle == null) return;
+        if (item == null) {
+            featuredEyebrow.setText("NUKACAST");
+            featuredTitle.setText("片库准备中");
+            featuredMeta.setText(runtime.getState().getStatusMessage());
+            featuredPlot.setText("");
+            featuredPoster.setImageDrawable(null);
+            return;
+        }
+        featuredEyebrow.setText(safe(item.siteName).isEmpty() ? "精选推荐" : item.siteName);
+        featuredTitle.setText(safe(item.name));
+        featuredMeta.setText(joinMeta(item.typeName, item.year, item.area, item.remarks));
+        featuredPlot.setText(safe(item.plot));
+        featuredPoster.setImageDrawable(null);
+        images.load(item.poster, featuredPoster);
+        featuredPanel.animate().cancel();
+        featuredPanel.setAlpha(0.78f);
+        featuredPanel.animate().alpha(1f).setDuration(150L).start();
     }
 
     private void addQuickBrowse() {
@@ -344,62 +459,46 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void addLibrarySection(String title, List<LibraryItem> items, final boolean resume) {
         homeContent.addView(sectionTitle(title));
-        HorizontalScrollView scroll = horizontalTrack();
-        LinearLayout track = (LinearLayout) scroll.getChildAt(0);
+        List<CardEntry> entries = new ArrayList<CardEntry>();
         int count = Math.min(16, items.size());
         for (int i = 0; i < count; i++) {
-            final LibraryItem library = items.get(i);
-            final SearchItem item = library.toSearchItem();
-            MediaCardView card = card(item, library.positionMs, library.durationMs);
-            card.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) {
-                    if (resume && !library.episodeId.isEmpty()) resume(library);
-                    else openMedia(item);
-                }
-            });
-            bindFavoriteShortcut(card, item);
-            track.addView(card, cardParams());
+            LibraryItem library = items.get(i);
+            entries.add(new CardEntry(library.toSearchItem(), library, resume,
+                    library.positionMs, library.durationMs));
         }
-        addTrack(scroll);
+        addTrack(horizontalTrack(entries));
     }
 
     private void addMediaSection(String title, List<SearchItem> items, int limit) {
         homeContent.addView(sectionTitle(title));
-        HorizontalScrollView scroll = horizontalTrack();
-        LinearLayout track = (LinearLayout) scroll.getChildAt(0);
+        List<CardEntry> entries = new ArrayList<CardEntry>();
         int count = Math.min(limit, items.size());
         for (int i = 0; i < count; i++) {
-            final SearchItem item = items.get(i);
-            MediaCardView card = card(item, 0, 0);
-            card.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { openMedia(item); }
-            });
-            bindFavoriteShortcut(card, item);
-            track.addView(card, cardParams());
+            entries.add(new CardEntry(items.get(i), null, false, 0, 0));
         }
-        addTrack(scroll);
+        addTrack(horizontalTrack(entries));
     }
 
-    private void addTrack(HorizontalScrollView scroll) {
+    private void addTrack(HorizontalGridView grid) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(252));
-        params.bottomMargin = dp(20);
-        homeContent.addView(scroll, params);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(312));
+        params.bottomMargin = dp(26);
+        homeContent.addView(grid, params);
     }
 
-    private HorizontalScrollView horizontalTrack() {
-        HorizontalScrollView scroll = new HorizontalScrollView(this);
-        scroll.setHorizontalScrollBarEnabled(false);
-        scroll.setClipToPadding(false);
-        scroll.setClipChildren(false);
-        LinearLayout track = new LinearLayout(this);
-        track.setOrientation(LinearLayout.HORIZONTAL);
-        track.setClipChildren(false);
-        track.setPadding(dp(2), dp(4), dp(18), dp(4));
-        scroll.addView(track, new HorizontalScrollView.LayoutParams(
-                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
-                HorizontalScrollView.LayoutParams.MATCH_PARENT));
-        return scroll;
+    private HorizontalGridView horizontalTrack(List<CardEntry> entries) {
+        HorizontalGridView grid = new HorizontalGridView(this);
+        grid.setHorizontalScrollBarEnabled(false);
+        grid.setClipToPadding(false);
+        grid.setClipChildren(false);
+        grid.setNumRows(1);
+        grid.setRowHeight(dp(296));
+        grid.setItemSpacing(dp(16));
+        grid.setWindowAlignment(BaseGridView.WINDOW_ALIGN_LOW_EDGE);
+        grid.setWindowAlignmentOffset(dp(8));
+        grid.setPadding(dp(8), dp(10), dp(42), dp(8));
+        grid.setAdapter(new CardAdapter(entries));
+        return grid;
     }
 
     private void renderMovieGrid(String title, List<SearchItem> items) {
@@ -421,8 +520,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setClipChildren(false);
                 LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, dp(252));
-                rowParams.bottomMargin = dp(10);
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(302));
+                rowParams.bottomMargin = dp(14);
                 moviesContent.addView(row, rowParams);
             }
             final SearchItem item = items.get(i);
@@ -438,7 +537,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private int gridColumns() {
         float widthDp = getResources().getDisplayMetrics().widthPixels
                 / getResources().getDisplayMetrics().density;
-        return Math.max(3, (int) ((widthDp - 250f) / 146f));
+        return Math.max(3, (int) ((widthDp - 250f) / 180f));
     }
 
     private List<SearchItem> filter(List<SearchItem> source, String filter) {
@@ -568,7 +667,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         content.setPadding(dp(22), dp(8), dp(22), dp(20));
 
         TextView title = bodyText(detail.name);
-        title.setTextColor(getResources().getColor(R.color.text_primary));
+        title.setTextColor(TvTheme.primary(this));
         title.setTextSize(23);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         content.addView(title);
@@ -721,6 +820,25 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
     }
 
+    private void scanStorage() {
+        if (runtime.getStorageLibrary().isScanning()) return;
+        scanStorageButton.setEnabled(false);
+        scanStorageButton.setText("正在扫描…");
+        runtime.getStorageLibrary().scanAllAsync(new com.nukacast.app.storage.StorageLibrary.ScanListener() {
+            @Override public void onComplete(final int mounts, final int files) {
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        scanStorageButton.setEnabled(true);
+                        scanStorageButton.setText("扫描片库");
+                        storageSummary.setText(mounts + " 个挂载 · " + files + " 个媒体文件");
+                        homeLoaded = false;
+                        loadHome(true);
+                    }
+                });
+            }
+        });
+    }
+
     private void render() {
         AppState state = runtime.getState();
         DeviceProfile profile = runtime.getDeviceProfile();
@@ -734,6 +852,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         codecSummary.setText(profile.codecSummary());
         sourceSummary.setText(String.format(Locale.CHINA, "%d 个配置源 · %d 个站点",
                 state.getSourceCount(), state.getEnabledSiteCount()));
+        storageSummary.setText(String.format(Locale.CHINA, "%d 个挂载 · %d 个媒体文件",
+                runtime.getStorageLibrary().mounts().size(),
+                runtime.getStorageLibrary().entries().size()));
+        themeToggleButton.setText(TvTheme.isLight(this) ? "切换为深色" : "切换为浅色");
 
         AirPlayReceiver.Snapshot airplay = runtime.getAirPlayReceiver().snapshot();
         airplayState.setText(airplay.sessionActive ? "正在接收镜像" : castState(airplay));
@@ -745,7 +867,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         boolean hasMedia = state.getActiveMedia() != null && !state.getActiveMedia().isEmpty();
         appShell.setVisibility(hasMedia ? View.GONE : View.VISIBLE);
         videoSurface.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
-        if (!hasMedia && PAGE_HOME.equals(currentPage)) renderHome();
     }
 
     private String castState(AirPlayReceiver.Snapshot snapshot) {
@@ -755,32 +876,90 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private MediaCardView card(SearchItem item, int positionMs, int durationMs) {
-        return new MediaCardView(this, item, positionMs, durationMs, images);
+        MediaCardView card = new MediaCardView(this, item, positionMs, durationMs, images);
+        card.setPreviewListener(new MediaCardView.PreviewListener() {
+            @Override public void onPreview(SearchItem focused) {
+                if (PAGE_HOME.equals(currentPage)) updateFeatured(focused);
+            }
+        });
+        return card;
     }
 
     private LinearLayout.LayoutParams cardParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(132), dp(244));
-        params.setMargins(dp(2), dp(2), dp(10), dp(2));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(164), dp(292));
+        params.setMargins(dp(3), dp(4), dp(13), dp(4));
         return params;
     }
 
     private TextView sectionTitle(String value) {
         TextView title = new TextView(this);
         title.setText(value);
-        title.setTextColor(getResources().getColor(R.color.text_primary));
-        title.setTextSize(18);
+        title.setTextColor(TvTheme.primary(this));
+        title.setTextSize(21);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER_VERTICAL);
         title.setPadding(0, 0, 0, dp(8));
         title.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(34)));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(40)));
         return title;
+    }
+
+    private final class CardAdapter extends RecyclerView.Adapter<CardHolder> {
+        private final List<CardEntry> entries;
+
+        CardAdapter(List<CardEntry> entries) {
+            this.entries = entries;
+            setHasStableIds(true);
+        }
+
+        @Override public CardHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            final CardEntry entry = entries.get(viewType);
+            final SearchItem item = entry.item;
+            MediaCardView card = card(item, entry.positionMs, entry.durationMs);
+            card.setLayoutParams(new RecyclerView.LayoutParams(dp(164), dp(292)));
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    if (entry.resume && entry.library != null && !entry.library.episodeId.isEmpty()) {
+                        resume(entry.library);
+                    } else {
+                        openMedia(item);
+                    }
+                }
+            });
+            bindFavoriteShortcut(card, item);
+            return new CardHolder(card);
+        }
+
+        @Override public void onBindViewHolder(CardHolder holder, int position) {}
+        @Override public int getItemCount() { return entries.size(); }
+        @Override public int getItemViewType(int position) { return position; }
+        @Override public long getItemId(int position) { return entries.get(position).item.dedupeKey().hashCode(); }
+    }
+
+    private static final class CardHolder extends RecyclerView.ViewHolder {
+        CardHolder(View itemView) { super(itemView); }
+    }
+
+    private static final class CardEntry {
+        final SearchItem item;
+        final LibraryItem library;
+        final boolean resume;
+        final int positionMs;
+        final int durationMs;
+
+        CardEntry(SearchItem item, LibraryItem library, boolean resume, int positionMs, int durationMs) {
+            this.item = item;
+            this.library = library;
+            this.resume = resume;
+            this.positionMs = positionMs;
+            this.durationMs = durationMs;
+        }
     }
 
     private TextView bodyText(String value) {
         TextView text = new TextView(this);
         text.setText(value);
-        text.setTextColor(getResources().getColor(R.color.text_secondary));
+        text.setTextColor(TvTheme.secondary(this));
         text.setTextSize(14);
         text.setLineSpacing(0, 1.15f);
         return text;
@@ -789,14 +968,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private Button actionButton(String label, int widthDp) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextColor(getResources().getColor(R.color.text_primary));
+        button.setTextColor(TvTheme.primary(this));
         button.setTextSize(14);
         button.setAllCaps(false);
         button.setSingleLine(true);
         button.setEllipsize(TextUtils.TruncateAt.END);
         button.setGravity(Gravity.CENTER);
         button.setFocusable(true);
-        button.setBackgroundResource(R.drawable.bg_focusable);
+        button.setBackgroundDrawable(TvTheme.focusable(this));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(42));
         params.setMargins(0, 0, dp(8), dp(4));
         button.setLayoutParams(params);

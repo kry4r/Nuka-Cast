@@ -9,6 +9,7 @@ import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.security.PairingManager;
 import com.nukacast.app.server.ControlServer;
 import com.nukacast.app.spider.SpiderManager;
+import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.SearchEngine;
 import com.nukacast.app.tvbox.SourceStore;
 import com.nukacast.app.tvbox.TvBoxContentService;
@@ -24,6 +25,7 @@ public final class NukaRuntime {
     private final SourceStore sourceStore;
     private final TvBoxRepository tvBoxRepository;
     private final SpiderManager spiderManager;
+    private final StorageLibrary storageLibrary;
     private final SearchEngine searchEngine;
     private final TvBoxContentService contentService;
     private final LiveService liveService;
@@ -39,8 +41,9 @@ public final class NukaRuntime {
         sourceStore = new SourceStore(this.context);
         tvBoxRepository = new TvBoxRepository(this.context, sourceStore);
         spiderManager = new SpiderManager(this.context);
-        searchEngine = new SearchEngine(this.context, tvBoxRepository, spiderManager);
-        contentService = new TvBoxContentService(tvBoxRepository, spiderManager);
+        storageLibrary = new StorageLibrary(this.context);
+        searchEngine = new SearchEngine(this.context, tvBoxRepository, spiderManager, storageLibrary);
+        contentService = new TvBoxContentService(tvBoxRepository, spiderManager, storageLibrary);
         liveService = new LiveService(tvBoxRepository);
         mediaLibrary = new MediaLibraryStore(this.context);
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
@@ -75,6 +78,7 @@ public final class NukaRuntime {
         airPlayReceiver.stop();
         searchEngine.shutdown();
         contentService.shutdown();
+        storageLibrary.shutdown();
         spiderManager.destroy();
     }
 
@@ -86,6 +90,7 @@ public final class NukaRuntime {
     public TvBoxRepository getTvBoxRepository() { return tvBoxRepository; }
     public SearchEngine getSearchEngine() { return searchEngine; }
     public TvBoxContentService getContentService() { return contentService; }
+    public StorageLibrary getStorageLibrary() { return storageLibrary; }
     public LiveService getLiveService() { return liveService; }
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }
     public PlayerController getPlayerController() { return playerController; }

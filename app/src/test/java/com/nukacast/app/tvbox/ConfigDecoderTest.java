@@ -36,6 +36,19 @@ public final class ConfigDecoderTest {
         assertEquals("demo", config.sites.get(0).key);
     }
 
+    @Test
+    public void decodesBinaryImagePrefixBase64Config() {
+        String json = "{\"sites\":[{\"key\":\"binary\",\"name\":\"图片源\",\"type\":3}]}";
+        byte[] jpegPrefix = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, 0x00, 0x10};
+        String wrapped = new String(jpegPrefix, StandardCharsets.UTF_8) + "**"
+                + Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+
+        TvBoxConfig config = decoder.decode(wrapped);
+
+        assertEquals(1, config.sites.size());
+        assertEquals("binary", config.sites.get(0).key);
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsUnknownEnvelope() {
         decoder.decode("not-a-tvbox-config");

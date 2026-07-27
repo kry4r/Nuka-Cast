@@ -9,4 +9,11 @@
     </style>
 
     <style name="AppTheme" parent="@style/AppThemeBase" />
+
+    <style name="AppThemeLight" parent="android:style/Theme.Holo.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
 </resources>

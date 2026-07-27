@@ -4,10 +4,13 @@ import android.content.Context;
 import android.content.res.AssetManager;
 
 import com.google.gson.Gson;
+import com.nukacast.app.BuildConfig;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.live.model.LiveCatalog;
 import com.nukacast.app.player.PlayerController;
+import com.nukacast.app.storage.StorageLibrary;
+import com.nukacast.app.storage.model.StorageMount;
 import com.nukacast.app.tvbox.model.ConfigSource;
 import com.nukacast.app.tvbox.model.PlaybackInfo;
 import com.nukacast.app.tvbox.model.SearchQuery;
@@ -44,6 +47,9 @@ public final class ControlServer extends NanoHTTPD {
                 return decorate(newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, ""));
             }
             String path = session.getUri();
+            if (path.startsWith("/media/")) {
+                return decorate(serveStorageMedia(session, path.substring("/media/".length())));
+            }
             if (path.startsWith("/api/")) {
                 return decorate(serveApi(session, path));
             }
@@ -128,6 +134,28 @@ public final class ControlServer extends NanoHTTPD {
             });
             return json(Response.Status.ACCEPTED, Collections.singletonMap("refreshing", true));
         }
+        if ("/api/storage/mounts".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, runtime.getStorageLibrary().mounts());
+        }
+        if ("/api/storage/mounts".equals(path) && Method.POST.equals(session.getMethod())) {
+            StorageRequest request = body(session, StorageRequest.class);
+            StorageMount mount = runtime.getStorageLibrary().add(request.name, request.type,
+                    request.uri, request.username, request.password);
+            return json(Response.Status.CREATED, mount);
+        }
+        if (path.startsWith("/api/storage/mounts/") && Method.DELETE.equals(session.getMethod())) {
+            String id = path.substring("/api/storage/mounts/".length());
+            boolean removed = runtime.getStorageLibrary().remove(id);
+            return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
+                    Collections.singletonMap("removed", removed));
+        }
+        if ("/api/storage/scan".equals(path) && Method.POST.equals(session.getMethod())) {
+            runtime.getStorageLibrary().scanAllAsync(null);
+            return json(Response.Status.ACCEPTED, Collections.singletonMap("scanning", true));
+        }
+        if ("/api/storage/library".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, runtime.getStorageLibrary().entries());
+        }
         if ("/api/search".equals(path) && Method.POST.equals(session.getMethod())) {
             SearchQuery query = body(session, SearchQuery.class);
             if (query.keyword == null || query.keyword.trim().isEmpty()) {
@@ -191,17 +219,44 @@ public final class ControlServer extends NanoHTTPD {
         AppState state = runtime.getState();
         Map<String, Object> result = new HashMap<String, Object>();
         result.put("name", "NukaCast");
-        result.put("version", "0.1.0");
+        result.put("version", BuildConfig.VERSION_NAME);
         result.put("serviceState", state.getServiceState().name().toLowerCase());
         result.put("message", state.getStatusMessage());
         result.put("activeMedia", state.getActiveMedia());
         result.put("sourceCount", state.getSourceCount());
         result.put("siteCount", state.getEnabledSiteCount());
+        result.put("storageMountCount", runtime.getStorageLibrary().mounts().size());
+        result.put("libraryItemCount", runtime.getStorageLibrary().entries().size());
+        result.put("storageScanning", runtime.getStorageLibrary().isScanning());
         result.put("webAddress", runtime.getWebAddress());
         result.put("pairingRequired", true);
         result.put("airPlayName", "NukaCast");
         result.put("airPlay", runtime.getAirPlayReceiver().snapshot());
         return result;
+    }
+
+    private Response serveStorageMedia(IHTTPSession session, String id) throws Exception {
+        String remote = session.getRemoteIpAddress();
+        if (!("127.0.0.1".equals(remote) || "::1".equals(remote)
+                || "0:0:0:0:0:0:0:1".equals(remote))) {
+            throw new SecurityException("媒体流仅允许电视本机访问");
+        }
+        long offset = rangeOffset(session.getHeaders().get("range"));
+        StorageLibrary.MediaStream stream = runtime.getStorageLibrary().openSmb(id, offset);
+        Response.Status status = offset > 0 ? Response.Status.PARTIAL_CONTENT : Response.Status.OK;
+        Response response = newFixedLengthResponse(status, stream.mime, stream.input, stream.remainingLength);
+        response.addHeader("Accept-Ranges", "bytes");
+        if (offset > 0) response.addHeader("Content-Range", "bytes " + offset + "-"
+                + (stream.totalLength - 1) + "/" + stream.totalLength);
+        return response;
+    }
+
+    private static long rangeOffset(String range) {
+        if (range == null || !range.startsWith("bytes=")) return 0;
+        String value = range.substring(6);
+        int dash = value.indexOf('-');
+        if (dash >= 0) value = value.substring(0, dash);
+        try { return Math.max(0, Long.parseLong(value)); } catch (Exception ignored) { return 0; }
     }
 
     private void requireAuth(IHTTPSession session) {
@@ -291,6 +346,13 @@ public final class ControlServer extends NanoHTTPD {
 
     private static final class PairRequest { String code; }
     private static final class SourceRequest { String name; String url; }
+    private static final class StorageRequest {
+        String name;
+        String type;
+        String uri;
+        String username;
+        String password;
+    }
     private static final class ContentRequest {
         String sourceId;
         String siteKey;
