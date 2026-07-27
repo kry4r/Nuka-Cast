@@ -67,13 +67,26 @@ jobs:
           NUKACAST_KEY_ALIAS: ${{ secrets.NUKACAST_KEY_ALIAS }}
           NUKACAST_KEY_PASSWORD: ${{ secrets.NUKACAST_KEY_PASSWORD }}
         run: |
+          set -o pipefail
           VERSION_NAME="${GITHUB_REF_NAME#v}"
           sed -i 's#mirrors.cloud.tencent.com/gradle/#services.gradle.org/distributions/#' gradle/wrapper/gradle-wrapper.properties
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease \
             -PversionName="$VERSION_NAME" \
             -PversionCode="${GITHUB_RUN_NUMBER}" \
-            --console=plain
+            --stacktrace \
+            --console=plain 2>&1 | tee gradle-release.log
+
+      - name: Summarize Gradle failure
+        if: failure() && hashFiles('gradle-release.log') != ''
+        shell: bash
+        run: |
+          {
+            echo "### Gradle failure"
+            echo '```text'
+            tail -n 120 gradle-release.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify and name release files
         shell: bash
