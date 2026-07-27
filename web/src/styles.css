@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 10% 8%;
+    --foreground: 200 18% 96%;
+    --card: 210 9% 11%;
+    --card-foreground: 200 18% 96%;
+    --primary: 149 58% 61%;
+    --primary-foreground: 154 65% 10%;
+    --secondary: 210 8% 17%;
+    --secondary-foreground: 200 15% 92%;
+    --muted: 210 8% 15%;
+    --muted-foreground: 205 8% 67%;
+    --accent: 210 8% 19%;
+    --accent-foreground: 200 18% 96%;
+    --destructive: 5 70% 61%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 42 84% 63%;
+    --warning-foreground: 35 65% 11%;
+    --border: 210 8% 23%;
+    --input: 210 8% 26%;
+    --ring: 149 58% 61%;
+  }
+
+  * { @apply border-border; }
+  body { @apply m-0 min-w-[320px] bg-background text-foreground antialiased; font-family: Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 0; }
+  button, input, select { font: inherit; letter-spacing: 0; }
+}
+
+@layer components {
+  .panel { @apply rounded-md border bg-card; }
+  .section-title { @apply text-sm font-semibold text-foreground; }
+  .eyebrow { @apply text-xs font-medium uppercase text-muted-foreground; }
+}

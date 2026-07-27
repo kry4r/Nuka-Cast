@@ -1,0 +1,16 @@
+.gradle/
+.toolchains/
+.references/
+.pipeline-check/
+**/build/
+app/.cxx/
+web/node_modules/
+web/*.tsbuildinfo
+local.properties
+.signing/
+*.jks
+*.keystore
+*.apk
+*.zip
+web/vite.config.js
+web/vite.config.d.ts

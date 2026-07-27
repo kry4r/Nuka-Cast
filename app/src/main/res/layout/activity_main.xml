@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/surface">
+
+    <LinearLayout
+        android:id="@+id/appShell"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:baselineAligned="false"
+        android:orientation="horizontal"
+        android:padding="24dp">
+
+        <LinearLayout
+            android:layout_width="184dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:paddingEnd="20dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <ImageView
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_marginEnd="10dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/nukacast_logo" />
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/app_name"
+                    android:textColor="@color/text_primary"
+                    android:textSize="24sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="28dp"
+                android:text="@string/product_subtitle"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/navHome" style="@style/NavButton" android:text="@string/nav_home" />
+            <Button android:id="@+id/navMovies" style="@style/NavButton" android:text="@string/nav_movies" />
+            <Button android:id="@+id/navCast" style="@style/NavButton" android:text="@string/nav_cast" />
+            <Button android:id="@+id/navSettings" style="@style/NavButton" android:text="@string/nav_settings" />
+
+            <Space android:layout_width="1dp" android:layout_height="0dp" android:layout_weight="1" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <View
+                    android:layout_width="9dp"
+                    android:layout_height="9dp"
+                    android:background="@drawable/bg_status_dot" />
+                <TextView
+                    android:id="@+id/serviceStatus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="9dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:text="@string/status_ready"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/searchButton"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_focusable"
+                    android:focusable="true"
+                    android:gravity="start|center_vertical"
+                    android:paddingStart="18dp"
+                    android:text="@string/search_hint"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="15sp" />
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="16dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="4dp">
+                    <View
+                        android:id="@+id/networkDot"
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:background="@drawable/bg_status_dot" />
+                    <TextView
+                        android:id="@+id/networkStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="@string/network_checking"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/pageContainer"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="16dp"
+                android:layout_weight="1">
+
+                <ScrollView
+                    android:id="@+id/homePage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:fillViewport="true"
+                    android:fadingEdge="none"
+                    android:scrollbars="none">
+                    <LinearLayout
+                        android:id="@+id/homeContent"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingBottom="30dp">
+                        <TextView
+                            android:id="@+id/homeLoading"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:paddingTop="28dp"
+                            android:text="@string/loading_home"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="16sp" />
+                    </LinearLayout>
+                </ScrollView>
+
+                <LinearLayout
+                    android:id="@+id/moviesPage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+                    <LinearLayout
+                        android:id="@+id/movieFilters"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:orientation="horizontal">
+                        <Button android:id="@+id/filterAll" style="@style/FilterButton" android:text="@string/filter_all" />
+                        <Button android:id="@+id/filterMovie" style="@style/FilterButton" android:text="@string/filter_movie" />
+                        <Button android:id="@+id/filterSeries" style="@style/FilterButton" android:text="@string/filter_series" />
+                        <Button android:id="@+id/filterVariety" style="@style/FilterButton" android:text="@string/filter_variety" />
+                        <Button android:id="@+id/filterAnime" style="@style/FilterButton" android:text="@string/filter_anime" />
+                    </LinearLayout>
+                    <ScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_marginTop="12dp"
+                        android:layout_weight="1"
+                        android:clipToPadding="false"
+                        android:scrollbars="none">
+                        <LinearLayout
+                            android:id="@+id/moviesContent"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingBottom="28dp" />
+                    </ScrollView>
+                </LinearLayout>
+
+                <ScrollView
+                    android:id="@+id/castPage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fillViewport="true"
+                    android:scrollbars="none"
+                    android:visibility="gone">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingBottom="24dp">
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="@string/cast_receiver" />
+                            <TextView android:id="@+id/airplayName" style="@style/PanelValue" android:text="@string/app_name" />
+                            <TextView android:id="@+id/airplayState" style="@style/PanelBody" android:text="@string/cast_waiting" />
+                            <TextView android:id="@+id/airplayStats" style="@style/PanelBody" />
+                        </LinearLayout>
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="@string/web_control" />
+                            <TextView android:id="@+id/webAddress" style="@style/PanelValue" android:text="@string/web_placeholder" />
+                            <TextView android:id="@+id/pairingCode" style="@style/PairingCode" android:text="@string/pairing_placeholder" />
+                            <TextView style="@style/PanelBody" android:text="@string/web_pairing_note" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </ScrollView>
+
+                <ScrollView
+                    android:id="@+id/settingsPage"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fillViewport="true"
+                    android:scrollbars="none"
+                    android:visibility="gone">
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:paddingBottom="24dp">
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="@string/device_profile" />
+                            <TextView android:id="@+id/deviceSummary" style="@style/PanelValue" android:text="@string/device_checking" />
+                            <TextView android:id="@+id/codecSummary" style="@style/PanelBody" />
+                        </LinearLayout>
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="@string/source_health" />
+                            <TextView android:id="@+id/sourceSummary" style="@style/PanelValue" android:text="@string/source_empty" />
+                            <TextView style="@style/PanelBody" android:text="@string/source_web_note" />
+                            <Button android:id="@+id/refreshSourcesButton" style="@style/ActionButton" android:text="@string/refresh_sources" />
+                        </LinearLayout>
+                        <LinearLayout style="@style/SettingsBand">
+                            <TextView style="@style/PanelTitle" android:text="@string/privacy_title" />
+                            <TextView style="@style/PanelBody" android:text="@string/privacy_note" />
+                            <Button android:id="@+id/clearPairingButton" style="@style/ActionButton" android:text="@string/clear_pairing" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </ScrollView>
+            </FrameLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <SurfaceView
+        android:id="@+id/videoSurface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+</FrameLayout>

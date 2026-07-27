@@ -1,0 +1,3 @@
+-keep class com.github.catvod.** { *; }
+-keep class com.nukacast.app.spider.** { *; }
+-keepattributes *Annotation*

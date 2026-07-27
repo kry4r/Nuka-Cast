@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NukaCast</string>
+    <string name="product_subtitle">Sharp TV</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_movies">影视</string>
+    <string name="nav_cast">投屏</string>
+    <string name="nav_settings">设置</string>
+    <string name="status_ready">等待连接</string>
+    <string name="search_hint">搜索电影、电视剧、综艺</string>
+    <string name="network_checking">正在检查网络</string>
+    <string name="loading_home">正在整理首页内容…</string>
+    <string name="filter_all">全部</string>
+    <string name="filter_movie">电影</string>
+    <string name="filter_series">电视剧</string>
+    <string name="filter_variety">综艺</string>
+    <string name="filter_anime">动漫</string>
+    <string name="cast_receiver">AirPlay 接收器</string>
+    <string name="cast_waiting">无 PIN · 1080p30 · 等待设备连接</string>
+    <string name="web_control">网页控制</string>
+    <string name="web_placeholder">http://0.0.0.0:9978</string>
+    <string name="pairing_placeholder">配对码 000000</string>
+    <string name="web_pairing_note">手机或电脑连接同一 Wi-Fi 后打开上方地址。</string>
+    <string name="device_profile">设备能力</string>
+    <string name="device_checking">检测中</string>
+    <string name="source_health">片源状态</string>
+    <string name="source_empty">0 个配置源</string>
+    <string name="source_web_note">添加和删除配置源请使用网页控制；电视端保留刷新操作。</string>
+    <string name="refresh_sources">刷新全部配置源</string>
+    <string name="privacy_title">网页配对</string>
+    <string name="privacy_note">清除后，已配对的浏览器需要重新输入六位码。</string>
+    <string name="clear_pairing">清除已配对浏览器</string>
+</resources>
