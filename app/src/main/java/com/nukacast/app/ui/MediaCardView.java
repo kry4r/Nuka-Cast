@@ -87,7 +87,6 @@ public final class MediaCardView extends LinearLayout {
                 view.animate().scaleX(focused ? 1.07f : 1f).scaleY(focused ? 1.07f : 1f)
                         .setDuration(150L).start();
                 if (focused) {
-                    view.bringToFront();
                     if (previewListener != null) previewListener.onPreview(item);
                 }
             }

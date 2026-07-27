@@ -19,6 +19,7 @@ public final class NukaCastApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        CrashReporter.install(this);
         runtime = new NukaRuntime(this);
     }
 

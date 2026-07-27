@@ -19,6 +19,7 @@ import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -41,10 +42,6 @@ import com.nukacast.app.tvbox.model.SearchResponse;
 import com.nukacast.app.ui.MediaCardView;
 import com.nukacast.app.ui.PosterImageLoader;
 import com.nukacast.app.ui.TvTheme;
-
-import androidx.leanback.widget.BaseGridView;
-import androidx.leanback.widget.HorizontalGridView;
-import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -119,6 +116,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         render();
         loadHome(false);
         findViewById(R.id.navHome).requestFocus();
+        showPreviousCrash();
     }
 
     @Override
@@ -459,46 +457,66 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void addLibrarySection(String title, List<LibraryItem> items, final boolean resume) {
         homeContent.addView(sectionTitle(title));
-        List<CardEntry> entries = new ArrayList<CardEntry>();
+        HorizontalScrollView scroll = horizontalTrack();
+        LinearLayout track = (LinearLayout) scroll.getChildAt(0);
         int count = Math.min(16, items.size());
         for (int i = 0; i < count; i++) {
-            LibraryItem library = items.get(i);
-            entries.add(new CardEntry(library.toSearchItem(), library, resume,
-                    library.positionMs, library.durationMs));
+            final LibraryItem library = items.get(i);
+            final SearchItem item = library.toSearchItem();
+            MediaCardView card = card(item, library.positionMs, library.durationMs);
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    if (resume && !library.episodeId.isEmpty()) {
+                        resume(library);
+                    } else {
+                        openMedia(item);
+                    }
+                }
+            });
+            bindFavoriteShortcut(card, item);
+            track.addView(card, cardParams());
         }
-        addTrack(horizontalTrack(entries));
+        addTrack(scroll);
     }
 
     private void addMediaSection(String title, List<SearchItem> items, int limit) {
         homeContent.addView(sectionTitle(title));
-        List<CardEntry> entries = new ArrayList<CardEntry>();
+        HorizontalScrollView scroll = horizontalTrack();
+        LinearLayout track = (LinearLayout) scroll.getChildAt(0);
         int count = Math.min(limit, items.size());
         for (int i = 0; i < count; i++) {
-            entries.add(new CardEntry(items.get(i), null, false, 0, 0));
+            final SearchItem item = items.get(i);
+            MediaCardView card = card(item, 0, 0);
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { openMedia(item); }
+            });
+            bindFavoriteShortcut(card, item);
+            track.addView(card, cardParams());
         }
-        addTrack(horizontalTrack(entries));
+        addTrack(scroll);
     }
 
-    private void addTrack(HorizontalGridView grid) {
+    private void addTrack(HorizontalScrollView scroll) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(312));
         params.bottomMargin = dp(26);
-        homeContent.addView(grid, params);
+        homeContent.addView(scroll, params);
     }
 
-    private HorizontalGridView horizontalTrack(List<CardEntry> entries) {
-        HorizontalGridView grid = new HorizontalGridView(this);
-        grid.setHorizontalScrollBarEnabled(false);
-        grid.setClipToPadding(false);
-        grid.setClipChildren(false);
-        grid.setNumRows(1);
-        grid.setRowHeight(dp(296));
-        grid.setItemSpacing(dp(16));
-        grid.setWindowAlignment(BaseGridView.WINDOW_ALIGN_LOW_EDGE);
-        grid.setWindowAlignmentOffset(dp(8));
-        grid.setPadding(dp(8), dp(10), dp(42), dp(8));
-        grid.setAdapter(new CardAdapter(entries));
-        return grid;
+    private HorizontalScrollView horizontalTrack() {
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setClipToPadding(false);
+        scroll.setClipChildren(false);
+        scroll.setFillViewport(false);
+        LinearLayout track = new LinearLayout(this);
+        track.setOrientation(LinearLayout.HORIZONTAL);
+        track.setClipChildren(false);
+        track.setPadding(dp(8), dp(10), dp(42), dp(8));
+        scroll.addView(track, new HorizontalScrollView.LayoutParams(
+                HorizontalScrollView.LayoutParams.WRAP_CONTENT,
+                HorizontalScrollView.LayoutParams.MATCH_PARENT));
+        return scroll;
     }
 
     private void renderMovieGrid(String title, List<SearchItem> items) {
@@ -904,59 +922,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return title;
     }
 
-    private final class CardAdapter extends RecyclerView.Adapter<CardHolder> {
-        private final List<CardEntry> entries;
-
-        CardAdapter(List<CardEntry> entries) {
-            this.entries = entries;
-            setHasStableIds(true);
-        }
-
-        @Override public CardHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            final CardEntry entry = entries.get(viewType);
-            final SearchItem item = entry.item;
-            MediaCardView card = card(item, entry.positionMs, entry.durationMs);
-            // Leanback converts generic params to its required GridLayoutManager.LayoutParams.
-            card.setLayoutParams(new ViewGroup.LayoutParams(dp(164), dp(292)));
-            card.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) {
-                    if (entry.resume && entry.library != null && !entry.library.episodeId.isEmpty()) {
-                        resume(entry.library);
-                    } else {
-                        openMedia(item);
-                    }
-                }
-            });
-            bindFavoriteShortcut(card, item);
-            return new CardHolder(card);
-        }
-
-        @Override public void onBindViewHolder(CardHolder holder, int position) {}
-        @Override public int getItemCount() { return entries.size(); }
-        @Override public int getItemViewType(int position) { return position; }
-        @Override public long getItemId(int position) { return entries.get(position).item.dedupeKey().hashCode(); }
-    }
-
-    private static final class CardHolder extends RecyclerView.ViewHolder {
-        CardHolder(View itemView) { super(itemView); }
-    }
-
-    private static final class CardEntry {
-        final SearchItem item;
-        final LibraryItem library;
-        final boolean resume;
-        final int positionMs;
-        final int durationMs;
-
-        CardEntry(SearchItem item, LibraryItem library, boolean resume, int positionMs, int durationMs) {
-            this.item = item;
-            this.library = library;
-            this.resume = resume;
-            this.positionMs = positionMs;
-            this.durationMs = durationMs;
-        }
-    }
-
     private TextView bodyText(String value) {
         TextView text = new TextView(this);
         text.setText(value);
@@ -1024,6 +989,21 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void showError(String prefix, Throwable error) {
         String detail = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
         Toast.makeText(this, prefix + "：" + detail, Toast.LENGTH_LONG).show();
+    }
+
+    private void showPreviousCrash() {
+        final String report = CrashReporter.read(this);
+        if (report.isEmpty()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("检测到上次崩溃")
+                .setMessage(report)
+                .setPositiveButton("清除记录", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        CrashReporter.clear(MainActivity.this);
+                    }
+                })
+                .setNegativeButton("保留", null)
+                .show();
     }
 
     private int dp(int value) {
