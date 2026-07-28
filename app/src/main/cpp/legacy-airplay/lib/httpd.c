@@ -23,12 +23,15 @@
 #include "compat.h"
 #include "logger.h"
 
+#define HTTPD_IDLE_TIMEOUT_MS 60000LL
+
 struct http_connection_s {
 	int connected;
 
 	int socket_fd;
 	void *user_data;
 	http_request_t *request;
+	long long last_activity_ms;
 };
 typedef struct http_connection_s http_connection_t;
 
@@ -50,6 +53,14 @@ struct httpd_s {
 	int server_fd4;
 	int server_fd6;
 };
+
+static long long
+httpd_now_ms(void)
+{
+	struct timeval now;
+	gettimeofday(&now, NULL);
+	return (long long) now.tv_sec * 1000LL + now.tv_usec / 1000;
+}
 
 httpd_t *
 httpd_init(logger_t *logger, httpd_callbacks_t *callbacks, int max_connections)
@@ -124,6 +135,7 @@ httpd_add_connection(httpd_t *httpd, int fd, unsigned char *local, int local_len
 	httpd->connections[i].socket_fd = fd;
 	httpd->connections[i].connected = 1;
 	httpd->connections[i].user_data = user_data;
+	httpd->connections[i].last_activity_ms = httpd_now_ms();
 	return 0;
 }
 
@@ -178,6 +190,9 @@ httpd_remove_connection(httpd_t *httpd, http_connection_t *connection)
 	shutdown(connection->socket_fd, SHUT_WR);
 	closesocket(connection->socket_fd);
 	connection->connected = 0;
+	connection->socket_fd = -1;
+	connection->user_data = NULL;
+	connection->last_activity_ms = 0;
 	httpd->open_connections--;
 }
 
@@ -202,6 +217,16 @@ httpd_thread(void *arg)
 			break;
 		}
 		MUTEX_UNLOCK(httpd->run_mutex);
+
+		for (i=0; i<httpd->max_connections; i++) {
+			http_connection_t *connection = &httpd->connections[i];
+			if (connection->connected && httpd_now_ms() - connection->last_activity_ms
+					> HTTPD_IDLE_TIMEOUT_MS) {
+				logger_log(httpd->logger, LOGGER_INFO,
+				           "Closing idle connection on socket %d", connection->socket_fd);
+				httpd_remove_connection(httpd, connection);
+			}
+		}
 
 		/* Set timeout value to 5ms */
 		tv.tv_sec = 1;
@@ -276,7 +301,10 @@ httpd_thread(void *arg)
 			/* If not in the middle of request, allocate one */
 			if (!connection->request) {
 				connection->request = http_request_init();
-				assert(connection->request);
+				if (!connection->request) {
+					httpd_remove_connection(httpd, connection);
+					continue;
+				}
 			}
 
 			logger_log(httpd->logger, LOGGER_DEBUG, "Receiving on socket %d", connection->socket_fd);
@@ -286,10 +314,11 @@ httpd_thread(void *arg)
 				httpd_remove_connection(httpd, connection);
 				continue;
 			}
+			connection->last_activity_ms = httpd_now_ms();
 
 			/* Parse HTTP request from data read from connection */
-			http_request_add_data(connection->request, buffer, ret);
-			if (http_request_has_error(connection->request)) {
+			if (http_request_add_data(connection->request, buffer, ret) != ret
+					|| http_request_has_error(connection->request)) {
 				logger_log(httpd->logger, LOGGER_INFO, "Error in parsing: %s", http_request_get_error_name(connection->request));
 				httpd_remove_connection(httpd, connection);
 				continue;
@@ -315,7 +344,7 @@ httpd_thread(void *arg)
 					written = 0;
 					while (written < datalen) {
 						ret = send(connection->socket_fd, data+written, datalen-written, 0);
-						if (ret == -1) {
+						if (ret <= 0) {
 							/* FIXME: Error happened */
 							logger_log(httpd->logger, LOGGER_INFO, "Error in sending data");
 							break;
@@ -386,16 +415,18 @@ httpd_start(httpd_t *httpd, unsigned short *port)
 		MUTEX_UNLOCK(httpd->run_mutex);
 		return -1;
 	}
-	httpd->server_fd6 = -1;/*= netutils_init_socket(port, 1, 0);
+	httpd->server_fd6 = netutils_init_socket(port, 1, 0);
 	if (httpd->server_fd6 == -1) {
 		logger_log(httpd->logger, LOGGER_WARNING, "Error initialising IPv6 socket %d", SOCKET_GET_ERROR());
 		logger_log(httpd->logger, LOGGER_WARNING, "Continuing without IPv6 support");
-	}*/
+	}
 
 	if (httpd->server_fd4 != -1 && listen(httpd->server_fd4, backlog) == -1) {
 		logger_log(httpd->logger, LOGGER_ERR, "Error listening to IPv4 socket");
 		closesocket(httpd->server_fd4);
-		closesocket(httpd->server_fd6);
+		if (httpd->server_fd6 != -1) closesocket(httpd->server_fd6);
+		httpd->server_fd4 = -1;
+		httpd->server_fd6 = -1;
 		MUTEX_UNLOCK(httpd->run_mutex);
 		return -2;
 	}
@@ -403,6 +434,8 @@ httpd_start(httpd_t *httpd, unsigned short *port)
 		logger_log(httpd->logger, LOGGER_ERR, "Error listening to IPv6 socket");
 		closesocket(httpd->server_fd4);
 		closesocket(httpd->server_fd6);
+		httpd->server_fd4 = -1;
+		httpd->server_fd6 = -1;
 		MUTEX_UNLOCK(httpd->run_mutex);
 		return -2;
 	}

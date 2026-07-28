@@ -4,8 +4,10 @@
 
 #include "mirror_buffer.h"
 #include "raop_rtp.h"
-#include "raop_rtp.h"
+#include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 #include "crypto/crypto.h"
 #include "aes.h"
 #include "compat.h"
@@ -38,19 +40,19 @@ mirror_buffer_init_aes(mirror_buffer_t *mirror_buffer, uint64_t streamConnection
 
     unsigned char hash1[64];
     unsigned char hash2[64];
-    char* skey = "AirPlayStreamKey";
-    char* siv = "AirPlayStreamIV";
-    unsigned char skeyall[255];
-    unsigned char sivall[255];
-    sprintf(skeyall, "%s%llu", skey, streamConnectionID);
-    sprintf(sivall, "%s%llu", siv, streamConnectionID);
+    const char *skey = "AirPlayStreamKey";
+    const char *siv = "AirPlayStreamIV";
+    char skeyall[255];
+    char sivall[255];
+    snprintf(skeyall, sizeof(skeyall), "%s%" PRIu64, skey, streamConnectionID);
+    snprintf(sivall, sizeof(sivall), "%s%" PRIu64, siv, streamConnectionID);
     sha512_init(&ctx);
-    sha512_update(&ctx, skeyall, strlen(skeyall));
+    sha512_update(&ctx, (const unsigned char *) skeyall, strlen(skeyall));
     sha512_update(&ctx, eaeskey, 16);
     sha512_final(&ctx, hash1);
 
     sha512_init(&ctx);
-    sha512_update(&ctx, sivall, strlen(sivall));
+    sha512_update(&ctx, (const unsigned char *) sivall, strlen(sivall));
     sha512_update(&ctx, eaeskey, 16);
     sha512_final(&ctx, hash2);
 

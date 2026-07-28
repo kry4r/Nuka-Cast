@@ -11,6 +11,7 @@ import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
+import com.google.android.exoplayer2.upstream.DefaultDataSource;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.nukacast.app.core.AppState;
 
@@ -172,8 +173,9 @@ public final class PlayerController {
                     .setUserAgent(header(headers, "User-Agent", "NukaCast/0.1 ExoPlayer"))
                     .setAllowCrossProtocolRedirects(true)
                     .setDefaultRequestProperties(new LinkedHashMap<String, String>(headers));
+            DefaultDataSource.Factory dataSource = new DefaultDataSource.Factory(context, http);
             ExoPlayer created = new ExoPlayer.Builder(context)
-                    .setMediaSourceFactory(new DefaultMediaSourceFactory(http))
+                    .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSource))
                     .build();
             player = created;
             created.setWakeMode(C.WAKE_MODE_LOCAL);

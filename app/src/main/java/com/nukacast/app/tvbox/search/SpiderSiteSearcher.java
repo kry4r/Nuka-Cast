@@ -12,6 +12,7 @@ import com.nukacast.app.tvbox.model.TvBoxConfig;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 public final class SpiderSiteSearcher implements SiteSearcher {
     private final SpiderManager spiderManager;
@@ -66,7 +67,8 @@ public final class SpiderSiteSearcher implements SiteSearcher {
 
     private static boolean contains(String value, String query) {
         return query == null || query.isEmpty()
-                || (value != null && value.toLowerCase().contains(query.toLowerCase()));
+                || (value != null && value.toLowerCase(Locale.ROOT)
+                .contains(query.toLowerCase(Locale.ROOT)));
     }
 
     private static String string(JsonObject object, String... keys) {

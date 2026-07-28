@@ -26,7 +26,6 @@
 #include "aes.h"
 #include "compat.h"
 #include "fdk-aac/libAACdec/include/aacdecoder_lib.h"
-#include "fdk-aac/libFDK/include/clz.h"
 #include "fdk-aac/libSYS/include/FDK_audio.h"
 #include "stream.h"
 
@@ -319,7 +318,7 @@ raop_buffer_queue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned shor
 #endif
 	// aac解码pcm
     int ret = 0;
-    int pkt_size = payloadsize;
+    UINT pkt_size = (UINT) payloadsize;
     UINT valid_size = payloadsize;
     UCHAR *input_buf[1] = {packetbuf};
     ret = aacDecoder_Fill(raop_buffer->phandle, input_buf, &pkt_size, &valid_size);

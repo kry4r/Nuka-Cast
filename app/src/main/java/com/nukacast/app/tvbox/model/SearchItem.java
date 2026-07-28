@@ -1,5 +1,7 @@
 package com.nukacast.app.tvbox.model;
 
+import java.util.Locale;
+
 public final class SearchItem {
     public String siteKey = "";
     public String siteName = "";
@@ -17,7 +19,8 @@ public final class SearchItem {
     public String plot = "";
 
     public String dedupeKey() {
-        String normalized = name == null ? "" : name.toLowerCase().replaceAll("[^\\p{L}\\p{N}]", "");
+        String normalized = name == null ? ""
+                : name.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
         return normalized + "|" + (year == null ? "" : year);
     }
 }

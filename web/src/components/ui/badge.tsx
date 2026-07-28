@@ -7,7 +7,6 @@ const variants = cva("inline-flex items-center rounded-sm border px-2 py-0.5 tex
       default: "border-transparent bg-primary text-primary-foreground",
       secondary: "border-transparent bg-secondary text-secondary-foreground",
       outline: "text-foreground",
-      warning: "border-transparent bg-warning text-warning-foreground",
       destructive: "border-transparent bg-destructive text-destructive-foreground",
     },
   },

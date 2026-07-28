@@ -11,6 +11,7 @@ import com.nukacast.app.live.model.EpgSchedule;
 import org.xmlpull.v1.XmlPullParser;
 
 import java.io.StringReader;
+import java.util.Locale;
 
 public final class EpgParser {
     private EpgParser() {}
@@ -57,7 +58,7 @@ public final class EpgParser {
         int event;
         while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
-                tag = parser.getName().toLowerCase();
+                tag = parser.getName().toLowerCase(Locale.ROOT);
                 if ("programme".equals(tag)) {
                     String itemChannel = safe(parser.getAttributeValue(null, "channel"));
                     accepted = channel == null || channel.isEmpty() || itemChannel.isEmpty()
@@ -97,7 +98,7 @@ public final class EpgParser {
     }
 
     private static String normalize(String value) {
-        return safe(value).toLowerCase().replaceAll("[^\\p{L}\\p{N}]", "");
+        return safe(value).toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
     }
 
     private static String string(JsonObject object, String key, String fallback) {

@@ -104,7 +104,7 @@ struct raop_rtp_s {
 static int
 raop_rtp_parse_remote(raop_rtp_t *raop_rtp, const unsigned char *remote, int remotelen)
 {
-    char current[25];
+    char current[INET6_ADDRSTRLEN];
     int family;
     int ret;
     assert(raop_rtp);
@@ -116,7 +116,7 @@ raop_rtp_parse_remote(raop_rtp_t *raop_rtp, const unsigned char *remote, int rem
         return -1;
     }
     memset(current, 0, sizeof(current));
-    sprintf(current, "%d.%d.%d.%d", remote[0], remote[1], remote[2], remote[3]);
+    if (!inet_ntop(family, remote, current, sizeof(current))) return -1;
     logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_parse_remote ip = %s", current);
     ret = netutils_parse_address(family, current,
                                  &raop_rtp->remote_saddr,
@@ -126,6 +126,16 @@ raop_rtp_parse_remote(raop_rtp_t *raop_rtp, const unsigned char *remote, int rem
     }
     raop_rtp->remote_saddr_len = ret;
     return 0;
+}
+
+static void
+raop_rtp_set_remote_port(struct sockaddr_storage *address, unsigned short port)
+{
+    if (address->ss_family == AF_INET6) {
+        ((struct sockaddr_in6 *) address)->sin6_port = htons(port);
+    } else {
+        ((struct sockaddr_in *) address)->sin_port = htons(port);
+    }
 }
 
 raop_rtp_t *
@@ -151,6 +161,7 @@ raop_rtp_init(logger_t *logger, raop_callbacks_t *callbacks, const unsigned char
         return NULL;
     }
     if (raop_rtp_parse_remote(raop_rtp, remote, remotelen) < 0) {
+		raop_buffer_destroy(raop_rtp->buffer);
 		free(raop_rtp);
 		return NULL;
 	}
@@ -158,6 +169,9 @@ raop_rtp_init(logger_t *logger, raop_callbacks_t *callbacks, const unsigned char
     raop_rtp->running = 0;
     raop_rtp->joined = 1;
     raop_rtp->flush = NO_FLUSH;
+    raop_rtp->csock = -1;
+    raop_rtp->tsock = -1;
+    raop_rtp->dsock = -1;
 
     MUTEX_CREATE(raop_rtp->run_mutex);
     MUTEX_CREATE(raop_rtp->time_mutex);
@@ -231,6 +245,14 @@ raop_rtp_init_sockets(raop_rtp_t *raop_rtp, int use_ipv6, int use_udp)
 
     if (csock == -1 || tsock == -1 || dsock == -1) {
         goto sockets_cleanup;
+    }
+
+    {
+        struct timeval timing_timeout;
+        timing_timeout.tv_sec = 0;
+        timing_timeout.tv_usec = 250000;
+        setsockopt(tsock, SOL_SOCKET, SO_RCVTIMEO,
+                   (const char *) &timing_timeout, sizeof(timing_timeout));
     }
 
     /* Set socket descriptors */
@@ -368,7 +390,7 @@ raop_rtp_thread_time(void *arg)
     struct sockaddr_storage saddr;
     socklen_t saddrlen;
     unsigned char packet[128];
-    unsigned int packetlen;
+    int packetlen;
     unsigned char time[32]={0x80,0xd2,0x00,0x07,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
             ,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
     };
@@ -385,27 +407,21 @@ raop_rtp_thread_time(void *arg)
 
         byteutils_put_timeStamp(time, 24, send_time);
         logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_time send time 32 bytes, port = %d", raop_rtp->timing_rport);
-        struct sockaddr_in *addr = (struct sockaddr_in *)&raop_rtp->remote_saddr;
-        addr->sin_port = htons(raop_rtp->timing_rport);
+        raop_rtp_set_remote_port(&raop_rtp->remote_saddr, raop_rtp->timing_rport);
         int sendlen = sendto(raop_rtp->tsock, (char *)time, sizeof(time), 0, (struct sockaddr *) &raop_rtp->remote_saddr, raop_rtp->remote_saddr_len);
         logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_time sendlen = %d", sendlen);
 
         saddrlen = sizeof(saddr);
         packetlen = recvfrom(raop_rtp->tsock, (char *)packet, sizeof(packet), 0,
                              (struct sockaddr *)&saddr, &saddrlen);
-        int type_t = packet[1] & ~0x80;
-        logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_time receive time type_t 0x%02x, packetlen = %d", type_t, packetlen);
-        if (type_t == 0x53) {
-
+        if (packetlen < 32) {
+            MUTEX_LOCK(raop_rtp->run_mutex);
+            int active = raop_rtp->running;
+            MUTEX_UNLOCK(raop_rtp->run_mutex);
+            if (!active) break;
+            continue;
         }
-        // 9-16 NTP请求报文离开发送端时发送端的本地时间。  T1
-        uint64_t Origin_Timestamp = byteutils_read_timeStamp(packet, 8);
-        // 17-24 NTP请求报文到达接收端时接收端的本地时间。 T2
         uint64_t Receive_Timestamp = byteutils_read_timeStamp(packet, 16);
-        // 25-32 Transmit Timestamp：应答报文离开应答者时应答者的本地时间。 T3
-        uint64_t Transmit_Timestamp = byteutils_read_timeStamp(packet, 24);
-
-        // FIXME: 先简单这样写吧
         rec_pts = Receive_Timestamp;
 
         struct timeval now;
@@ -428,7 +444,7 @@ raop_rtp_thread_udp(void *arg)
     raop_rtp_t *raop_rtp = arg;
     logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp");
     unsigned char packet[RAOP_PACKET_LEN];
-    unsigned int packetlen;
+    int packetlen;
     struct sockaddr_storage saddr;
     socklen_t saddrlen;
     assert(raop_rtp);
@@ -469,14 +485,14 @@ raop_rtp_thread_udp(void *arg)
 
         if (FD_ISSET(raop_rtp->csock, &rfds)) {
            saddrlen = sizeof(saddr);
-           packetlen = recvfrom(raop_rtp->csock, (char *)packet, sizeof(packet), 0,
-                                (struct sockaddr *)&saddr, &saddrlen);
-
-            memcpy(&raop_rtp->control_saddr, &saddr, saddrlen);
+	           packetlen = recvfrom(raop_rtp->csock, (char *)packet, sizeof(packet), 0,
+	                                (struct sockaddr *)&saddr, &saddrlen);
+	            if (packetlen < 2) continue;
+	            memcpy(&raop_rtp->control_saddr, &saddr, saddrlen);
             raop_rtp->control_saddr_len = saddrlen;
             int type_c = packet[1] & ~0x80;
             logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp type_c 0x%02x, packetlen = %d", type_c, packetlen);
-            if (type_c == 0x56) {
+	            if (type_c == 0x56 && packetlen > 4) {
                 // 处理重传的包，去除头部4个字节
                 int ret = raop_buffer_queue(raop_rtp->buffer, packet+4, packetlen-4, &raop_rtp->callbacks);
                 assert(ret >= 0);
@@ -492,10 +508,9 @@ raop_rtp_thread_udp(void *arg)
             //logger_log(raop_rtp->logger, LOGGER_INFO, "Would have data packet in queue");
             // 这里接收音频数据
             saddrlen = sizeof(saddr);
-            packetlen = recvfrom(raop_rtp->dsock, (char *)packet, sizeof(packet), 0,
-                                 (struct sockaddr *)&saddr, &saddrlen);
-            // rtp payload type
-            int type_d = packet[1] & ~0x80;
+	            packetlen = recvfrom(raop_rtp->dsock, (char *)packet, sizeof(packet), 0,
+	                                 (struct sockaddr *)&saddr, &saddrlen);
+	            if (packetlen < 2) continue;
             //logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp_thread_udp type_d 0x%02x, packetlen = %d", type_d, packetlen);
 
             // 出现len=16 如果没有发时间的话
@@ -549,7 +564,6 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp, int use_udp, unsigned short control_r
     if (raop_rtp->remote_saddr.ss_family == AF_INET6) {
         use_ipv6 = 1;
     }
-    use_ipv6 = 0;
     if (raop_rtp_init_sockets(raop_rtp, use_ipv6, use_udp) < 0) {
         logger_log(raop_rtp->logger, LOGGER_INFO, "Initializing sockets failed");
         MUTEX_UNLOCK(raop_rtp->run_mutex);
@@ -681,26 +695,34 @@ raop_rtp_stop(raop_rtp_t *raop_rtp)
         return;
     }
     raop_rtp->running = 0;
+	int csock = raop_rtp->csock;
+	int tsock = raop_rtp->tsock;
+	int dsock = raop_rtp->dsock;
     MUTEX_UNLOCK(raop_rtp->run_mutex);
+
+	if (csock != -1) shutdown(csock, SHUT_RDWR);
+	if (tsock != -1) shutdown(tsock, SHUT_RDWR);
+	if (dsock != -1) shutdown(dsock, SHUT_RDWR);
+	MUTEX_LOCK(raop_rtp->time_mutex);
+	COND_SIGNAL(raop_rtp->time_cond);
+	MUTEX_UNLOCK(raop_rtp->time_mutex);
 
     /* Join the thread */
     THREAD_JOIN(raop_rtp->thread);
-
-    MUTEX_LOCK(raop_rtp->time_mutex);
-    COND_SIGNAL(raop_rtp->time_cond);
-    MUTEX_UNLOCK(raop_rtp->time_mutex);
-
     THREAD_JOIN(raop_rtp->thread_time);
-    
-    if (raop_rtp->csock != -1) closesocket(raop_rtp->csock);
-    if (raop_rtp->tsock != -1) closesocket(raop_rtp->tsock);
-    if (raop_rtp->dsock != -1) closesocket(raop_rtp->dsock);
+
+	if (csock != -1) closesocket(csock);
+	if (tsock != -1) closesocket(tsock);
+	if (dsock != -1) closesocket(dsock);
 
     /* Flush buffer into initial state */
     raop_buffer_flush(raop_rtp->buffer, -1);
 
     /* Mark thread as joined */
     MUTEX_LOCK(raop_rtp->run_mutex);
+	raop_rtp->csock = -1;
+	raop_rtp->tsock = -1;
+	raop_rtp->dsock = -1;
     raop_rtp->joined = 1;
     MUTEX_UNLOCK(raop_rtp->run_mutex);
 }

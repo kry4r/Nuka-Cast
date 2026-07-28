@@ -68,7 +68,7 @@ struct raop_rtp_mirror_s {
 static int
 raop_rtp_parse_remote(raop_rtp_mirror_t *raop_rtp_mirror, const unsigned char *remote, int remotelen)
 {
-    char current[25];
+    char current[INET6_ADDRSTRLEN];
     int family;
     int ret;
     assert(raop_rtp_mirror);
@@ -80,7 +80,7 @@ raop_rtp_parse_remote(raop_rtp_mirror_t *raop_rtp_mirror, const unsigned char *r
         return -1;
     }
     memset(current, 0, sizeof(current));
-    sprintf(current, "%d.%d.%d.%d", remote[0], remote[1], remote[2], remote[3]);
+    if (!inet_ntop(family, remote, current, sizeof(current))) return -1;
     logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_parse_remote ip = %s", current);
     ret = netutils_parse_address(family, current,
                                  &raop_rtp_mirror->remote_saddr,
@@ -90,6 +90,16 @@ raop_rtp_parse_remote(raop_rtp_mirror_t *raop_rtp_mirror, const unsigned char *r
     }
     raop_rtp_mirror->remote_saddr_len = ret;
     return 0;
+}
+
+static void
+raop_rtp_mirror_set_remote_port(struct sockaddr_storage *address, unsigned short port)
+{
+    if (address->ss_family == AF_INET6) {
+        ((struct sockaddr_in6 *) address)->sin6_port = htons(port);
+    } else {
+        ((struct sockaddr_in *) address)->sin_port = htons(port);
+    }
 }
 
 #define NO_FLUSH (-42)
@@ -115,6 +125,7 @@ raop_rtp_mirror_t *raop_rtp_mirror_init(logger_t *logger, raop_callbacks_t *call
         return NULL;
     }
     if (raop_rtp_parse_remote(raop_rtp_mirror, remote, remotelen) < 0) {
+		mirror_buffer_destroy(raop_rtp_mirror->buffer);
         free(raop_rtp_mirror);
         return NULL;
     }
@@ -164,8 +175,8 @@ raop_rtp_mirror_thread_time(void *arg)
 
         byteutils_put_timeStamp(time, 40, send_time);
         logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror_thread_time send time 48 bytes, port = %d", raop_rtp_mirror->mirror_timing_rport);
-        struct sockaddr_in *addr = (struct sockaddr_in *)&raop_rtp_mirror->remote_saddr;
-        addr->sin_port = htons(raop_rtp_mirror->mirror_timing_rport);
+        raop_rtp_mirror_set_remote_port(&raop_rtp_mirror->remote_saddr,
+                                        raop_rtp_mirror->mirror_timing_rport);
         int sendlen = sendto(raop_rtp_mirror->mirror_time_sock, (char *)time, sizeof(time), 0, (struct sockaddr *) &raop_rtp_mirror->remote_saddr, raop_rtp_mirror->remote_saddr_len);
         logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror_thread_time sendlen = %d", sendlen);
 
@@ -428,7 +439,6 @@ raop_rtp_start_mirror(raop_rtp_mirror_t *raop_rtp_mirror, int use_udp, unsigned 
     if (raop_rtp_mirror->remote_saddr.ss_family == AF_INET6) {
         use_ipv6 = 1;
     }
-    use_ipv6 = 0;
     if (raop_rtp_init_mirror_sockets(raop_rtp_mirror, use_ipv6) < 0) {
         logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Initializing sockets failed");
         MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);

@@ -10,7 +10,6 @@
 #include "logger.h"
 
 typedef struct raop_rtp_mirror_s raop_rtp_mirror_t;
-typedef struct h264codec_s h264codec_t;
 
 raop_rtp_mirror_t *raop_rtp_mirror_init(logger_t *logger, raop_callbacks_t *callbacks, const unsigned char *remote, int remotelen,
                                         const unsigned char *aeskey, const unsigned char *ecdh_secret, unsigned short timing_rport);

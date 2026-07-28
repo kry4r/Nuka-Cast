@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.spider.SpiderManager;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.MediaDetail;
@@ -19,9 +20,11 @@ import org.xmlpull.v1.XmlPullParser;
 
 import java.io.StringReader;
 import java.net.URLEncoder;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,6 +36,8 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public final class TvBoxContentService {
+    private static final int MAX_CMS_BYTES = 4 * 1024 * 1024;
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
     private final TvBoxRepository repository;
     private final SpiderManager spiders;
     private final StorageLibrary storageLibrary;
@@ -141,7 +146,7 @@ public final class TvBoxContentService {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("CMS 详情 HTTP " + response.code());
             }
-            return response.body().string();
+            return ResponseBodies.string(response.body(), MAX_CMS_BYTES, UTF_8);
         }
     }
 
@@ -157,7 +162,8 @@ public final class TvBoxContentService {
                         .build();
                 try (Response response = HttpStack.client().newCall(request).execute()) {
                     if (!response.isSuccessful() || response.body() == null) continue;
-                    String body = response.body().string().trim();
+                    String body = ResponseBodies.string(
+                            response.body(), MAX_CMS_BYTES, UTF_8).trim();
                     PlaybackInfo parsed = PlaybackInfoParser.parse(body, "");
                     if (PlaybackInfoParser.isDirectMedia(parsed.url)) return parsed.url;
                     if (PlaybackInfoParser.isDirectMedia(response.request().url().toString())) {
@@ -196,7 +202,7 @@ public final class TvBoxContentService {
         int event;
         while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
-                tag = parser.getName().toLowerCase();
+                tag = parser.getName().toLowerCase(Locale.ROOT);
                 if ("dd".equals(tag)) ddFlag = safe(parser.getAttributeValue(null, "flag"));
             } else if (event == XmlPullParser.TEXT) {
                 String text = parser.getText() == null ? "" : parser.getText().trim();

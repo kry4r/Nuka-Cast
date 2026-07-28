@@ -24,12 +24,15 @@ import java.nio.charset.Charset;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import fi.iki.elonen.NanoHTTPD;
 
 public final class ControlServer extends NanoHTTPD {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
+    private static final int MAX_API_BODY_BYTES = 256 * 1024;
+    private static final int MAX_ASSET_BYTES = 8 * 1024 * 1024;
     private final Context context;
     private final NukaRuntime runtime;
     private final Gson gson = new Gson();
@@ -69,7 +72,8 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/pair".equals(path) && Method.POST.equals(session.getMethod())) {
             PairRequest request = body(session, PairRequest.class);
-            String token = runtime.getPairingManager().pair(request.code);
+            String token = runtime.getPairingManager().pair(
+                    request.code, session.getRemoteIpAddress());
             if (token == null) {
                 throw new SecurityException("配对码无效");
             }
@@ -199,6 +203,11 @@ public final class ControlServer extends NanoHTTPD {
             applyPlayerAction(request);
             return json(Response.Status.ACCEPTED, runtime.getPlayerController().snapshot());
         }
+        if ("/api/airplay/disconnect".equals(path) && Method.POST.equals(session.getMethod())) {
+            runtime.getAirPlayReceiver().disconnectSession();
+            return json(Response.Status.ACCEPTED,
+                    Collections.singletonMap("disconnected", true));
+        }
         return json(Response.Status.NOT_FOUND, error("接口不存在"));
     }
 
@@ -211,7 +220,12 @@ public final class ControlServer extends NanoHTTPD {
         } else if ("seek".equals(request.action)) {
             player.seekBy(request.offsetMs);
         } else if ("stop".equals(request.action)) {
-            player.stop();
+            if (runtime.getAirPlayReceiver().snapshot().sessionActive
+                    || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
+                runtime.getAirPlayReceiver().disconnectSession();
+            } else {
+                player.stop();
+            }
         } else {
             throw new IllegalArgumentException("未知播放命令");
         }
@@ -222,7 +236,7 @@ public final class ControlServer extends NanoHTTPD {
         Map<String, Object> result = new HashMap<String, Object>();
         result.put("name", "NukaCast");
         result.put("version", BuildConfig.VERSION_NAME);
-        result.put("serviceState", state.getServiceState().name().toLowerCase());
+        result.put("serviceState", state.getServiceState().name().toLowerCase(Locale.ROOT));
         result.put("message", state.getStatusMessage());
         result.put("activeMedia", state.getActiveMedia());
         result.put("sourceCount", state.getSourceCount());
@@ -265,7 +279,7 @@ public final class ControlServer extends NanoHTTPD {
         String authorization = session.getHeaders().get("authorization");
         String token = authorization != null && authorization.startsWith("Bearer ")
                 ? authorization.substring(7).trim() : null;
-        if (!runtime.getPairingManager().isAuthorized(token)) {
+        if (!runtime.getPairingManager().isAuthorized(token, session.getRemoteIpAddress())) {
             throw new SecurityException("请先与电视配对");
         }
     }
@@ -294,7 +308,10 @@ public final class ControlServer extends NanoHTTPD {
         byte[] buffer = new byte[8192];
         try {
             int count;
-            while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+            while ((count = input.read(buffer)) >= 0) {
+                if (output.size() + count > MAX_ASSET_BYTES) throw new IOException("资源文件过大");
+                output.write(buffer, 0, count);
+            }
         } finally {
             input.close();
         }
@@ -307,6 +324,9 @@ public final class ControlServer extends NanoHTTPD {
         String content = files.get("postData");
         if (content == null || content.trim().isEmpty()) {
             throw new IllegalArgumentException("请求体为空");
+        }
+        if (content.getBytes(UTF_8).length > MAX_API_BODY_BYTES) {
+            throw new IllegalArgumentException("请求体过大");
         }
         T value = gson.fromJson(content, type);
         if (value == null) throw new IllegalArgumentException("JSON 无效");
@@ -321,6 +341,10 @@ public final class ControlServer extends NanoHTTPD {
         response.addHeader("Cache-Control", "no-store");
         response.addHeader("X-Content-Type-Options", "nosniff");
         response.addHeader("X-Frame-Options", "DENY");
+        response.addHeader("Referrer-Policy", "no-referrer");
+        response.addHeader("Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                        + "img-src 'self' data: http: https:; connect-src 'self'; frame-ancestors 'none'");
         return response;
     }
 

@@ -8,6 +8,7 @@ import android.util.LruCache;
 import android.widget.ImageView;
 
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -16,6 +17,8 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public final class PosterImageLoader {
+    private static final int MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_IMAGE_DIMENSION = 12000;
     private final LruCache<String, Bitmap> cache = new LruCache<String, Bitmap>(12 * 1024 * 1024) {
         @Override protected int sizeOf(String key, Bitmap bitmap) { return bitmap.getByteCount(); }
     };
@@ -52,10 +55,14 @@ public final class PosterImageLoader {
                 .build();
         try (Response response = HttpStack.client().newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) return null;
-            byte[] bytes = response.body().bytes();
+            byte[] bytes = ResponseBodies.bytes(response.body(), MAX_IMAGE_BYTES);
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0
+                    || bounds.outWidth > MAX_IMAGE_DIMENSION
+                    || bounds.outHeight > MAX_IMAGE_DIMENSION
+                    || (long) bounds.outWidth * bounds.outHeight > 100_000_000L) return null;
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inPreferredConfig = Bitmap.Config.RGB_565;
             options.inDither = true;
