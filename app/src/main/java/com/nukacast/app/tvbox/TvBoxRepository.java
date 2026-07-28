@@ -109,7 +109,7 @@ public final class TvBoxRepository {
                     }
                 }
                 if (listener != null) {
-                    listener.onRefreshComplete(configs.size(), getEnabledSites().size());
+                    listener.onRefreshComplete(sourceStore.getSources().size(), getEnabledSites().size());
                 }
             }
         });

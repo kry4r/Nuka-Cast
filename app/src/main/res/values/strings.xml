@@ -25,8 +25,9 @@
     <string name="device_checking">检测中</string>
     <string name="source_health">片源状态</string>
     <string name="source_empty">0 个配置源</string>
-    <string name="source_web_note">添加和删除配置源请使用网页控制；电视端保留刷新操作。</string>
+    <string name="source_web_note">可恢复内置源；添加和删除其他配置源请使用网页控制。</string>
     <string name="refresh_sources">刷新全部配置源</string>
+    <string name="restore_default_source">恢复内置源</string>
     <string name="privacy_title">网页配对</string>
     <string name="privacy_note">清除后，已配对的浏览器需要重新输入六位码。</string>
     <string name="clear_pairing">清除已配对浏览器</string>

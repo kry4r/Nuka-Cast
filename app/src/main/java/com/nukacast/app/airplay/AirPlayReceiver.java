@@ -8,6 +8,7 @@ import android.view.SurfaceHolder;
 import com.nukacast.app.core.AppState;
 
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -35,6 +36,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     private volatile String error = "";
     private volatile long lastPacketAt;
     private volatile boolean sessionActive;
+    private volatile boolean stopped;
 
     public AirPlayReceiver(Context context, AppState appState, Runnable onSessionStart) {
         this.appState = appState;
@@ -48,12 +50,14 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
 
     public synchronized void start() {
         if ("ready".equals(state)) return;
+        stopped = false;
         state = "starting";
         error = "";
         try {
             bridge.start();
             publisher.start(bridge.port(), bridge.publicKey());
             state = "ready";
+            appState.updateActiveMedia("");
         } catch (Exception failure) {
             publisher.stop();
             bridge.stop();
@@ -63,6 +67,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     }
 
     public synchronized void stop() {
+        stopped = true;
         publisher.stop();
         bridge.stop();
         sessionActive = false;
@@ -71,6 +76,17 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         video.stop();
         audio.stop();
         watchdog.shutdownNow();
+    }
+
+    public void disconnectSession() {
+        endSession();
+        try {
+            watchdog.execute(new Runnable() {
+                @Override public void run() { restartNativeReceiver(); }
+            });
+        } catch (RejectedExecutionException ignored) {
+            // The application service is already stopping.
+        }
     }
 
     public void attachSurface(SurfaceHolder holder) {
@@ -116,11 +132,11 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
             mainHandler.post(new Runnable() {
                 @Override public void run() {
                     if (onSessionStart != null) onSessionStart.run();
-                    mainHandler.postDelayed(new Runnable() {
+                    mainHandler.post(new Runnable() {
                         @Override public void run() {
                             if (sessionActive) appState.updateActiveMedia("AirPlay 镜像");
                         }
-                    }, 80L);
+                    });
                 }
             });
         }
@@ -131,10 +147,30 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     }
 
     private void endSession() {
-        if (!sessionActive) return;
         sessionActive = false;
         video.flush();
         audio.flush();
         appState.updateActiveMedia("");
+    }
+
+    private synchronized void restartNativeReceiver() {
+        if (stopped) return;
+        state = "restarting";
+        error = "";
+        publisher.stop();
+        bridge.stop();
+        if (stopped) return;
+        try {
+            bridge.start();
+            publisher.start(bridge.port(), bridge.publicKey());
+            state = "ready";
+        } catch (Exception failure) {
+            publisher.stop();
+            bridge.stop();
+            state = "error";
+            error = failure.getMessage() == null
+                    ? failure.getClass().getSimpleName() : failure.getMessage();
+            appState.updateActiveMedia("");
+        }
     }
 }

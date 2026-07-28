@@ -281,7 +281,7 @@ httpd_thread(void *arg)
 
 			logger_log(httpd->logger, LOGGER_DEBUG, "Receiving on socket %d", connection->socket_fd);
 			ret = recv(connection->socket_fd, buffer, sizeof(buffer), 0);
-			if (ret == 0) {
+			if (ret <= 0) {
 				logger_log(httpd->logger, LOGGER_INFO, "Connection closed for socket %d", connection->socket_fd);
 				httpd_remove_connection(httpd, connection);
 				continue;
@@ -450,4 +450,3 @@ httpd_stop(httpd_t *httpd)
 	httpd->joined = 1;
 	MUTEX_UNLOCK(httpd->run_mutex);
 }
-

@@ -18,8 +18,11 @@ final class H264VideoRenderer {
     private volatile boolean running = true;
     private volatile Surface surface;
     private volatile byte[] codecConfig;
+    private volatile boolean decoderResetRequested;
+    private volatile Frame pendingKeyFrame;
     private MediaCodec decoder;
     private long lastPtsUs;
+    private boolean waitingForKeyFrame = true;
 
     H264VideoRenderer() {
         thread = new Thread(new Runnable() {
@@ -30,12 +33,27 @@ final class H264VideoRenderer {
 
     void setSurface(Surface value) {
         surface = value;
-        releaseDecoder();
+        decoderResetRequested = true;
+        Frame pending = pendingKeyFrame;
+        if (value != null && value.isValid() && pending != null) {
+            queue.clear();
+            queue.offer(pending);
+        }
+        thread.interrupt();
     }
 
     void offer(byte[] data, int type, long ptsUs) {
         received.incrementAndGet();
-        if (type == 0) codecConfig = data;
+        if (data == null || data.length == 0) {
+            dropped.incrementAndGet();
+            return;
+        }
+        if (type == 0) {
+            codecConfig = data;
+            pendingKeyFrame = null;
+            queue.clear();
+            decoderResetRequested = true;
+        }
         Frame frame = new Frame(data, type, ptsUs);
         if (!queue.offer(frame)) {
             queue.poll();
@@ -46,10 +64,12 @@ final class H264VideoRenderer {
 
     void flush() {
         queue.clear();
+        codecConfig = null;
+        pendingKeyFrame = null;
         lastPtsUs = 0;
-        if (decoder != null) {
-            try { decoder.flush(); } catch (RuntimeException ignored) {}
-        }
+        waitingForKeyFrame = true;
+        decoderResetRequested = true;
+        thread.interrupt();
     }
 
     void stop() {
@@ -66,15 +86,29 @@ final class H264VideoRenderer {
     private void decodeLoop() {
         while (running) {
             try {
+                if (decoderResetRequested) {
+                    decoderResetRequested = false;
+                    releaseDecoder();
+                    waitingForKeyFrame = true;
+                }
                 Frame frame = queue.poll(10, TimeUnit.MILLISECONDS);
                 if (frame == null) {
                     drain();
                     continue;
                 }
+                if (frame.type == 0) continue;
                 if (decoder == null && !createDecoder()) {
+                    if (containsNalType(frame.data, 5)) pendingKeyFrame = frame;
                     dropped.incrementAndGet();
                     continue;
                 }
+                boolean keyFrame = containsNalType(frame.data, 5);
+                if (waitingForKeyFrame && !keyFrame) {
+                    dropped.incrementAndGet();
+                    continue;
+                }
+                waitingForKeyFrame = false;
+                if (keyFrame) pendingKeyFrame = null;
                 queueInput(frame);
                 drain();
             } catch (InterruptedException ignored) {
@@ -88,16 +122,20 @@ final class H264VideoRenderer {
 
     private boolean createDecoder() {
         Surface target = surface;
-        if (target == null || !target.isValid()) return false;
+        byte[] config = codecConfig;
+        if (target == null || !target.isValid() || config == null) return false;
         try {
             MediaFormat format = MediaFormat.createVideoFormat("video/avc", 1920, 1080);
             format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024);
+            byte[] sps = parameterSet(config, 7);
+            byte[] pps = parameterSet(config, 8);
+            if (sps != null) format.setByteBuffer("csd-0", ByteBuffer.wrap(sps));
+            else format.setByteBuffer("csd-0", ByteBuffer.wrap(config));
+            if (pps != null) format.setByteBuffer("csd-1", ByteBuffer.wrap(pps));
             decoder = MediaCodec.createDecoderByType("video/avc");
             decoder.configure(format, target, null, 0);
             decoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
             decoder.start();
-            byte[] config = codecConfig;
-            if (config != null) queue.offer(new Frame(config, 0, 0));
             return true;
         } catch (Exception error) {
             releaseDecoder();
@@ -121,7 +159,7 @@ final class H264VideoRenderer {
             return;
         }
         input.put(frame.data);
-        int flags = frame.type == 0 ? MediaCodec.BUFFER_FLAG_CODEC_CONFIG : 0;
+        int flags = containsNalType(frame.data, 5) ? MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0;
         active.queueInputBuffer(index, 0, frame.data.length, timestamp(frame.ptsUs), flags);
     }
 
@@ -148,6 +186,43 @@ final class H264VideoRenderer {
         try { decoder.stop(); } catch (RuntimeException ignored) {}
         try { decoder.release(); } catch (RuntimeException ignored) {}
         decoder = null;
+    }
+
+    static byte[] parameterSet(byte[] data, int wantedType) {
+        int start = findStartCode(data, 0);
+        while (start >= 0) {
+            int prefix = data[start + 2] == 1 ? 3 : 4;
+            int nal = start + prefix;
+            int next = findStartCode(data, nal + 1);
+            if (nal < data.length && (data[nal] & 0x1f) == wantedType) {
+                int end = next < 0 ? data.length : next;
+                byte[] result = new byte[end - start];
+                System.arraycopy(data, start, result, 0, result.length);
+                return result;
+            }
+            start = next;
+        }
+        return null;
+    }
+
+    static boolean containsNalType(byte[] data, int wantedType) {
+        int start = findStartCode(data, 0);
+        while (start >= 0) {
+            int prefix = data[start + 2] == 1 ? 3 : 4;
+            int nal = start + prefix;
+            if (nal < data.length && (data[nal] & 0x1f) == wantedType) return true;
+            start = findStartCode(data, nal + 1);
+        }
+        return false;
+    }
+
+    private static int findStartCode(byte[] data, int offset) {
+        for (int i = Math.max(0, offset); i + 3 < data.length; i++) {
+            if (data[i] != 0 || data[i + 1] != 0) continue;
+            if (data[i + 2] == 1) return i;
+            if (data[i + 2] == 0 && data[i + 3] == 1) return i;
+        }
+        return -1;
     }
 
     private static final class Frame {
