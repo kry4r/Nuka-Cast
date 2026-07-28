@@ -144,15 +144,7 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: |
-            set +e
-            ./gradlew :app:connectedDebugAndroidTest -PincludeTestAbi=true --stacktrace --console=plain
-            TEST_STATUS=$?
-            if [ "$TEST_STATUS" -ne 0 ]; then
-              adb logcat -d -v threadtime > instrumentation-logcat.txt
-              tail -n 300 instrumentation-logcat.txt
-            fi
-            exit "$TEST_STATUS"
+          script: bash .github/scripts/run-instrumentation.sh
 
       - name: Upload instrumentation diagnostics
         if: always()
@@ -164,4 +156,5 @@ jobs:
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
             instrumentation-logcat.txt
+            application-crash.txt
           retention-days: 14

@@ -23,7 +23,7 @@ android {
             abiFilters(*debugAbis)
         }
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner "com.nukacast.app.NukaCastTestRunner"
 
         externalNativeBuild {
             cmake {
