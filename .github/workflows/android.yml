@@ -88,7 +88,8 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           BADGING="$($ANDROID_HOME/build-tools/35.0.0/aapt dump badging "$APK")"
           echo "$BADGING" | grep "sdkVersion:'17'"
-          echo "$BADGING" | grep "native-code: 'armeabi-v7a'"
+          echo "$BADGING" | grep "native-code:.*'armeabi-v7a'"
+          echo "$BADGING" | grep "native-code:.*'arm64-v8a'"
           unzip -l "$APK" | grep "lib/armeabi-v7a/libnukacast_airplay.so"
           unzip -l "$APK" | grep "lib/arm64-v8a/libnukacast_airplay.so"
           ! unzip -l "$APK" | grep -q "lib/x86_64/"
