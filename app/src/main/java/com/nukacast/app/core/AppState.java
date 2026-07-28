@@ -17,6 +17,7 @@ public final class AppState {
     private volatile int sourceCount;
     private volatile int enabledSiteCount;
     private volatile long stateVersion;
+    private volatile long contentVersion;
 
     public void addListener(Listener listener) {
         listeners.add(listener);
@@ -50,6 +51,10 @@ public final class AppState {
         return stateVersion;
     }
 
+    public long getContentVersion() {
+        return contentVersion;
+    }
+
     public void updateService(ServiceState newState, String message) {
         serviceState = newState;
         statusMessage = message == null ? "" : message;
@@ -62,6 +67,13 @@ public final class AppState {
     }
 
     public void updateSources(int configs, int sites) {
+        sourceCount = configs;
+        enabledSiteCount = sites;
+        contentVersion++;
+        changed();
+    }
+
+    public void updateSourceHealth(int configs, int sites) {
         sourceCount = configs;
         enabledSiteCount = sites;
         changed();

@@ -33,8 +33,11 @@ public final class NukaCastService extends Service {
         try {
             runtime.startServices();
             runtime.getTvBoxRepository().refreshAllAsync(new TvBoxRepository.RefreshListener() {
+                @Override public void onSourceRefreshed(int configs, int sites) {
+                    runtime.contentChanged();
+                }
                 @Override public void onRefreshComplete(int configs, int sites) {
-                    runtime.getState().updateSources(configs, sites);
+                    // Per-source callbacks have already published the final content state.
                 }
             });
         } catch (Exception error) {

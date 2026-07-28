@@ -12,6 +12,8 @@ export type Status = {
   activeMedia: string
   sourceCount: number
   siteCount: number
+  stateVersion: number
+  contentVersion: number
   storageMountCount: number
   libraryItemCount: number
   storageScanning: boolean
@@ -29,6 +31,13 @@ export type Status = {
     audioDrops: number
     videoWidth: number
     videoHeight: number
+    videoConfigPackets: number
+    videoKeyFrames: number
+    decoderInputs: number
+    decoderOutputs: number
+    decoderFormatChanges: number
+    decoderName: string
+    decoderSoftwareFallback: boolean
   }
 }
 
@@ -36,10 +45,17 @@ export type Source = {
   id: string
   name: string
   url: string
+  kind: "single" | "warehouse"
+  parentId: string
   enabled: boolean
   contentHash: string
   updatedAt: number
+  siteCount: number
+  searchableSiteCount: number
+  liveCount: number
+  latencyMs: number
   error: string
+  searchError: string
 }
 
 export type Site = {
@@ -48,7 +64,19 @@ export type Site = {
   type: number
   searchable: number
   filterable: number
+  sourceId: string
   sourceName: string
+}
+
+export type Diagnostics = {
+  javaCrash: string
+  serviceState: string
+  serviceMessage: string
+  deviceWarnings: string[]
+  airPlay: Status["airPlay"]
+  player: Player
+  sources: Source[]
+  homeErrors: { sourceId: string; siteKey: string; siteName: string; error: string; updatedAt: number }[]
 }
 
 export type SearchItem = {
@@ -209,6 +237,7 @@ export const api = {
     return result
   },
   device: () => request<Device>("/api/device"),
+  diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   sources: () => request<Source[]>("/api/sources"),
   sites: () => request<Site[]>("/api/sites"),
   addSource: (name: string, url: string) => request<Source>("/api/sources", {

@@ -5,6 +5,7 @@ plugins {
 def releaseKeystorePath = System.getenv("NUKACAST_KEYSTORE_PATH")
 def debugAbis = ["armeabi-v7a", "arm64-v8a"]
 if (project.hasProperty("includeTestAbi")) debugAbis.add("x86_64")
+if (project.hasProperty("includeLegacyTestAbi")) debugAbis.add("x86")
 
 android {
     namespace "com.nukacast.app"
@@ -16,8 +17,8 @@ android {
         minSdk 17
         targetSdk 35
         multiDexEnabled true
-        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 6
-        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.3.0"
+        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 7
+        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.3.1"
 
         ndk {
             abiFilters(*debugAbis)
@@ -103,6 +104,8 @@ dependencies {
     implementation "com.google.android.exoplayer:exoplayer-core:2.18.5"
     implementation "com.google.android.exoplayer:exoplayer-hls:2.18.5"
     implementation "com.google.android.exoplayer:exoplayer-dash:2.18.5"
+    // 2.14.2 is the last OkHttp extension release that supports API 16-19.
+    implementation "com.google.android.exoplayer:extension-okhttp:2.14.2"
     implementation "org.jmdns:jmdns:3.5.8"
     implementation "eu.agno3.jcifs:jcifs-ng:2.1.10"
 

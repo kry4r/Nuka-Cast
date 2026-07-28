@@ -1,11 +1,12 @@
 {
   "name": "nukacast-control",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "test": "vitest",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "rollup": "4.59.0",
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^4.1.10"
   }
 }

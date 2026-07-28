@@ -25,11 +25,11 @@ public final class TvBoxConfig {
         public int searchable;
         public int quickSearch;
         public int filterable;
-        public String ext;
+        public JsonElement ext;
         public String jar;
         public String playerUrl;
         public int playerType = -1;
-        public List<String> categories;
+        public JsonElement categories;
         public transient String sourceId;
         public transient String sourceName;
         public transient String configBaseUrl;
@@ -41,6 +41,11 @@ public final class TvBoxConfig {
 
         public boolean canFilter() {
             return filterable == 1;
+        }
+
+        public String extension() {
+            if (ext == null || ext.isJsonNull()) return "";
+            return ext.isJsonPrimitive() ? ext.getAsString() : ext.toString();
         }
     }
 
@@ -61,6 +66,6 @@ public final class TvBoxConfig {
         public String url;
         public int type;
         public JsonElement ext;
-        public String header;
+        public JsonElement header;
     }
 }

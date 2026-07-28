@@ -707,6 +707,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 try {
                     final SearchResponse response = runtime.getSearchEngine().search(query);
+                    runtime.sourceHealthChanged();
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             String title = "“" + query.keyword + "” · " + response.items.size()
@@ -890,8 +891,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         refreshSourcesButton.setEnabled(false);
         refreshSourcesButton.setText("正在刷新…");
         runtime.getTvBoxRepository().refreshAllAsync(new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
+            @Override public void onSourceRefreshed(int configs, int sites) {
+                runtime.contentChanged();
+            }
             @Override public void onRefreshComplete(final int configs, final int sites) {
-                runtime.getState().updateSources(configs, sites);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         refreshSourcesButton.setEnabled(true);
@@ -918,8 +921,20 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                             ? error.getClass().getSimpleName() : error.getMessage();
                 }
                 final String message = failure;
-                runtime.getState().updateSources(runtime.getSourceStore().getSources().size(),
-                        runtime.getTvBoxRepository().getEnabledSites().size());
+                runtime.contentChanged();
+                if (source.isWarehouse()) {
+                    runtime.getTvBoxRepository().refreshChildrenAsync(source.id,
+                            new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
+                                @Override public void onSourceRefreshed(int configs, int sites) {
+                                    runtime.contentChanged();
+                                }
+                                @Override public void onRefreshComplete(int configs, int sites) {
+                                    runOnUiThread(new Runnable() {
+                                        @Override public void run() { loadHome(true); }
+                                    });
+                                }
+                            });
+                }
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         restoreDefaultSourceButton.setEnabled(true);

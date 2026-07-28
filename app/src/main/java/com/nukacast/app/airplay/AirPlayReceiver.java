@@ -24,6 +24,13 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         public long audioDrops;
         public int videoWidth;
         public int videoHeight;
+        public long videoConfigPackets;
+        public long videoKeyFrames;
+        public long decoderInputs;
+        public long decoderOutputs;
+        public long decoderFormatChanges;
+        public String decoderName;
+        public boolean decoderSoftwareFallback;
     }
 
     private final AppState appState;
@@ -106,6 +113,13 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         snapshot.audioDrops = audio.dropped();
         snapshot.videoWidth = video.width();
         snapshot.videoHeight = video.height();
+        snapshot.videoConfigPackets = video.configPackets();
+        snapshot.videoKeyFrames = video.keyFrames();
+        snapshot.decoderInputs = video.decoderInputs();
+        snapshot.decoderOutputs = video.decoderOutputs();
+        snapshot.decoderFormatChanges = video.decoderFormatChanges();
+        snapshot.decoderName = video.decoderName();
+        snapshot.decoderSoftwareFallback = video.softwareFallback();
         return snapshot;
     }
 

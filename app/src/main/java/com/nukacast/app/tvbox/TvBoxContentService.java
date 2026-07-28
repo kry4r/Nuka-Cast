@@ -43,6 +43,7 @@ public final class TvBoxContentService {
     private final StorageLibrary storageLibrary;
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     private final ExecutorService homeExecutor = Executors.newFixedThreadPool(4);
+    private final SiteFailureStore homeFailures = new SiteFailureStore();
 
     public TvBoxContentService(TvBoxRepository repository, SpiderManager spiders) {
         this(repository, spiders, null);
@@ -81,14 +82,19 @@ public final class TvBoxContentService {
                 @Override public List<SearchItem> call() {
                     try {
                         if (site.type == 3) {
-                            return HomeCatalogParser.parse(spiders.home(site, true),
+                            List<SearchItem> result = HomeCatalogParser.parse(spiders.home(site, true),
                                     site.sourceId, site.key, site.name);
+                            homeFailures.success(site);
+                            return result;
                         }
                         SearchQuery query = new SearchQuery();
                         query.keyword = "";
                         query.page = 1;
-                        return cmsSearcher.search(site, query);
-                    } catch (Throwable ignored) {
+                        List<SearchItem> result = cmsSearcher.search(site, query);
+                        homeFailures.success(site);
+                        return result;
+                    } catch (Throwable error) {
+                        homeFailures.failure(site, error);
                         return Collections.emptyList();
                     }
                 }
@@ -97,11 +103,16 @@ public final class TvBoxContentService {
 
         List<List<SearchItem>> groups = new ArrayList<List<SearchItem>>();
         List<Future<List<SearchItem>>> futures = homeExecutor.invokeAll(calls, 10, TimeUnit.SECONDS);
-        for (Future<List<SearchItem>> future : futures) {
-            if (future.isCancelled()) continue;
+        for (int i = 0; i < futures.size(); i++) {
+            Future<List<SearchItem>> future = futures.get(i);
+            if (future.isCancelled()) {
+                homeFailures.failure(selected.get(i), "首页请求超时");
+                continue;
+            }
             try {
                 groups.add(future.get());
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                homeFailures.failure(selected.get(i), error);
             }
         }
         return SearchResultMerger.merge(groups, Math.max(1, maxItems));
@@ -109,6 +120,14 @@ public final class TvBoxContentService {
 
     public void shutdown() {
         homeExecutor.shutdownNow();
+    }
+
+    public List<SiteFailureStore.Failure> homeFailures() {
+        return homeFailures.snapshot();
+    }
+
+    public void retainHomeFailures(List<TvBoxConfig.Site> sites) {
+        homeFailures.retainSites(sites);
     }
 
     public PlaybackInfo resolve(String sourceId, String siteKey, String flag, String episodeId,

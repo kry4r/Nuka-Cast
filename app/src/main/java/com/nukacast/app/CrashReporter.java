@@ -12,7 +12,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.Charset;
 
-final class CrashReporter {
+public final class CrashReporter {
     private static final String FILE_NAME = "last-java-crash.txt";
     private static final Charset UTF_8 = Charset.forName("UTF-8");
 
@@ -29,7 +29,7 @@ final class CrashReporter {
         });
     }
 
-    static String read(Context context) {
+    public static String read(Context context) {
         File file = new File(context.getFilesDir(), FILE_NAME);
         if (!file.isFile()) return "";
         StringBuilder report = new StringBuilder();

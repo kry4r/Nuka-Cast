@@ -40,9 +40,7 @@ public final class DeviceProbe {
         }
 
         inspectAvc(profile);
-        if (profile.sdk != 17) {
-            profile.warnings.add("目标设备为 API 17，当前检测到 API " + profile.sdk);
-        }
+        profile.warnings.add(compatibilityWarning(profile.sdk));
         if (!profile.hasHardwareAvcDecoder) {
             profile.warnings.add("1080p30 镜像需要硬件 H.264 解码器");
         }
@@ -80,6 +78,10 @@ public final class DeviceProbe {
     private static boolean isSoftwareCodec(String codecName) {
         String name = codecName.toLowerCase(Locale.US);
         return name.startsWith("omx.google.") || name.contains("ffmpeg") || name.contains("software");
+    }
+
+    static String compatibilityWarning(int sdk) {
+        return "应用最低支持 API 17；当前设备 API " + sdk;
     }
 
     private static String safe(String value) {

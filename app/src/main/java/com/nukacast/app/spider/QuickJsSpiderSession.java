@@ -56,7 +56,7 @@ final class QuickJsSpiderSession implements SpiderSession {
 
     QuickJsSpiderSession(TvBoxConfig.Site site) throws Exception {
         this.scriptUrl = findScriptUrl(site);
-        this.extension = site.ext == null ? "" : site.ext;
+        this.extension = site.extension();
         await(submit(new Callable<Void>() {
             @Override public Void call() throws Exception {
                 initialize();
@@ -192,7 +192,7 @@ final class QuickJsSpiderSession implements SpiderSession {
     }
 
     private static String findScriptUrl(TvBoxConfig.Site site) {
-        String[] candidates = { site.api, site.ext, site.jar, site.globalSpider };
+        String[] candidates = { site.api, site.extension(), site.jar, site.globalSpider };
         for (String candidate : candidates) {
             String found = scriptCandidate(site.configBaseUrl, candidate);
             if (!found.isEmpty()) return found;

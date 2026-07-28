@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Airplay,
   Cast,
@@ -26,8 +26,10 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, AUTH_EXPIRED_EVENT, type Device, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, AUTH_EXPIRED_EVENT, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
+import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
+import { createLatestRequestGate } from "@/lib/latest-request"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -112,9 +114,9 @@ export default function App() {
           </div>
         )}
         {view === "overview" && <Overview status={status} onStatusChanged={refreshStatus} setError={setError} />}
-        {view === "search" && <SearchView setError={setError} />}
-        {view === "live" && <LiveView setError={setError} />}
-        {view === "sources" && <SourcesView onChanged={refreshStatus} setError={setError} />}
+        {view === "search" && <SearchView sourceVersion={status?.stateVersion ?? 0} setError={setError} />}
+        {view === "live" && <LiveView contentVersion={status?.contentVersion ?? 0} setError={setError} />}
+        {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
         {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
         {view === "device" && <DeviceView setError={setError} />}
         </div>
@@ -246,30 +248,70 @@ function OverviewFact({ icon: Icon, label, value }: { icon: typeof Gauge; label:
   )
 }
 
-function SearchView({ setError }: { setError: (value: string) => void }) {
+function SearchView({ sourceVersion, setError }: { sourceVersion: number; setError: (value: string) => void }) {
   const [keyword, setKeyword] = useState("")
   const [contentType, setContentType] = useState("")
   const [year, setYear] = useState("")
   const [region, setRegion] = useState("")
   const [sites, setSites] = useState<Site[]>([])
+  const [sources, setSources] = useState<Source[]>([])
+  const [selectedSource, setSelectedSource] = useState("")
   const [selectedSites, setSelectedSites] = useState<string[]>([])
   const [result, setResult] = useState<SearchResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [detail, setDetail] = useState<MediaDetail | null>(null)
   const [detailBusy, setDetailBusy] = useState(false)
+  const manualSourceSelection = useRef(false)
+  const requestGate = useMemo(() => createLatestRequestGate(), [])
+  const selectedSourceRef = useRef("")
+  const searchCriteriaRef = useRef({ keyword, contentType, year, region })
+  searchCriteriaRef.current = { keyword, contentType, year, region }
 
-  useEffect(() => { api.sites().then(setSites).catch((reason) => setError(message(reason))) }, [setError])
+  const rankedSources = useMemo(() => rankLeafSources(sources), [sources])
+  const visibleSites = useMemo(() => sites.filter((site) => site.sourceId === selectedSource), [sites, selectedSource])
+
+  useEffect(() => {
+    Promise.all([api.sources(), api.sites()]).then(([sourceItems, siteItems]) => {
+      const ranked = rankLeafSources(sourceItems)
+      const preferred = selectPreferredSource(ranked, selectedSourceRef.current, manualSourceSelection.current)
+      setSources(sourceItems)
+      setSites(siteItems)
+      if (preferred === selectedSourceRef.current) return
+      requestGate.begin()
+      setBusy(false)
+      setResult(null)
+      setSelectedSites([])
+      setSelectedSource(preferred)
+      selectedSourceRef.current = preferred
+      if (preferred && searchCriteriaRef.current.keyword.trim()) void search(preferred, [])
+    }).catch((reason) => setError(message(reason)))
+  }, [sourceVersion, setError])
+
+  async function search(sourceId = selectedSource, siteKeys = selectedSites) {
+    const request = requestGate.begin()
+    const criteria = searchCriteriaRef.current
+    setBusy(true)
+    try {
+      const next = await api.search({ sourceId, keyword: criteria.keyword, contentType: criteria.contentType, year: criteria.year, region: criteria.region, siteKeys, page: 1, pageSize: 80 })
+      if (requestGate.isLatest(request)) setResult(next)
+    } catch (reason) {
+      if (requestGate.isLatest(request)) setError(message(reason))
+    } finally {
+      if (requestGate.isLatest(request)) setBusy(false)
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    setBusy(true)
-    try {
-      setResult(await api.search({ keyword, contentType, year, region, siteKeys: selectedSites, page: 1, pageSize: 80 }))
-    } catch (reason) {
-      setError(message(reason))
-    } finally {
-      setBusy(false)
-    }
+    await search()
+  }
+
+  function changeSource(sourceId: string) {
+    manualSourceSelection.current = true
+    selectedSourceRef.current = sourceId
+    setSelectedSource(sourceId)
+    setSelectedSites([])
+    if (keyword.trim()) void search(sourceId, [])
   }
 
   async function openDetail(item: SearchItem) {
@@ -287,14 +329,21 @@ function SearchView({ setError }: { setError: (value: string) => void }) {
     <>
       <PageHeader title="全站搜索" action={result && <Badge variant="outline">{result.items.length} 条 · {result.elapsedMs} ms</Badge>} />
       <form onSubmit={submit} className="border-y py-4">
-        <div className="flex gap-2"><Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="片名、演员或导演" className="h-10" /><Button className="h-10" disabled={busy || !keyword.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Search />}搜索</Button></div>
+        <div className="grid gap-2 sm:grid-cols-[minmax(180px,280px)_1fr_auto]">
+          <select value={selectedSource} onChange={(event) => changeSource(event.target.value)} aria-label="搜索仓库" className="h-10 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring">
+            {rankedSources.map((source, index) => <option key={source.id} value={source.id}>{index === 0 ? "最快 · " : ""}{sourceLabel(source, sources)}</option>)}
+          </select>
+          <Input value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="片名、演员或导演" className="h-10" />
+          <Button className="h-10" disabled={busy || !keyword.trim() || !selectedSource}>{busy ? <LoaderCircle className="animate-spin" /> : <Search />}搜索</Button>
+        </div>
+        {rankedSources.length > 0 && <div className="mt-2 text-xs text-muted-foreground">默认使用最快的健康仓；手动切换后保留当前选择。</div>}
         <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-[160px_160px_160px_1fr]">
           <Select value={contentType} onChange={setContentType} label="全部类型" values={["电影", "电视剧", "综艺", "动漫"]} />
           <Select value={year} onChange={setYear} label="全部年份" values={["2026", "2025", "2024", "2023", "2022", "2021", "2020"]} />
           <Select value={region} onChange={setRegion} label="全部地区" values={["中国", "美国", "日本", "韩国", "英国"]} />
           <div className="flex items-center gap-2 overflow-x-auto">
             <ListFilter className="size-4 shrink-0 text-muted-foreground" />
-            {sites.slice(0, 12).map((site) => {
+            {visibleSites.slice(0, 12).map((site) => {
               const active = selectedSites.includes(site.key)
               return <Button key={site.key} type="button" size="sm" variant={active ? "secondary" : "outline"} onClick={() => setSelectedSites(active ? selectedSites.filter((key) => key !== site.key) : [...selectedSites, site.key])}>{site.name}</Button>
             })}
@@ -397,7 +446,7 @@ function DetailDialog({ detail, onClose, setError }: { detail: MediaDetail; onCl
   )
 }
 
-function LiveView({ setError }: { setError: (value: string) => void }) {
+function LiveView({ contentVersion, setError }: { contentVersion: number; setError: (value: string) => void }) {
   const [sources, setSources] = useState<LiveSource[]>([])
   const [selected, setSelected] = useState("")
   const [catalog, setCatalog] = useState<LiveCatalog | null>(null)
@@ -405,17 +454,31 @@ function LiveView({ setError }: { setError: (value: string) => void }) {
   const [playing, setPlaying] = useState("")
   const [schedule, setSchedule] = useState<EpgSchedule | null>(null)
   const [epgBusy, setEpgBusy] = useState(false)
+  const requestGate = useMemo(() => createLatestRequestGate(), [])
 
   useEffect(() => {
     api.liveSources().then((items) => {
       setSources(items)
-      if (items.length) load(items[0].id)
+      if (!items.length) {
+        setSelected(""); setCatalog(null); setSchedule(null)
+        return
+      }
+      const next = items.some((source) => source.id === selected) ? selected : items[0].id
+      void load(next)
     }).catch((reason) => setError(message(reason)))
-  }, [setError])
+  }, [contentVersion, setError])
 
   async function load(id: string) {
+    const request = requestGate.begin()
     setSelected(id); setBusy(true); setCatalog(null); setSchedule(null)
-    try { setCatalog(await api.liveCatalog(id)) } catch (reason) { setError(message(reason)) } finally { setBusy(false) }
+    try {
+      const next = await api.liveCatalog(id)
+      if (requestGate.isLatest(request)) setCatalog(next)
+    } catch (reason) {
+      if (requestGate.isLatest(request)) setError(message(reason))
+    } finally {
+      if (requestGate.isLatest(request)) setBusy(false)
+    }
   }
 
   async function play(channelId: string) {
@@ -448,13 +511,14 @@ function LiveView({ setError }: { setError: (value: string) => void }) {
   )
 }
 
-function SourcesView({ onChanged, setError }: { onChanged: () => void; setError: (value: string) => void }) {
+function SourcesView({ contentVersion, onChanged, setError }: { contentVersion: number; onChanged: () => void; setError: (value: string) => void }) {
   const [sources, setSources] = useState<Source[]>([])
   const [name, setName] = useState("")
   const [url, setUrl] = useState("")
   const [busy, setBusy] = useState(false)
   const load = useCallback(() => api.sources().then(setSources).catch((reason) => setError(message(reason))), [setError])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, contentVersion])
+  const orderedSources = useMemo(() => orderSourceTree(sources), [sources])
 
   async function add(event: FormEvent) {
     event.preventDefault()
@@ -462,7 +526,7 @@ function SourcesView({ onChanged, setError }: { onChanged: () => void; setError:
     try {
       await api.addSource(name, url)
       setName(""); setUrl(""); await load(); onChanged()
-    } catch (reason) { setError(message(reason)) } finally { setBusy(false) }
+    } catch (reason) { await load(); onChanged(); setError(message(reason)) } finally { setBusy(false) }
   }
 
   async function remove(id: string) {
@@ -470,7 +534,7 @@ function SourcesView({ onChanged, setError }: { onChanged: () => void; setError:
   }
 
   async function refresh() {
-    try { await api.refreshSources(); window.setTimeout(load, 1500) } catch (reason) { setError(message(reason)) }
+    try { await api.refreshSources(); onChanged() } catch (reason) { setError(message(reason)) }
   }
 
   return (
@@ -482,11 +546,15 @@ function SourcesView({ onChanged, setError }: { onChanged: () => void; setError:
         <Button disabled={busy || !url.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
       </form>
       <section className="mt-5 divide-y rounded-md border">
-        {sources.map((source) => (
-          <div key={source.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-            <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="font-medium">{source.name}</span><Badge variant={source.error ? "destructive" : "secondary"}>{source.error ? "异常" : "已启用"}</Badge></div><div className="mt-1 truncate text-xs text-muted-foreground">{source.url}</div>{source.error && <div className="mt-1 text-xs text-destructive">{source.error}</div>}</div>
-            <div className="shrink-0 text-xs text-muted-foreground">{source.contentHash ? source.contentHash.slice(0, 10) : "未缓存"}</div>
-            <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 /></Button>
+        {orderedSources.map((source) => (
+          <div key={source.id} className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-center ${source.parentId ? "bg-muted/20 pl-8" : ""}`}>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{source.name}</span><Badge variant={source.error ? "destructive" : "secondary"}>{source.error ? "异常" : source.kind === "warehouse" ? "多仓" : source.parentId ? "子仓" : "单仓"}</Badge></div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">{source.url}</div>
+              {(source.error || source.searchError) && <div className="mt-1 break-words text-xs text-destructive">{source.error || source.searchError}</div>}
+            </div>
+            <div className="shrink-0 text-xs text-muted-foreground">{source.kind === "warehouse" ? `${sources.filter((item) => item.parentId === source.id).length} 个子仓` : `${source.siteCount} 站点 · ${source.liveCount} 直播 · ${source.latencyMs || "-"} ms`}</div>
+            {!source.parentId && <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 /></Button>}
           </div>
         ))}
         {sources.length === 0 && <Empty icon={Library} label="还没有配置源" compact />}
@@ -566,7 +634,24 @@ function StorageView({ onChanged, setError }: { onChanged: () => void; setError:
 
 function DeviceView({ setError }: { setError: (value: string) => void }) {
   const [device, setDevice] = useState<Device | null>(null)
-  useEffect(() => { api.device().then(setDevice).catch((reason) => setError(message(reason))) }, [setError])
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+  useEffect(() => {
+    let active = true
+    let refreshing = false
+    const refresh = () => {
+      if (refreshing) return Promise.resolve()
+      refreshing = true
+      return Promise.all([api.device(), api.diagnostics()])
+      .then(([nextDevice, nextDiagnostics]) => {
+        if (active) { setDevice(nextDevice); setDiagnostics(nextDiagnostics) }
+      })
+      .catch((reason) => { if (active) setError(message(reason)) })
+      .finally(() => { refreshing = false })
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 2500)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [setError])
   const rows = useMemo(() => device ? [
     ["系统", `${device.manufacturer} ${device.model} · Android ${device.androidVersion} / API ${device.sdk}`],
     ["架构", device.primaryAbi],
@@ -584,8 +669,48 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
       </section>
       {device?.warnings.length ? <section className="mt-5"><h2 className="section-title mb-3">检测提示</h2>{device.warnings.map((warning) => <div key={warning} className="mb-2 flex items-center gap-2 text-sm text-destructive"><CircleAlert className="size-4" />{warning}</div>)}</section> : null}
       <section className="mt-5"><h2 className="section-title mb-3">H.264 解码器</h2><div className="flex flex-wrap gap-2">{device?.avcDecoders.map((codec) => <Badge key={codec} variant="outline">{codec}</Badge>)}</div></section>
+      <section className="mt-7 border-t pt-5">
+        <div className="mb-3 flex items-center justify-between gap-3"><h2 className="section-title">投屏诊断</h2><Badge variant={diagnostics?.airPlay.decoderOutputs ? "secondary" : "outline"}>{diagnostics?.airPlay.sessionActive ? "会话中" : diagnostics?.airPlay.state || "未启动"}</Badge></div>
+        <div className="grid divide-y rounded-md border sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
+          <DiagnosticFact label="接收视频" value={`${diagnostics?.airPlay.videoFrames ?? 0} 包 · ${diagnostics?.airPlay.videoKeyFrames ?? 0} IDR`} />
+          <DiagnosticFact label="解码输入 / 输出" value={`${diagnostics?.airPlay.decoderInputs ?? 0} / ${diagnostics?.airPlay.decoderOutputs ?? 0}`} />
+          <DiagnosticFact label="实际解码器" value={diagnostics?.airPlay.decoderName || "尚未创建"} />
+          <DiagnosticFact label="解码模式" value={diagnostics?.airPlay.decoderSoftwareFallback ? "Google 软件回退" : "系统硬解优先"} />
+        </div>
+        {diagnostics?.airPlay.error && <div className="mt-3 break-words text-sm text-destructive">AirPlay：{diagnostics.airPlay.error}</div>}
+      </section>
+      <section className="mt-7 border-t pt-5">
+        <h2 className="section-title mb-3">源与启动诊断</h2>
+        <div className="space-y-2">
+          {diagnostics?.sources.filter((source) => source.error || source.searchError).map((source) => <div key={source.id} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{source.name}</span><span className="break-words text-destructive">{source.error || source.searchError}</span></div>)}
+          {diagnostics?.homeErrors.map((failure) => <div key={`${failure.sourceId}-${failure.siteKey}`} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{failure.siteName}</span><span className="break-words text-destructive">首页：{failure.error}</span></div>)}
+          {diagnostics && diagnostics.sources.every((source) => !source.error && !source.searchError) && diagnostics.homeErrors.length === 0 && <div className="text-sm text-muted-foreground">当前没有源刷新或首页加载错误。</div>}
+        </div>
+        {diagnostics?.javaCrash ? <details className="mt-4 rounded-md border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">上次 Java 闪退记录</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t p-4 text-xs leading-5 text-destructive">{diagnostics.javaCrash}</pre></details> : <div className="mt-4 text-sm text-muted-foreground">没有保存的 Java 闪退记录。</div>}
+      </section>
     </>
   )
+}
+
+function DiagnosticFact({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 px-4 py-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 break-words text-sm font-medium">{value}</div></div>
+}
+
+function sourceLabel(source: Source, allSources: Source[]) {
+  const parent = allSources.find((item) => item.id === source.parentId)
+  const name = parent ? `${parent.name} / ${source.name}` : source.name
+  return source.error || source.searchError ? `${name}（异常）` : `${name} · ${source.latencyMs || "-"} ms`
+}
+
+function orderSourceTree(sources: Source[]) {
+  const ordered: Source[] = []
+  const roots = sources.filter((source) => !source.parentId)
+  roots.forEach((root) => {
+    ordered.push(root)
+    ordered.push(...sources.filter((source) => source.parentId === root.id))
+  })
+  ordered.push(...sources.filter((source) => source.parentId && !sources.some((parent) => parent.id === source.parentId)))
+  return ordered
 }
 
 function Empty({ icon: Icon, label, compact = false }: { icon: typeof Gauge; label: string; compact?: boolean }) {

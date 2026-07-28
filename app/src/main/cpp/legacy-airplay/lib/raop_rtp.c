@@ -110,9 +110,9 @@ raop_rtp_parse_remote(raop_rtp_t *raop_rtp, const unsigned char *remote, int rem
     assert(raop_rtp);
     if (remotelen == 4) {
         family = AF_INET;
-    } else if (remotelen == 16) {
-        family = AF_INET6;
     } else {
+        logger_log(raop_rtp->logger, LOGGER_WARNING,
+                   "Rejecting non-IPv4 RAOP remote address");
         return -1;
     }
     memset(current, 0, sizeof(current));
@@ -561,9 +561,6 @@ raop_rtp_start_audio(raop_rtp_t *raop_rtp, int use_udp, unsigned short control_r
     /* Initialize ports and sockets */
     raop_rtp->control_rport = control_rport;
     //raop_rtp->timing_rport = timing_rport;
-    if (raop_rtp->remote_saddr.ss_family == AF_INET6) {
-        use_ipv6 = 1;
-    }
     if (raop_rtp_init_sockets(raop_rtp, use_ipv6, use_udp) < 0) {
         logger_log(raop_rtp->logger, LOGGER_INFO, "Initializing sockets failed");
         MUTEX_UNLOCK(raop_rtp->run_mutex);

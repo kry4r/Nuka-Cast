@@ -5,6 +5,7 @@ import java.util.List;
 
 public final class SearchQuery {
     public String keyword = "";
+    public String sourceId = "";
     public String contentType = "";
     public String year = "";
     public String region = "";

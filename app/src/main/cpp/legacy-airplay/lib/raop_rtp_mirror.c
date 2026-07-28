@@ -74,9 +74,9 @@ raop_rtp_parse_remote(raop_rtp_mirror_t *raop_rtp_mirror, const unsigned char *r
     assert(raop_rtp_mirror);
     if (remotelen == 4) {
         family = AF_INET;
-    } else if (remotelen == 16) {
-        family = AF_INET6;
     } else {
+        logger_log(raop_rtp_mirror->logger, LOGGER_WARNING,
+                   "Rejecting non-IPv4 AirPlay mirror remote address");
         return -1;
     }
     memset(current, 0, sizeof(current));
@@ -436,9 +436,6 @@ raop_rtp_start_mirror(raop_rtp_mirror_t *raop_rtp_mirror, int use_udp, unsigned 
     }
 
     //raop_rtp_mirror->mirror_timing_rport = mirror_timing_rport;
-    if (raop_rtp_mirror->remote_saddr.ss_family == AF_INET6) {
-        use_ipv6 = 1;
-    }
     if (raop_rtp_init_mirror_sockets(raop_rtp_mirror, use_ipv6) < 0) {
         logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "Initializing sockets failed");
         MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);

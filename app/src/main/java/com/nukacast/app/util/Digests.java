@@ -15,6 +15,15 @@ public final class Digests {
         }
     }
 
+    public static String md5(byte[] content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            return hex(digest.digest(content));
+        } catch (Exception error) {
+            throw new IllegalStateException("MD5 unavailable", error);
+        }
+    }
+
     public static String hex(byte[] bytes) {
         StringBuilder value = new StringBuilder(bytes.length * 2);
         for (byte item : bytes) {

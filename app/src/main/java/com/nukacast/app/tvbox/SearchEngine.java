@@ -68,8 +68,12 @@ public final class SearchEngine {
         SearchResponse response = new SearchResponse();
         response.keyword = query.keyword;
         response.searchedSites = sites.size();
+        int successfulSiteCount = 0;
         List<List<SearchItem>> successfulItems = new ArrayList<List<SearchItem>>();
-        if (storageLibrary != null) successfulItems.add(storageLibrary.search(query));
+        if (storageLibrary != null && (query.sourceId == null || query.sourceId.isEmpty()
+                || query.sourceId.startsWith("storage:"))) {
+            successfulItems.add(storageLibrary.search(query));
+        }
         for (int i = 0; i < futures.size(); i++) {
             Future<SiteOutcome> future = futures.get(i);
             if (future.isCancelled()) {
@@ -88,6 +92,7 @@ public final class SearchEngine {
                     continue;
                 }
                 successfulItems.add(outcome.items);
+                successfulSiteCount++;
             } catch (Exception error) {
                 response.failedSites++;
                 response.partial = true;
@@ -96,6 +101,11 @@ public final class SearchEngine {
         response.items.addAll(SearchResultMerger.merge(successfulItems, query.pageSize));
         response.elapsedMs = System.currentTimeMillis() - startedAt;
         response.partial |= response.failedSites > 0;
+        if (query.sourceId != null && !query.sourceId.isEmpty()
+                && !query.sourceId.startsWith("storage:") && !sites.isEmpty()) {
+            repository.recordSearchOutcome(query.sourceId, response.elapsedMs,
+                    successfulSiteCount, sites.size());
+        }
         return response;
     }
 
@@ -104,9 +114,16 @@ public final class SearchEngine {
     }
 
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
+        return selectSites(repository.getEnabledSites(), query);
+    }
+
+    static List<TvBoxConfig.Site> selectSites(List<TvBoxConfig.Site> available,
+                                               SearchQuery query) {
         List<TvBoxConfig.Site> result = new ArrayList<TvBoxConfig.Site>();
-        for (TvBoxConfig.Site site : repository.getEnabledSites()) {
+        for (TvBoxConfig.Site site : available) {
             if (!site.canSearch()) continue;
+            if (query.sourceId != null && !query.sourceId.isEmpty()
+                    && !query.sourceId.equals(site.sourceId)) continue;
             if (!query.siteKeys.isEmpty() && !query.siteKeys.contains(site.key)) continue;
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
             result.add(site);

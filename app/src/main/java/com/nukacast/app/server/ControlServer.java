@@ -5,6 +5,7 @@ import android.content.res.AssetManager;
 
 import com.google.gson.Gson;
 import com.nukacast.app.BuildConfig;
+import com.nukacast.app.CrashReporter;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.live.model.LiveCatalog;
@@ -38,7 +39,7 @@ public final class ControlServer extends NanoHTTPD {
     private final Gson gson = new Gson();
 
     public ControlServer(Context context, int port, NukaRuntime runtime) {
-        super(port);
+        super("0.0.0.0", port);
         this.context = context.getApplicationContext();
         this.runtime = runtime;
     }
@@ -87,6 +88,9 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/device".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getDeviceProfile());
         }
+        if ("/api/diagnostics".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, diagnostics());
+        }
         if ("/api/sites".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getTvBoxRepository().getEnabledSites());
         }
@@ -119,23 +123,31 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/sources".equals(path) && Method.POST.equals(session.getMethod())) {
             SourceRequest request = body(session, SourceRequest.class);
             ConfigSource source = runtime.getSourceStore().add(request.name, request.url);
-            runtime.getTvBoxRepository().refresh(source);
-            runtime.getState().updateSources(runtime.getSourceStore().getSources().size(),
-                    runtime.getTvBoxRepository().getEnabledSites().size());
+            runtime.contentChanged();
+            runtime.getTvBoxRepository().refreshSourceTreeAsync(source,
+                    new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
+                        @Override public void onSourceRefreshed(int configs, int sites) {
+                            runtime.contentChanged();
+                        }
+                        @Override public void onRefreshComplete(int configs, int sites) {
+                            // Per-source callbacks publish progress immediately.
+                        }
+                    });
             return json(Response.Status.CREATED, source);
         }
         if (path.startsWith("/api/sources/") && Method.DELETE.equals(session.getMethod())) {
             String id = path.substring("/api/sources/".length());
-            boolean removed = runtime.getSourceStore().remove(id);
-            runtime.getState().updateSources(runtime.getSourceStore().getSources().size(),
-                    runtime.getTvBoxRepository().getEnabledSites().size());
+            boolean removed = runtime.removeSource(id);
             return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
                     Collections.singletonMap("removed", removed));
         }
         if ("/api/sources/refresh".equals(path) && Method.POST.equals(session.getMethod())) {
             runtime.getTvBoxRepository().refreshAllAsync(new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
+                @Override public void onSourceRefreshed(int configs, int sites) {
+                    runtime.contentChanged();
+                }
                 @Override public void onRefreshComplete(int configs, int sites) {
-                    runtime.getState().updateSources(configs, sites);
+                    // Per-source callbacks publish progress immediately.
                 }
             });
             return json(Response.Status.ACCEPTED, Collections.singletonMap("refreshing", true));
@@ -168,6 +180,7 @@ public final class ControlServer extends NanoHTTPD {
                 throw new IllegalArgumentException("请输入搜索关键词");
             }
             SearchResponse response = runtime.getSearchEngine().search(query);
+            runtime.sourceHealthChanged();
             return json(Response.Status.OK, response);
         }
         if ("/api/detail".equals(path) && Method.POST.equals(session.getMethod())) {
@@ -241,6 +254,8 @@ public final class ControlServer extends NanoHTTPD {
         result.put("activeMedia", state.getActiveMedia());
         result.put("sourceCount", state.getSourceCount());
         result.put("siteCount", state.getEnabledSiteCount());
+        result.put("stateVersion", state.getStateVersion());
+        result.put("contentVersion", state.getContentVersion());
         result.put("storageMountCount", runtime.getStorageLibrary().mounts().size());
         result.put("libraryItemCount", runtime.getStorageLibrary().entries().size());
         result.put("storageScanning", runtime.getStorageLibrary().isScanning());
@@ -251,10 +266,23 @@ public final class ControlServer extends NanoHTTPD {
         return result;
     }
 
+    private Map<String, Object> diagnostics() {
+        AppState state = runtime.getState();
+        Map<String, Object> result = new HashMap<String, Object>();
+        result.put("javaCrash", CrashReporter.read(context));
+        result.put("serviceState", state.getServiceState().name().toLowerCase(Locale.ROOT));
+        result.put("serviceMessage", state.getStatusMessage());
+        result.put("deviceWarnings", runtime.getDeviceProfile().warnings);
+        result.put("airPlay", runtime.getAirPlayReceiver().snapshot());
+        result.put("player", runtime.getPlayerController().snapshot());
+        result.put("sources", runtime.getSourceStore().getSources());
+        result.put("homeErrors", runtime.getContentService().homeFailures());
+        return result;
+    }
+
     private Response serveStorageMedia(IHTTPSession session, String id) throws Exception {
         String remote = session.getRemoteIpAddress();
-        if (!("127.0.0.1".equals(remote) || "::1".equals(remote)
-                || "0:0:0:0:0:0:0:1".equals(remote))) {
+        if (!"127.0.0.1".equals(remote)) {
             throw new SecurityException("媒体流仅允许电视本机访问");
         }
         long offset = rangeOffset(session.getHeaders().get("range"));

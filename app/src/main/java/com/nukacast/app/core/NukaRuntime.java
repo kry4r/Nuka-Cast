@@ -15,6 +15,9 @@ import com.nukacast.app.tvbox.SourceStore;
 import com.nukacast.app.tvbox.TvBoxContentService;
 import com.nukacast.app.tvbox.TvBoxRepository;
 
+import java.util.List;
+import com.nukacast.app.tvbox.model.TvBoxConfig;
+
 public final class NukaRuntime {
     public static final int CONTROL_PORT = 9978;
 
@@ -56,7 +59,7 @@ public final class NukaRuntime {
                 playerController.stop();
             }
         });
-        state.updateSources(sourceStore.getSources().size(), tvBoxRepository.getEnabledSites().size());
+        contentChanged();
     }
 
     public synchronized void startServices() throws Exception {
@@ -100,6 +103,27 @@ public final class NukaRuntime {
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }
     public PlayerController getPlayerController() { return playerController; }
     public AirPlayReceiver getAirPlayReceiver() { return airPlayReceiver; }
+
+    public void contentChanged() {
+        liveService.clearCache();
+        contentService.retainHomeFailures(tvBoxRepository.getEnabledSites());
+        state.updateSources(sourceStore.getSources().size(),
+                tvBoxRepository.getEnabledSites().size());
+    }
+
+    public void sourceHealthChanged() {
+        state.updateSourceHealth(sourceStore.getSources().size(),
+                tvBoxRepository.getEnabledSites().size());
+    }
+
+    public boolean removeSource(String id) {
+        List<TvBoxConfig> removedConfigs = tvBoxRepository.configsForTree(id);
+        boolean removed = tvBoxRepository.remove(id);
+        if (!removed) return false;
+        for (TvBoxConfig config : removedConfigs) spiderManager.forgetForConfig(config);
+        contentChanged();
+        return true;
+    }
 
     public String getWebAddress() {
         return "http://" + NetworkAddress.findLanAddress(context) + ":" + CONTROL_PORT;

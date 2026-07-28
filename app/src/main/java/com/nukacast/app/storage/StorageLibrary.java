@@ -21,11 +21,15 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.StringReader;
 import java.net.URI;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -66,7 +70,7 @@ public final class StorageLibrary {
             + "<d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>";
 
     private final StorageStore store;
-    private final CIFSContext smbContext = createSmbContext();
+    private volatile CIFSContext smbContext;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<StorageMount> mounts;
     private final List<MediaEntry> entries;
@@ -219,7 +223,7 @@ public final class StorageLibrary {
         MediaEntry entry = requireEntry(id);
         StorageMount mount = requireMount(entry.mountId);
         if (!StorageMount.TYPE_SMB.equals(mount.type)) throw new IllegalArgumentException("不是 SMB 媒体");
-        SmbFile file = new SmbFile(entry.uri, auth(mount));
+        SmbFile file = new SmbFile(ipv4SmbUri(entry.uri), auth(mount));
         InputStream input = file.getInputStream();
         long remaining = Math.max(0, file.length() - Math.max(0, offset));
         long skipped = 0;
@@ -293,7 +297,7 @@ public final class StorageLibrary {
     private List<MediaEntry> scanSmb(StorageMount mount) throws Exception {
         List<MediaEntry> result = new ArrayList<MediaEntry>();
         ArrayDeque<SmbFile> pending = new ArrayDeque<SmbFile>();
-        pending.add(new SmbFile(mount.uri, auth(mount)));
+        pending.add(new SmbFile(ipv4SmbUri(mount.uri), auth(mount)));
         int directories = 0;
         while (!pending.isEmpty() && result.size() < MAX_FILES && directories++ < MAX_DIRECTORIES) {
             SmbFile directory = pending.removeFirst();
@@ -425,7 +429,8 @@ public final class StorageLibrary {
     }
 
     private CIFSContext auth(StorageMount mount) {
-        if (mount.username.isEmpty()) return smbContext;
+        CIFSContext context = smbContext();
+        if (mount.username.isEmpty()) return context;
         String domain = "";
         String username = mount.username;
         int separator = username.indexOf('\\');
@@ -433,8 +438,17 @@ public final class StorageLibrary {
             domain = username.substring(0, separator);
             username = username.substring(separator + 1);
         }
-        return smbContext.withCredentials(
+        return context.withCredentials(
                 new NtlmPasswordAuthenticator(domain, username, mount.password));
+    }
+
+    private CIFSContext smbContext() {
+        CIFSContext current = smbContext;
+        if (current != null) return current;
+        synchronized (this) {
+            if (smbContext == null) smbContext = createSmbContext();
+            return smbContext;
+        }
     }
 
     private static CIFSContext createSmbContext() {
@@ -512,6 +526,28 @@ public final class StorageLibrary {
             throw new IllegalArgumentException("WebDAV 地址必须使用 HTTP 或 HTTPS");
         }
         return ensureSlash(value);
+    }
+
+    private static String ipv4SmbUri(String uri) throws Exception {
+        URI parsed = URI.create(uri);
+        String host = parsed.getHost();
+        if (host == null || host.isEmpty()) throw new UnknownHostException("SMB 地址缺少主机名");
+        return ipv4SmbUri(uri, Arrays.asList(InetAddress.getAllByName(host)));
+    }
+
+    static String ipv4SmbUri(String uri, List<InetAddress> addresses) throws Exception {
+        Inet4Address selected = null;
+        for (InetAddress address : addresses) {
+            if (address instanceof Inet4Address) {
+                selected = (Inet4Address) address;
+                break;
+            }
+        }
+        if (selected == null) throw new UnknownHostException("SMB 主机没有 IPv4 地址");
+        URI parsed = URI.create(uri);
+        return new URI(parsed.getScheme(), parsed.getUserInfo(), selected.getHostAddress(),
+                parsed.getPort(), parsed.getPath(), parsed.getQuery(), parsed.getFragment())
+                .toASCIIString();
     }
 
     private static String required(String value, String field) {

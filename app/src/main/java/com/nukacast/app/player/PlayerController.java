@@ -10,14 +10,17 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.nukacast.app.core.AppState;
+import com.nukacast.app.net.HttpStack;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import okhttp3.OkHttpClient;
 
 public final class PlayerController {
     public interface ProgressListener {
@@ -169,9 +172,8 @@ public final class PlayerController {
             state = "loading";
             appState.updateActiveMedia(title);
 
-            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+            OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(httpClient())
                     .setUserAgent(header(headers, "User-Agent", "NukaCast/0.1 ExoPlayer"))
-                    .setAllowCrossProtocolRedirects(true)
                     .setDefaultRequestProperties(new LinkedHashMap<String, String>(headers));
             DefaultDataSource.Factory dataSource = new DefaultDataSource.Factory(context, http);
             ExoPlayer created = new ExoPlayer.Builder(context)
@@ -262,5 +264,9 @@ public final class PlayerController {
             if (name.equalsIgnoreCase(entry.getKey())) return entry.getValue();
         }
         return fallback;
+    }
+
+    static OkHttpClient httpClient() {
+        return HttpStack.client();
     }
 }

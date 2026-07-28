@@ -2,6 +2,8 @@ package com.nukacast.app.airplay;
 
 import org.junit.Test;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -31,6 +33,28 @@ public final class H264VideoRendererTest {
                 new byte[] {0, 0, 0, 1, 0x41, 1, 0, 0, 1, 0x65, 2}, 5));
         assertFalse(H264VideoRenderer.containsNalType(
                 new byte[] {0, 0, 0, 1, 0x41, 1, 2, 3}, 5));
+    }
+
+    @Test
+    public void retainsLatestAnnexBIdrForDecoderRecovery() {
+        byte[] first = new byte[] {0, 0, 0, 1, 0x65, 1};
+        byte[] delta = new byte[] {0, 0, 0, 1, 0x41, 2};
+        byte[] latest = new byte[] {0, 0, 1, 0x65, 3};
+
+        byte[] retained = H264VideoRenderer.retainLatestKeyFrame(null, first);
+        assertArrayEquals(first, H264VideoRenderer.retainLatestKeyFrame(retained, delta));
+        assertArrayEquals(latest, H264VideoRenderer.retainLatestKeyFrame(retained, latest));
+    }
+
+    @Test
+    public void resetsDecoderCountersForANewAirPlaySession() {
+        AtomicLong received = new AtomicLong(12);
+        AtomicLong outputs = new AtomicLong(7);
+
+        H264VideoRenderer.resetSessionCounters(received, outputs);
+
+        assertEquals(0L, received.get());
+        assertEquals(0L, outputs.get());
     }
 
     @Test

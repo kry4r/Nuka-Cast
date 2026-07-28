@@ -3,6 +3,7 @@ package com.nukacast.app.tvbox;
 import android.content.Context;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonPrimitive;
 import com.nukacast.app.BuildConfig;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
@@ -20,8 +21,10 @@ import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +35,7 @@ import okhttp3.Response;
 public final class TvBoxRepository {
     private static final int MAX_CONFIG_BYTES = 2 * 1024 * 1024;
     public interface RefreshListener {
+        void onSourceRefreshed(int configs, int enabledSites);
         void onRefreshComplete(int configs, int enabledSites);
     }
 
@@ -72,6 +76,28 @@ public final class TvBoxRepository {
         return result;
     }
 
+    public List<ConfigSource> getRankedLeafSources() {
+        return WarehouseRanking.rankLeaves(sourceStore.getSources());
+    }
+
+    public void recordSearchOutcome(String sourceId, long elapsedMs,
+                                    int successfulSites, int attemptedSites) {
+        for (ConfigSource source : sourceStore.getSources()) {
+            if (!source.id.equals(sourceId)) continue;
+            if (successfulSites > 0) {
+                long measured = Math.max(1L, elapsedMs);
+                source.latencyMs = source.latencyMs <= 0
+                        ? measured : (source.latencyMs * 3L + measured) / 4L;
+                source.searchError = "";
+            } else {
+                source.searchError = attemptedSites == 0
+                        ? "仓库没有可搜索站点" : "最近搜索全部失败";
+            }
+            sourceStore.update(source);
+            return;
+        }
+    }
+
     public List<TvBoxConfig.LiveSource> getLiveSources() {
         List<TvBoxConfig.LiveSource> result = new ArrayList<TvBoxConfig.LiveSource>();
         for (ConfigSource source : sourceStore.getSources()) {
@@ -99,16 +125,17 @@ public final class TvBoxRepository {
         refreshExecutor.execute(new Runnable() {
             @Override public void run() {
                 for (ConfigSource source : sourceStore.getSources()) {
-                    if (!source.enabled) {
-                        continue;
-                    }
-                    try {
-                        refresh(source);
-                    } catch (Exception error) {
-                        source.error = message(error);
-                        source.updatedAt = System.currentTimeMillis();
-                        sourceStore.update(source);
-                    }
+                    if (!source.enabled || source.isChild()) continue;
+                    refreshSafely(source);
+                    notifySourceRefreshed(listener, sourceStore.getSources().size(),
+                            getEnabledSites().size());
+                }
+                // Parent refreshes may add or remove children, so take a fresh snapshot.
+                for (ConfigSource source : sourceStore.getSources()) {
+                    if (!source.enabled || !source.isChild()) continue;
+                    refreshSafely(source);
+                    notifySourceRefreshed(listener, sourceStore.getSources().size(),
+                            getEnabledSites().size());
                 }
                 if (listener != null) {
                     listener.onRefreshComplete(sourceStore.getSources().size(), getEnabledSites().size());
@@ -117,34 +144,135 @@ public final class TvBoxRepository {
         });
     }
 
-    public TvBoxConfig refresh(ConfigSource source) throws IOException {
-        Request request = new Request.Builder()
-                .url(source.url)
-                .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
-                .header("Accept", "application/json,text/plain,*/*")
-                .build();
-        byte[] bytes;
-        try (Response response = HttpStack.client().newCall(request).execute()) {
-            if (!response.isSuccessful() || response.body() == null) {
-                throw new IOException("HTTP " + response.code());
+    public void refreshChildrenAsync(final String parentId, final RefreshListener listener) {
+        refreshExecutor.execute(new Runnable() {
+            @Override public void run() {
+                for (ConfigSource source : sourceStore.getSources()) {
+                    if (!source.enabled || !parentId.equals(source.parentId)) continue;
+                    refreshSafely(source);
+                    notifySourceRefreshed(listener, sourceStore.getSources().size(),
+                            getEnabledSites().size());
+                }
+                if (listener != null) {
+                    listener.onRefreshComplete(sourceStore.getSources().size(), getEnabledSites().size());
+                }
             }
-            bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);
-        }
-        String content = new String(bytes, UTF_8);
-        TvBoxConfig config;
+        });
+    }
+
+    public void refreshSourceTreeAsync(final ConfigSource source, final RefreshListener listener) {
+        refreshExecutor.execute(new Runnable() {
+            @Override public void run() {
+                refreshSafely(source);
+                notifySourceRefreshed(listener, sourceStore.getSources().size(),
+                        getEnabledSites().size());
+                if (source.isWarehouse()) {
+                    for (ConfigSource child : sourceStore.getSources()) {
+                        if (!child.enabled || !source.id.equals(child.parentId)) continue;
+                        refreshSafely(child);
+                        notifySourceRefreshed(listener, sourceStore.getSources().size(),
+                                getEnabledSites().size());
+                    }
+                }
+                if (listener != null) {
+                    listener.onRefreshComplete(sourceStore.getSources().size(),
+                            getEnabledSites().size());
+                }
+            }
+        });
+    }
+
+    public TvBoxConfig refresh(ConfigSource source) throws IOException {
+        long startedAt = System.currentTimeMillis();
         try {
-            config = decoder.decode(content);
-        } catch (RuntimeException error) {
-            throw new IOException(error.getMessage(), error);
+            Request request = new Request.Builder()
+                    .url(source.url)
+                    .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
+                    .header("Accept", "application/json,text/plain,*/*")
+                    .build();
+            byte[] bytes;
+            try (Response response = HttpStack.client().newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    throw new IOException("HTTP " + response.code());
+                }
+                bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);
+            }
+            String content = new String(bytes, UTF_8);
+            ConfigDecoder.Document document;
+            try {
+                document = decoder.decodeDocument(content);
+            } catch (RuntimeException error) {
+                throw new IOException(error.getMessage(), error);
+            }
+            source.contentHash = Digests.sha256(bytes);
+            source.updatedAt = System.currentTimeMillis();
+            source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
+            source.error = "";
+            if (document.isWarehouse()) {
+                source.kind = ConfigSource.KIND_WAREHOUSE;
+                source.siteCount = 0;
+                source.searchableSiteCount = 0;
+                source.liveCount = 0;
+                configs.remove(source.id);
+                sourceStore.update(source);
+                sourceStore.synchronizeChildren(source, document.warehouses);
+                deleteCache(source.id);
+                pruneConfigsAndCaches();
+                return null;
+            }
+
+            TvBoxConfig config = document.config;
+            boolean wasWarehouse = source.isWarehouse();
+            source.kind = ConfigSource.KIND_SINGLE;
+            enrich(source, config);
+            configs.put(source.id, config);
+            source.siteCount = config.sites.size();
+            source.searchableSiteCount = searchableSiteCount(config);
+            source.liveCount = config.lives.size();
+            sourceStore.update(source);
+            if (wasWarehouse) {
+                sourceStore.synchronizeChildren(source,
+                        Collections.<ConfigDecoder.WarehouseEntry>emptyList());
+                pruneConfigsAndCaches();
+            }
+            saveCache(source.id, content);
+            return config;
+        } catch (Exception error) {
+            source.error = message(error);
+            source.updatedAt = System.currentTimeMillis();
+            source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
+            sourceStore.update(source);
+            if (error instanceof IOException) throw (IOException) error;
+            throw new IOException(source.error, error);
         }
-        enrich(source, config);
-        configs.put(source.id, config);
-        source.contentHash = Digests.sha256(bytes);
-        source.updatedAt = System.currentTimeMillis();
-        source.error = "";
-        sourceStore.update(source);
-        saveCache(source.id, content);
-        return config;
+    }
+
+    public List<TvBoxConfig> configsForTree(String id) {
+        Set<String> ids = SourceStore.treeIds(sourceStore.getSources(), id);
+        List<TvBoxConfig> result = new ArrayList<TvBoxConfig>();
+        for (String sourceId : ids) {
+            TvBoxConfig config = configs.get(sourceId);
+            if (config != null) result.add(config);
+        }
+        return result;
+    }
+
+    public boolean remove(String id) {
+        boolean removed = sourceStore.remove(id);
+        if (removed) pruneConfigsAndCaches();
+        return removed;
+    }
+
+    static void notifySourceRefreshed(RefreshListener listener, int configs, int sites) {
+        if (listener != null) listener.onSourceRefreshed(configs, sites);
+    }
+
+    private void refreshSafely(ConfigSource source) {
+        try {
+            refresh(source);
+        } catch (Exception ignored) {
+            // refresh() persists the source-specific failure for diagnostics.
+        }
     }
 
     private void enrich(ConfigSource source, TvBoxConfig config) {
@@ -157,8 +285,9 @@ public final class TvBoxRepository {
             site.configBaseUrl = source.url;
             site.globalSpider = config.spider;
             site.jar = Urls.resolve(source.url, site.jar);
-            if (site.ext != null && (site.ext.startsWith("./") || site.ext.startsWith("../"))) {
-                site.ext = Urls.resolve(source.url, site.ext);
+            String extension = site.extension();
+            if (extension.startsWith("./") || extension.startsWith("../")) {
+                site.ext = new JsonPrimitive(Urls.resolve(source.url, extension));
             }
         }
         for (TvBoxConfig.LiveSource live : config.lives) {
@@ -169,8 +298,39 @@ public final class TvBoxRepository {
         }
     }
 
+    private static int searchableSiteCount(TvBoxConfig config) {
+        int count = 0;
+        for (TvBoxConfig.Site site : config.sites) {
+            if (site.canSearch() && (site.type == 0 || site.type == 1 || site.type == 3)) count++;
+        }
+        return count;
+    }
+
+    private void pruneConfigsAndCaches() {
+        Set<String> retained = new HashSet<String>();
+        for (ConfigSource source : sourceStore.getSources()) retained.add(source.id);
+        for (String id : new ArrayList<String>(configs.keySet())) {
+            if (!retained.contains(id)) configs.remove(id);
+        }
+        File directory = new File(context.getFilesDir(), "tvbox-configs");
+        File[] files = directory.listFiles();
+        if (files == null) return;
+        for (File file : files) {
+            String name = file.getName();
+            int suffix = name.lastIndexOf('.');
+            String id = suffix > 0 ? name.substring(0, suffix) : name;
+            if (!retained.contains(id)) file.delete();
+        }
+    }
+
+    private void deleteCache(String sourceId) {
+        File file = cacheFile(sourceId);
+        if (file.isFile()) file.delete();
+    }
+
     private void restoreCache() {
         for (ConfigSource source : sourceStore.getSources()) {
+            if (source.isWarehouse()) continue;
             File cache = cacheFile(source.id);
             if (!cache.isFile()) {
                 continue;
