@@ -16,13 +16,20 @@ struct Server {
     raop_t *raop = nullptr;
     jobject bridge = nullptr;
     std::atomic<bool> session_started{false};
+    std::atomic<int> mirror_sessions{0};
 };
 
 class EnvScope {
 public:
     EnvScope() : env_(nullptr), attached_(false) {
         if (g_vm->GetEnv(reinterpret_cast<void **>(&env_), JNI_VERSION_1_6) != JNI_OK) {
-            if (g_vm->AttachCurrentThread(&env_, nullptr) == JNI_OK) attached_ = true;
+#if defined(__ANDROID__)
+            if (g_vm->AttachCurrentThread(&env_, nullptr) == JNI_OK) {
+#else
+            if (g_vm->AttachCurrentThread(reinterpret_cast<void **>(&env_), nullptr) == JNI_OK) {
+#endif
+                attached_ = true;
+            }
         }
     }
     ~EnvScope() { if (attached_) g_vm->DetachCurrentThread(); }
@@ -82,6 +89,18 @@ void video_process(void *cls, h264_decode_struct *data) {
 
 void audio_set_volume(void *, void *, float) {}
 
+void session_changed(void *cls, int active) {
+    Server *server = static_cast<Server *>(cls);
+    if (active) {
+        if (server->mirror_sessions.fetch_add(1) == 0) notify_session(server, true);
+        return;
+    }
+    int current = server->mirror_sessions.load();
+    while (current > 0
+            && !server->mirror_sessions.compare_exchange_weak(current, current - 1)) {}
+    if (current == 1) notify_session(server, false);
+}
+
 void log_callback(void *, int level, const char *message) {
     int priority = level <= LOGGER_ERR ? ANDROID_LOG_ERROR
             : level == LOGGER_WARNING ? ANDROID_LOG_WARN
@@ -105,7 +124,8 @@ Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativeStart(JNIEnv *env, jobje
     callbacks.audio_process = audio_process;
     callbacks.audio_set_volume = audio_set_volume;
     callbacks.video_process = video_process;
-    server->raop = raop_init(2, &callbacks);
+    callbacks.session_changed = session_changed;
+    server->raop = raop_init(8, &callbacks);
     if (!server->raop) {
         env->DeleteGlobalRef(server->bridge);
         delete server;

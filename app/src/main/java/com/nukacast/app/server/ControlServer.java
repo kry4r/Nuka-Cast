@@ -123,6 +123,8 @@ public final class ControlServer extends NanoHTTPD {
         if (path.startsWith("/api/sources/") && Method.DELETE.equals(session.getMethod())) {
             String id = path.substring("/api/sources/".length());
             boolean removed = runtime.getSourceStore().remove(id);
+            runtime.getState().updateSources(runtime.getSourceStore().getSources().size(),
+                    runtime.getTvBoxRepository().getEnabledSites().size());
             return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
                     Collections.singletonMap("removed", removed));
         }

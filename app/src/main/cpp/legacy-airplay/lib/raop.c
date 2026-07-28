@@ -190,6 +190,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 		}
 	} else if (!strcmp(method, "TEARDOWN")) {
 		http_response_add_header(*response, "Connection", "close");
+		http_response_set_disconnect(*response, 1);
 		if (conn->raop_rtp) {
 			/* Destroy our RTP session */
 			raop_rtp_destroy(conn->raop_rtp);
@@ -380,4 +381,3 @@ raop_stop(raop_t *raop)
 	assert(raop);
 	httpd_stop(raop->httpd);
 }
-

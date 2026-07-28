@@ -239,6 +239,7 @@
                             <TextView style="@style/PanelTitle" android:text="@string/source_health" />
                             <TextView android:id="@+id/sourceSummary" style="@style/PanelValue" android:text="@string/source_empty" />
                             <TextView style="@style/PanelBody" android:text="@string/source_web_note" />
+                            <Button android:id="@+id/restoreDefaultSourceButton" style="@style/ActionButton" android:text="@string/restore_default_source" />
                             <Button android:id="@+id/refreshSourcesButton" style="@style/ActionButton" android:text="@string/refresh_sources" />
                         </LinearLayout>
                         <LinearLayout style="@style/SettingsBand">

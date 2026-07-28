@@ -34,6 +34,7 @@ import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.library.LibraryItem;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.service.NukaCastService;
+import com.nukacast.app.tvbox.model.ConfigSource;
 import com.nukacast.app.tvbox.model.MediaDetail;
 import com.nukacast.app.tvbox.model.PlaybackInfo;
 import com.nukacast.app.tvbox.model.SearchItem;
@@ -87,6 +88,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private ImageView featuredPoster;
     private SurfaceView videoSurface;
     private Button refreshSourcesButton;
+    private Button restoreDefaultSourceButton;
     private Button scanStorageButton;
     private Button themeToggleButton;
     private String currentPage = PAGE_HOME;
@@ -163,7 +165,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP) {
-            runtime.getPlayerController().stop();
+            stopActivePlayback();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_SEARCH) {
@@ -171,12 +173,33 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            runtime.getPlayerController().stop();
+            stopActivePlayback();
             showPage(PAGE_SETTINGS);
             findViewById(R.id.navSettings).requestFocus();
             return true;
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onBackPressed() {
+        AirPlayReceiver.Snapshot airplay = runtime.getAirPlayReceiver().snapshot();
+        if (airplay.sessionActive || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
+            runtime.getAirPlayReceiver().disconnectSession();
+            Toast.makeText(this, "已退出 AirPlay 投屏", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (runtime.getState().getActiveMedia() != null
+                && !runtime.getState().getActiveMedia().isEmpty()) {
+            runtime.getPlayerController().stop();
+            return;
+        }
+        if (!PAGE_HOME.equals(currentPage)) {
+            showPage(PAGE_HOME);
+            findViewById(R.id.navHome).requestFocus();
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override
@@ -213,6 +236,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
         storageSummary = (TextView) findViewById(R.id.storageSummary);
         refreshSourcesButton = (Button) findViewById(R.id.refreshSourcesButton);
+        restoreDefaultSourceButton = (Button) findViewById(R.id.restoreDefaultSourceButton);
         scanStorageButton = (Button) findViewById(R.id.scanStorageButton);
         themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
         videoSurface = (SurfaceView) findViewById(R.id.videoSurface);
@@ -243,6 +267,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
+        });
+        restoreDefaultSourceButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { restoreDefaultSource(); }
         });
         scanStorageButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { scanStorage(); }
@@ -836,6 +863,46 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 });
             }
         });
+    }
+
+    private void restoreDefaultSource() {
+        restoreDefaultSourceButton.setEnabled(false);
+        restoreDefaultSourceButton.setText("正在恢复…");
+        io.execute(new Runnable() {
+            @Override public void run() {
+                final ConfigSource source = runtime.getSourceStore().restoreDefault();
+                String failure = "";
+                try {
+                    runtime.getTvBoxRepository().refresh(source);
+                } catch (Exception error) {
+                    failure = error.getMessage() == null
+                            ? error.getClass().getSimpleName() : error.getMessage();
+                }
+                final String message = failure;
+                runtime.getState().updateSources(runtime.getSourceStore().getSources().size(),
+                        runtime.getTvBoxRepository().getEnabledSites().size());
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        restoreDefaultSourceButton.setEnabled(true);
+                        restoreDefaultSourceButton.setText("恢复内置源");
+                        Toast.makeText(MainActivity.this, message.isEmpty()
+                                        ? "已恢复并刷新内置源"
+                                        : "已恢复内置源，刷新失败：" + message,
+                                Toast.LENGTH_LONG).show();
+                        if (message.isEmpty()) loadHome(true);
+                    }
+                });
+            }
+        });
+    }
+
+    private void stopActivePlayback() {
+        if (runtime.getAirPlayReceiver().snapshot().sessionActive
+                || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
+            runtime.getAirPlayReceiver().disconnectSession();
+        } else {
+            runtime.getPlayerController().stop();
+        }
     }
 
     private void scanStorage() {
