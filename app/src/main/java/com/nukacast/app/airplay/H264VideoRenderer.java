@@ -20,6 +20,9 @@ final class H264VideoRenderer {
     private volatile byte[] codecConfig;
     private volatile boolean decoderResetRequested;
     private volatile Frame pendingKeyFrame;
+    private volatile String error = "";
+    private volatile int videoWidth;
+    private volatile int videoHeight;
     private MediaCodec decoder;
     private long lastPtsUs;
     private boolean waitingForKeyFrame = true;
@@ -82,6 +85,9 @@ final class H264VideoRenderer {
 
     long received() { return received.get(); }
     long dropped() { return dropped.get(); }
+    String error() { return error; }
+    int width() { return videoWidth; }
+    int height() { return videoHeight; }
 
     private void decodeLoop() {
         while (running) {
@@ -115,6 +121,8 @@ final class H264VideoRenderer {
                 if (!running) return;
             } catch (RuntimeException error) {
                 dropped.incrementAndGet();
+                this.error = error.getMessage() == null
+                        ? error.getClass().getSimpleName() : error.getMessage();
                 releaseDecoder();
             }
         }
@@ -125,19 +133,27 @@ final class H264VideoRenderer {
         byte[] config = codecConfig;
         if (target == null || !target.isValid() || config == null) return false;
         try {
-            MediaFormat format = MediaFormat.createVideoFormat("video/avc", 1920, 1080);
-            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 2 * 1024 * 1024);
             byte[] sps = parameterSet(config, 7);
             byte[] pps = parameterSet(config, 8);
-            if (sps != null) format.setByteBuffer("csd-0", ByteBuffer.wrap(sps));
-            else format.setByteBuffer("csd-0", ByteBuffer.wrap(config));
-            if (pps != null) format.setByteBuffer("csd-1", ByteBuffer.wrap(pps));
+            if (sps == null || pps == null) throw new IllegalArgumentException("AirPlay SPS/PPS missing");
+            H264SpsParser.Dimensions dimensions = H264SpsParser.parse(sps);
+            MediaFormat format = MediaFormat.createVideoFormat(
+                    "video/avc", dimensions.width, dimensions.height);
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE,
+                    Math.max(2 * 1024 * 1024, dimensions.width * dimensions.height));
+            format.setByteBuffer("csd-0", ByteBuffer.wrap(sps));
+            format.setByteBuffer("csd-1", ByteBuffer.wrap(pps));
             decoder = MediaCodec.createDecoderByType("video/avc");
             decoder.configure(format, target, null, 0);
             decoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
             decoder.start();
+            videoWidth = dimensions.width;
+            videoHeight = dimensions.height;
+            error = "";
             return true;
         } catch (Exception error) {
+            this.error = error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage();
             releaseDecoder();
             return false;
         }

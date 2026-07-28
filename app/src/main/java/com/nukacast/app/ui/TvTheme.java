@@ -30,14 +30,14 @@ public final class TvTheme {
         return value;
     }
 
-    public static int surface(Context context) { return isLight(context) ? Color.rgb(241, 244, 246) : Color.rgb(17, 19, 21); }
-    public static int raised(Context context) { return isLight(context) ? Color.WHITE : Color.rgb(25, 28, 31); }
-    public static int soft(Context context) { return isLight(context) ? Color.rgb(226, 231, 234) : Color.rgb(34, 38, 42); }
-    public static int line(Context context) { return isLight(context) ? Color.rgb(194, 202, 208) : Color.rgb(52, 58, 64); }
-    public static int primary(Context context) { return isLight(context) ? Color.rgb(18, 21, 23) : Color.rgb(245, 247, 248); }
-    public static int secondary(Context context) { return isLight(context) ? Color.rgb(83, 92, 99) : Color.rgb(168, 176, 183); }
-    public static int accent(Context context) { return isLight(context) ? Color.rgb(24, 142, 88) : Color.rgb(99, 214, 154); }
-    public static int accentSoft(Context context) { return isLight(context) ? Color.rgb(211, 241, 225) : Color.rgb(20, 61, 43); }
+    public static int surface(Context context) { return isLight(context) ? Color.WHITE : Color.rgb(9, 9, 11); }
+    public static int raised(Context context) { return isLight(context) ? Color.WHITE : Color.rgb(24, 24, 27); }
+    public static int soft(Context context) { return isLight(context) ? Color.rgb(244, 244, 245) : Color.rgb(39, 39, 42); }
+    public static int line(Context context) { return isLight(context) ? Color.rgb(228, 228, 231) : Color.rgb(63, 63, 70); }
+    public static int primary(Context context) { return isLight(context) ? Color.rgb(9, 9, 11) : Color.rgb(250, 250, 250); }
+    public static int secondary(Context context) { return isLight(context) ? Color.rgb(113, 113, 122) : Color.rgb(161, 161, 170); }
+    public static int accent(Context context) { return isLight(context) ? Color.rgb(24, 24, 27) : Color.rgb(250, 250, 250); }
+    public static int accentSoft(Context context) { return isLight(context) ? Color.rgb(244, 244, 245) : Color.rgb(39, 39, 42); }
 
     public static Drawable panel(Context context) {
         return shape(context, raised(context), line(context), 1);
@@ -79,6 +79,8 @@ public final class TvTheme {
     private static void applyTree(Context context, View view) {
         Object tag = view.getTag();
         if ("panel".equals(tag)) view.setBackgroundDrawable(panel(context));
+        if ("castHero".equals(tag)) view.setBackgroundDrawable(
+                shape(context, accentSoft(context), accent(context), 1));
         if (view instanceof Button) {
             Button button = (Button) view;
             int id = button.getId();

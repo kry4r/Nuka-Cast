@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NukaCast</string>
-    <string name="product_subtitle">Sharp TV</string>
     <string name="nav_home">首页</string>
     <string name="nav_movies">影视</string>
     <string name="nav_cast">投屏</string>
@@ -16,11 +15,12 @@
     <string name="filter_variety">综艺</string>
     <string name="filter_anime">动漫</string>
     <string name="cast_receiver">AirPlay 接收器</string>
-    <string name="cast_waiting">无 PIN · 1080p30 · 等待设备连接</string>
-    <string name="web_control">网页控制</string>
+    <string name="cast_waiting">等待连接</string>
+    <string name="web_remote_title">局域网遥控器</string>
     <string name="web_placeholder">http://0.0.0.0:9978</string>
-    <string name="pairing_placeholder">配对码 000000</string>
-    <string name="web_pairing_note">手机或电脑连接同一 Wi-Fi 后打开上方地址。</string>
+    <string name="pairing_placeholder">000 000</string>
+    <string name="pairing_code_title">浏览器配对码</string>
+    <string name="cast_disconnect">退出投屏</string>
     <string name="device_profile">设备能力</string>
     <string name="device_checking">检测中</string>
     <string name="source_health">片源状态</string>
@@ -31,4 +31,15 @@
     <string name="privacy_title">网页配对</string>
     <string name="privacy_note">清除后，已配对的浏览器需要重新输入六位码。</string>
     <string name="clear_pairing">清除已配对浏览器</string>
+    <string name="featured_preparing">片库准备中</string>
+    <string name="featured_recommendation">精选推荐</string>
+    <string name="storage_title">存储与片库</string>
+    <string name="storage_empty">尚未挂载存储</string>
+    <string name="storage_web_note">挂载由局域网网页端管理</string>
+    <string name="scan_library">扫描片库</string>
+    <string name="scanning_library">正在扫描…</string>
+    <string name="storage_summary">%1$d 个挂载 · %2$d 个媒体文件</string>
+    <string name="appearance_title">外观</string>
+    <string name="appearance_note">深色与浅色主题</string>
+    <string name="theme_toggle">切换主题</string>
 </resources>

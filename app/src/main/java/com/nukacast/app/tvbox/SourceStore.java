@@ -97,14 +97,14 @@ public final class SourceStore {
         List<ConfigSource> sources = getSources();
         if (migrated) return;
         if (shouldRestoreDefault(migrated, sources)) restoreDefault();
-        preferences.edit().putBoolean(KEY_DEFAULTS_MIGRATED, true).commit();
+        preferences.edit().putBoolean(KEY_DEFAULTS_MIGRATED, true).apply();
     }
 
     static boolean shouldRestoreDefault(boolean migrated, List<ConfigSource> sources) {
-        return !migrated && (sources == null || sources.isEmpty());
+        return sources == null || sources.isEmpty();
     }
 
     private void save(List<ConfigSource> sources) {
-        preferences.edit().putString(KEY_SOURCES, gson.toJson(sources)).commit();
+        preferences.edit().putString(KEY_SOURCES, gson.toJson(sources)).apply();
     }
 }

@@ -1,4 +1,8 @@
 const TOKEN_KEY = "nukacast-control-token"
+export const AUTH_EXPIRED_EVENT = "nukacast-auth-expired"
+
+const tokenStore = sessionStorage
+localStorage.removeItem(TOKEN_KEY)
 
 export type Status = {
   name: string
@@ -23,6 +27,8 @@ export type Status = {
     videoDrops: number
     audioPackets: number
     audioDrops: number
+    videoWidth: number
+    videoHeight: number
   }
 }
 
@@ -177,25 +183,29 @@ async function request<T>(path: string, init?: RequestInit, authenticated = true
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set("Content-Type", "application/json")
   if (authenticated) {
-    const token = localStorage.getItem(TOKEN_KEY)
+    const token = tokenStore.getItem(TOKEN_KEY)
     if (token) headers.set("Authorization", `Bearer ${token}`)
   }
   const response = await fetch(path, { ...init, headers })
   const body = await response.json().catch(() => ({}))
+  if (response.status === 401 && authenticated) {
+    tokenStore.removeItem(TOKEN_KEY)
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+  }
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
   return body as T
 }
 
 export const api = {
-  hasToken: () => Boolean(localStorage.getItem(TOKEN_KEY)),
-  forget: () => localStorage.removeItem(TOKEN_KEY),
+  hasToken: () => Boolean(tokenStore.getItem(TOKEN_KEY)),
+  forget: () => tokenStore.removeItem(TOKEN_KEY),
   status: () => request<Status>("/api/status", undefined, false),
   pair: async (code: string) => {
     const result = await request<{ token: string }>("/api/pair", {
       method: "POST",
       body: JSON.stringify({ code }),
     }, false)
-    localStorage.setItem(TOKEN_KEY, result.token)
+    tokenStore.setItem(TOKEN_KEY, result.token)
     return result
   },
   device: () => request<Device>("/api/device"),
@@ -236,5 +246,8 @@ export const api = {
   control: (payload: Record<string, unknown>) => request<Player>("/api/player", {
     method: "POST",
     body: JSON.stringify(payload),
+  }),
+  disconnectAirPlay: () => request<{ disconnected: boolean }>("/api/airplay/disconnect", {
+    method: "POST",
   }),
 }

@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Urls;
 import com.quickjs.ES6Module;
@@ -25,6 +26,9 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.nio.charset.Charset;
 
 import okhttp3.MediaType;
 import okhttp3.Request;
@@ -32,6 +36,10 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 final class QuickJsSpiderSession implements SpiderSession {
+    private static final long EXECUTION_TIMEOUT_SECONDS = 10L;
+    private static final int MAX_SCRIPT_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_HTTP_BYTES = 4 * 1024 * 1024;
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
     private static final String PRELUDE =
             "function __nukaRequest(url, options) { return __nukaHttp(url, options || {}); }\n" +
             "globalThis.req = __nukaRequest;\n" +
@@ -49,12 +57,12 @@ final class QuickJsSpiderSession implements SpiderSession {
     QuickJsSpiderSession(TvBoxConfig.Site site) throws Exception {
         this.scriptUrl = findScriptUrl(site);
         this.extension = site.ext == null ? "" : site.ext;
-        submit(new Callable<Void>() {
+        await(submit(new Callable<Void>() {
             @Override public Void call() throws Exception {
                 initialize();
                 return null;
             }
-        }).get();
+        }));
     }
 
     static boolean supports(TvBoxConfig.Site site) {
@@ -71,13 +79,13 @@ final class QuickJsSpiderSession implements SpiderSession {
 
     @Override public String category(final String id, final String page, final boolean filter,
                                      final HashMap<String, String> extend) throws Exception {
-        return submit(new Callable<String>() {
+        return await(submit(new Callable<String>() {
             @Override public String call() {
                 JSObject options = new JSObject(module, new JSONObject(extend == null
                         ? Collections.<String, String>emptyMap() : extend));
                 return stringify(spider.executeFunction2("category", id, page, filter, options));
             }
-        }).get();
+        }));
     }
 
     @Override public String detail(List<String> ids) throws Exception {
@@ -91,7 +99,7 @@ final class QuickJsSpiderSession implements SpiderSession {
 
     @Override public String play(final String flag, final String id, final List<String> vipFlags)
             throws Exception {
-        return submit(new Callable<String>() {
+        return await(submit(new Callable<String>() {
             @Override public String call() {
                 JSArray flags = new JSArray(module);
                 if (vipFlags != null) {
@@ -99,12 +107,12 @@ final class QuickJsSpiderSession implements SpiderSession {
                 }
                 return stringify(spider.executeFunction2("play", flag, id, flags));
             }
-        }).get();
+        }));
     }
 
     @Override public void destroy() {
         try {
-            submit(new Callable<Void>() {
+            await(submit(new Callable<Void>() {
                 @Override public Void call() {
                     try {
                         if (spider != null && spider.contains("destroy")) {
@@ -118,7 +126,7 @@ final class QuickJsSpiderSession implements SpiderSession {
                     runtime = null;
                     return null;
                 }
-            }).get();
+            }));
         } catch (Exception ignored) {
         } finally {
             executor.shutdownNow();
@@ -151,18 +159,28 @@ final class QuickJsSpiderSession implements SpiderSession {
     }
 
     private String call(final String method, final Object... arguments) throws Exception {
-        return submit(new Callable<String>() {
+        return await(submit(new Callable<String>() {
             @Override public String call() {
                 if (!spider.contains(method)) {
                     throw new IllegalStateException("JS Spider 未实现 " + method);
                 }
                 return stringify(spider.executeFunction2(method, arguments));
             }
-        }).get();
+        }));
     }
 
     private <T> Future<T> submit(Callable<T> task) {
         return executor.submit(task);
+    }
+
+    private <T> T await(Future<T> future) throws Exception {
+        try {
+            return future.get(EXECUTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            future.cancel(true);
+            executor.shutdownNow();
+            throw new IOException("JS Spider 执行超时，已禁用该会话", timeout);
+        }
     }
 
     private static String stringify(Object value) {
@@ -196,8 +214,7 @@ final class QuickJsSpiderSession implements SpiderSession {
         }
         String resolved = Urls.resolve(base == null ? "" : base, value);
         String clean = resolved.toLowerCase(Locale.US);
-        return (clean.startsWith("http://") || clean.startsWith("https://"))
-                && clean.contains(".js") ? resolved : "";
+        return clean.startsWith("https://") && clean.contains(".js") ? resolved : "";
     }
 
     private static String findUrl(JsonElement element) {
@@ -237,7 +254,7 @@ final class QuickJsSpiderSession implements SpiderSession {
                 if (!response.isSuccessful() || response.body() == null) {
                     throw new IllegalStateException("JS 模块 HTTP " + response.code());
                 }
-                String content = response.body().string();
+                String content = ResponseBodies.string(response.body(), MAX_SCRIPT_BYTES, UTF_8);
                 scripts.put(url, content);
                 return content;
             } catch (IOException error) {
@@ -262,6 +279,9 @@ final class QuickJsSpiderSession implements SpiderSession {
         static JSObject request(ES6Module context, String url, JSObject options) {
             JSONObject config = options == null ? new JSONObject() : options.toJSONObject();
             String method = config.optString("method", "GET").toUpperCase(Locale.US);
+            if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                throw new IllegalArgumentException("JS Spider 仅允许 HTTP(S) 请求");
+            }
             Request.Builder request = new Request.Builder().url(url)
                     .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.2.2; NukaCast)");
             JSONObject headers = config.optJSONObject("headers");
@@ -283,7 +303,8 @@ final class QuickJsSpiderSession implements SpiderSession {
             }
             JSONObject result = new JSONObject();
             try (Response response = HttpStack.client().newCall(request.build()).execute()) {
-                String content = response.body() == null ? "" : response.body().string();
+                String content = response.body() == null ? ""
+                        : ResponseBodies.string(response.body(), MAX_HTTP_BYTES, UTF_8);
                 result.put("ok", response.isSuccessful());
                 result.put("code", response.code());
                 result.put("status", response.code());

@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class AppState {
-    public enum ServiceState { STARTING, READY, STREAMING, ERROR }
+    public enum ServiceState { STARTING, READY, STREAMING, STOPPED, ERROR }
 
     public interface Listener {
         void onStateChanged(AppState state);

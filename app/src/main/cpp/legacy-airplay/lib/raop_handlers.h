@@ -225,181 +225,231 @@ raop_handler_options(raop_conn_t *conn,
 	http_response_add_header(response, "Public", "SETUP, RECORD, PAUSE, FLUSH, TEARDOWN, OPTIONS, GET_PARAMETER, SET_PARAMETER");
 }
 
-static int setup = 0;
+static int
+raop_plist_uint(plist_t dict, const char *key, uint64_t *value)
+{
+	plist_t node;
+	if (!dict || plist_get_node_type(dict) != PLIST_DICT || !key || !value) return -1;
+	node = plist_dict_get_item(dict, key);
+	if (!node || plist_get_node_type(node) != PLIST_UINT) return -1;
+	plist_get_uint_val(node, value);
+	return 0;
+}
+
+static void
+raop_setup_reject(raop_conn_t *conn, http_response_t *response, const char *reason)
+{
+	logger_log(conn->raop->logger, LOGGER_WARNING, "Rejecting SETUP: %s", reason);
+	http_response_add_header(response, "Connection", "close");
+	http_response_set_disconnect(response, 1);
+}
+
+static int
+raop_setup_response(http_response_t *response, char **response_data,
+                    int *response_datalen, unsigned short event_port,
+                    unsigned short timing_port, unsigned short data_port,
+                    unsigned short control_port, uint64_t stream_type)
+{
+	plist_t root = NULL;
+	plist_t streams = NULL;
+	plist_t stream = NULL;
+	char *encoded = NULL;
+	uint32_t encoded_len = 0;
+	int result = -1;
+
+	root = plist_new_dict();
+	streams = plist_new_array();
+	stream = plist_new_dict();
+	if (!root || !streams || !stream) goto cleanup;
+
+	plist_dict_set_item(stream, "dataPort", plist_new_uint(data_port));
+	plist_dict_set_item(stream, "type", plist_new_uint(stream_type));
+	if (control_port) {
+		plist_dict_set_item(stream, "controlPort", plist_new_uint(control_port));
+	}
+	plist_array_append_item(streams, stream);
+	stream = NULL;
+	if (event_port) {
+		plist_dict_set_item(root, "eventPort", plist_new_uint(event_port));
+	}
+	plist_dict_set_item(root, "timingPort", plist_new_uint(timing_port));
+	plist_dict_set_item(root, "streams", streams);
+	streams = NULL;
+	plist_to_bin(root, &encoded, &encoded_len);
+	if (!encoded || encoded_len == 0 || encoded_len > 1024 * 1024) goto cleanup;
+
+	*response_data = malloc(encoded_len);
+	if (!*response_data) goto cleanup;
+	memcpy(*response_data, encoded, encoded_len);
+	*response_datalen = (int) encoded_len;
+	http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
+	result = 0;
+
+cleanup:
+	free(encoded);
+	if (stream) plist_free(stream);
+	if (streams) plist_free(streams);
+	if (root) plist_free(root);
+	return result;
+}
 
 static void
 raop_handler_setup(raop_conn_t *conn,
                    http_request_t *request, http_response_t *response,
                    char **response_data, int *response_datalen)
 {
-    unsigned short remote_cport=0, remote_tport=0;
+	const char *transport;
+	const char *dacp_id;
+	const char *active_remote_header;
+	const char *data;
+	int datalen = 0;
+	int use_udp;
+	plist_t root = NULL;
+	plist_t eiv_node;
+	plist_t ekey_node;
+	plist_t streams;
 
-    const char *transport;
-    char buffer[1024];
-    int use_udp;
-    const char *dacp_id;
-    const char *active_remote_header;
+	data = http_request_get_data(request, &datalen);
+	if (!data || datalen < 8 || datalen > 8 * 1024 * 1024) {
+		raop_setup_reject(conn, response, "invalid binary plist length");
+		return;
+	}
+	plist_from_bin(data, (uint32_t) datalen, &root);
+	if (!root || plist_get_node_type(root) != PLIST_DICT) {
+		raop_setup_reject(conn, response, "invalid binary plist");
+		if (root) plist_free(root);
+		return;
+	}
 
-    const char *data;
-    int datalen;
+	dacp_id = http_request_get_header(request, "DACP-ID");
+	active_remote_header = http_request_get_header(request, "Active-Remote");
+	if (dacp_id && active_remote_header && conn->raop_rtp) {
+		raop_rtp_remote_control_id(conn->raop_rtp, dacp_id, active_remote_header);
+	}
+	transport = http_request_get_header(request, "Transport");
+	use_udp = transport && strncmp(transport, "RTP/AVP/TCP", 11) != 0;
 
-    data = http_request_get_data(request, &datalen);
-
-    dacp_id = http_request_get_header(request, "DACP-ID");
-    active_remote_header = http_request_get_header(request, "Active-Remote");
-
-    if (dacp_id && active_remote_header) {
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "DACP-ID: %s", dacp_id);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "Active-Remote: %s", active_remote_header);
-        if (conn->raop_rtp) {
-            raop_rtp_remote_control_id(conn->raop_rtp, dacp_id, active_remote_header);
-        }
-    }
-
-    transport = http_request_get_header(request, "Transport");
-    if (transport) {
-        logger_log(conn->raop->logger, LOGGER_INFO, "Transport: %s", transport);
-        use_udp = strncmp(transport, "RTP/AVP/TCP", 11);
-    } else {
-        logger_log(conn->raop->logger, LOGGER_INFO, "Transport: null");
-        use_udp = 0;
-    }
-
-
-    // 解析bplist
-    plist_t root_node = NULL;
-    plist_from_bin(data, datalen, &root_node);
-    plist_t streams_note = plist_dict_get_item(root_node, "streams");
-    if (setup == 0) {
+	eiv_node = plist_dict_get_item(root, "eiv");
+	ekey_node = plist_dict_get_item(root, "ekey");
+	if (eiv_node || ekey_node) {
+		char *eiv = NULL;
+		char *ekey = NULL;
+		uint64_t eiv_len = 0;
+		uint64_t ekey_len = 0;
+		uint64_t timing_port = 0;
 		unsigned char aesiv[16];
 		unsigned char aeskey[16];
-        setup++;
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 1");
-        // 第一次setup
-        plist_t eiv_note = plist_dict_get_item(root_node, "eiv");
-        char* eiv= NULL;
-        uint64_t eiv_len = 0;
-        plist_get_data_val(eiv_note, &eiv, &eiv_len);
-        memcpy(aesiv, eiv, 16);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "eiv_len = %llu", eiv_len);
-        plist_t ekey_note = plist_dict_get_item(root_node, "ekey");
-        char* ekey= NULL;
-        uint64_t ekey_len = 0;
-        plist_get_data_val(ekey_note, &ekey, &ekey_len);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "ekey_len = %llu", ekey_len);
-        // 时间port
-		uint64_t timing_rport;
-        plist_t time_note = plist_dict_get_item(root_node, "timingPort");
-        plist_get_uint_val(time_note, &timing_rport);
-		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
-        // ekey是72字节
-        int ret = fairplay_decrypt(conn->fairplay, ekey, aeskey);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
 		unsigned char ecdh_secret[32];
-        pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
-        conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret, timing_rport);
-		conn->raop_rtp_mirror = raop_rtp_mirror_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, ecdh_secret, timing_rport);
-    } else if (setup == 1) {
-		unsigned short tport=0, dport=0;
-        setup++;
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2");
-		plist_t stream_note = plist_array_get_item(streams_note, 0);
-		plist_t type_note = plist_dict_get_item(stream_note, "type");
-        uint64_t type;
-        plist_get_uint_val(type_note, &type);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "type = %llu", type);
-		plist_t stream_id_note = plist_dict_get_item(stream_note, "streamConnectionID");
-		uint64_t streamConnectionID;
-		plist_get_uint_val(stream_id_note, &streamConnectionID);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "streamConnectionID = %llu", streamConnectionID);
 
+		if (!eiv_node || plist_get_node_type(eiv_node) != PLIST_DATA
+				|| !ekey_node || plist_get_node_type(ekey_node) != PLIST_DATA
+				|| raop_plist_uint(root, "timingPort", &timing_port) < 0
+				|| timing_port == 0 || timing_port > 65535) {
+			raop_setup_reject(conn, response, "missing encryption or timing fields");
+			goto cleanup;
+		}
+		plist_get_data_val(eiv_node, &eiv, &eiv_len);
+		plist_get_data_val(ekey_node, &ekey, &ekey_len);
+		if (!eiv || eiv_len != sizeof(aesiv) || !ekey || ekey_len != 72) {
+			free(eiv);
+			free(ekey);
+			raop_setup_reject(conn, response, "invalid eiv or ekey length");
+			goto cleanup;
+		}
+		memcpy(aesiv, eiv, sizeof(aesiv));
+		free(eiv);
+		if (fairplay_decrypt(conn->fairplay, (unsigned char *) ekey, aeskey) != 0) {
+			free(ekey);
+			raop_setup_reject(conn, response, "FairPlay key exchange incomplete");
+			goto cleanup;
+		}
+		free(ekey);
+		pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
+		if (conn->raop_rtp) raop_rtp_destroy(conn->raop_rtp);
+		if (conn->raop_rtp_mirror) raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
+		conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks,
+				conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret,
+				(unsigned short) timing_port);
+		conn->raop_rtp_mirror = raop_rtp_mirror_init(conn->raop->logger,
+				&conn->raop->callbacks, conn->remote, conn->remotelen, aeskey,
+				ecdh_secret, (unsigned short) timing_port);
+		if (!conn->raop_rtp || !conn->raop_rtp_mirror) {
+			if (conn->raop_rtp) raop_rtp_destroy(conn->raop_rtp);
+			if (conn->raop_rtp_mirror) raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
+			conn->raop_rtp = NULL;
+			conn->raop_rtp_mirror = NULL;
+			raop_setup_reject(conn, response, "RTP initialization failed");
+			goto cleanup;
+		}
+		conn->crypto_ready = 1;
+		conn->mirror_ready = 0;
+		conn->audio_ready = 0;
+		logger_log(conn->raop->logger, LOGGER_INFO, "SETUP encryption initialized");
+		goto cleanup;
+	}
 
-        if (conn->raop_rtp_mirror) {
-			raop_rtp_init_mirror_aes(conn->raop_rtp_mirror, streamConnectionID);
-			raop_rtp_start_mirror(conn->raop_rtp_mirror, use_udp, remote_tport, &tport, &dport);
-            logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
-        } else {
-            logger_log(conn->raop->logger, LOGGER_ERR, "RAOP not initialized at SETUP, playing will fail!");
-            http_response_set_disconnect(response, 1);
-        }
-        plist_t r_node = plist_new_dict();
-        plist_t s_node = plist_new_array();
-        plist_t s_sub_node = plist_new_dict();
-        plist_t data_port_node = plist_new_uint(dport);
-        plist_t type_node = plist_new_uint(110);
-        plist_t event_port_node = plist_new_uint(conn->raop->port);
-        plist_t timing_port_node = plist_new_uint(tport);
-        plist_dict_set_item(s_sub_node, "dataPort", data_port_node);
-        plist_dict_set_item(s_sub_node, "type", type_node);
-        plist_array_append_item(s_node, s_sub_node);
-        plist_dict_set_item(r_node, "eventPort", event_port_node);
-        plist_dict_set_item(r_node, "timingPort", timing_port_node);
-        plist_dict_set_item(r_node, "streams", s_node);
-        uint32_t len = 0;
-        char* rsp = NULL;
-        plist_to_bin(r_node, &rsp, &len);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2 len = %d", len);
-        http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
-        *response_data = malloc(len);
-        memcpy(*response_data, rsp, len);
-        *response_datalen = len;
-        logger_log(conn->raop->logger, LOGGER_INFO, "dport = %d, tport = %d", dport, tport);
-    } else {
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3");
-        unsigned short cport = 0, tport = 0, dport = 0;
+	streams = plist_dict_get_item(root, "streams");
+	if (!conn->crypto_ready || !streams || plist_get_node_type(streams) != PLIST_ARRAY
+			|| plist_array_get_size(streams) == 0) {
+		raop_setup_reject(conn, response, "stream SETUP before encryption SETUP");
+		goto cleanup;
+	}
 
-        if (conn->raop_rtp) {
-            raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
-            logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
-        } else {
-            logger_log(conn->raop->logger, LOGGER_ERR, "RAOP not initialized at SETUP, playing will fail!");
-            http_response_set_disconnect(response, 1);
-        }
-        // 需要返回端口
-		/**
-		 * <dict>
-	<key>streams</key>
-	<array>
-		<dict>
-			<key>dataPort</key>
-			<integer>42820</integer>
-			<key>controlPort</key>
-			<integer>46440</integer>
-			<key>type</key>
-			<integer>96</integer>
-		</dict>
-	</array>
+	{
+		plist_t stream = plist_array_get_item(streams, 0);
+		uint64_t type = 0;
+		if (!stream || raop_plist_uint(stream, "type", &type) < 0) {
+			raop_setup_reject(conn, response, "missing stream type");
+			goto cleanup;
+		}
+		if (type == 110) {
+			uint64_t stream_id = 0;
+			unsigned short timing_port = 0;
+			unsigned short data_port = 0;
+			if (conn->mirror_ready || raop_plist_uint(stream, "streamConnectionID", &stream_id) < 0) {
+				raop_setup_reject(conn, response, "invalid mirror stream");
+				goto cleanup;
+			}
+			raop_rtp_init_mirror_aes(conn->raop_rtp_mirror, stream_id);
+			raop_rtp_start_mirror(conn->raop_rtp_mirror, use_udp, 0,
+					&timing_port, &data_port);
+			if (!data_port || raop_setup_response(response, response_data,
+					response_datalen, conn->raop->port, timing_port, data_port, 0, 110) < 0) {
+				raop_setup_reject(conn, response, "mirror socket initialization failed");
+				goto cleanup;
+			}
+			conn->mirror_ready = 1;
+		} else if (type == 96) {
+			uint64_t remote_control = 0;
+			uint64_t remote_timing = 0;
+			unsigned short control_port = 0;
+			unsigned short timing_port = 0;
+			unsigned short data_port = 0;
+			if (conn->audio_ready
+					|| raop_plist_uint(stream, "controlPort", &remote_control) < 0
+					|| remote_control > 65535
+					|| (raop_plist_uint(stream, "timingPort", &remote_timing) < 0
+						&& raop_plist_uint(root, "timingPort", &remote_timing) < 0)
+					|| remote_timing > 65535) {
+				raop_setup_reject(conn, response, "invalid audio stream ports");
+				goto cleanup;
+			}
+			raop_rtp_start_audio(conn->raop_rtp, use_udp,
+					(unsigned short) remote_control, (unsigned short) remote_timing,
+					&control_port, &timing_port, &data_port);
+			if (!data_port || raop_setup_response(response, response_data,
+					response_datalen, 0, timing_port, data_port, control_port, 96) < 0) {
+				raop_setup_reject(conn, response, "audio socket initialization failed");
+				goto cleanup;
+			}
+			conn->audio_ready = 1;
+		} else {
+			raop_setup_reject(conn, response, "unsupported stream type");
+		}
+	}
 
-	<key>timingPort</key>
-	<integer>46440</integer>
-</dict>
-</plist>
-		 */
-		plist_t r_node = plist_new_dict();
-		plist_t s_node = plist_new_array();
-		plist_t s_sub_node = plist_new_dict();
-		plist_t data_port_node = plist_new_uint(dport);
-		plist_t type_node = plist_new_uint(96);
-		plist_t control_port_node = plist_new_uint(cport);
-		plist_t timing_port_node = plist_new_uint(tport);
-		plist_dict_set_item(s_sub_node, "dataPort", data_port_node);
-		plist_dict_set_item(s_sub_node, "type", type_node);
-		plist_dict_set_item(s_sub_node, "controlPort", control_port_node);
-		plist_array_append_item(s_node, s_sub_node);
-		plist_dict_set_item(r_node, "timingPort", timing_port_node);
-		plist_dict_set_item(r_node, "streams", s_node);
-		uint32_t len = 0;
-		char* rsp = NULL;
-		plist_to_bin(r_node, &rsp, &len);
-		logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3 len = %d", len);
-		http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
-		*response_data = malloc(len);
-		memcpy(*response_data, rsp, len);
-		*response_datalen = len;
-
-		logger_log(conn->raop->logger, LOGGER_INFO, "dport = %d, tport = %d, cport = %d", dport, tport, cport);
-    }
-
+cleanup:
+	plist_free(root);
 }
 
 static void
@@ -413,15 +463,17 @@ raop_handler_get_parameter(raop_conn_t *conn,
 
 	content_type = http_request_get_header(request, "Content-Type");
 	data = http_request_get_data(request, &datalen);
-	if (!strcmp(content_type, "text/parameters")) {
+	if (content_type && data && datalen > 0 && !strcmp(content_type, "text/parameters")) {
 		const char *current = data;
+		const char *end = data + datalen;
 
-		while (current) {
+		while (current < end) {
 			const char *next;
 			int handled = 0;
+			size_t remaining = (size_t) (end - current);
 
 			/* This is a bit ugly, but seems to be how airport works too */
-			if (!strncmp(current, "volume\r\n", 8)) {
+			if (remaining >= 8 && !memcmp(current, "volume\r\n", 8)) {
 				const char volume[] = "volume: 0.0\r\n";
 
 				http_response_add_header(response, "Content-Type", "text/parameters");
@@ -432,7 +484,16 @@ raop_handler_get_parameter(raop_conn_t *conn,
 				handled = 1;
 			}
 
-			next = strstr(current, "\r\n");
+			next = NULL;
+			if (remaining >= 2) {
+				const char *scan;
+				for (scan = current; scan + 1 < end; scan++) {
+					if (scan[0] == '\r' && scan[1] == '\n') {
+						next = scan;
+						break;
+					}
+				}
+			}
 			if (next && !handled) {
 				logger_log(conn->raop->logger, LOGGER_WARNING,
 				           "Found an unknown parameter: %.*s", (next - current), current);
@@ -440,7 +501,7 @@ raop_handler_get_parameter(raop_conn_t *conn,
 			} else if (next) {
 				current = next + 2;
 			} else {
-				current = NULL;
+				current = end;
 			}
 		}
 	}
@@ -457,6 +518,7 @@ raop_handler_set_parameter(raop_conn_t *conn,
 
 	content_type = http_request_get_header(request, "Content-Type");
 	data = http_request_get_data(request, &datalen);
+	if (!content_type) return;
 	if (!strcmp(content_type, "text/parameters")) {
 		char *datastr;
 		datastr = calloc(1, datalen+1);

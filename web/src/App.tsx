@@ -26,7 +26,7 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, type Device, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, AUTH_EXPIRED_EVENT, type Device, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,6 +63,15 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [refreshStatus])
 
+  useEffect(() => {
+    const expired = () => {
+      setPaired(false)
+      setError("")
+    }
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, expired)
+  }, [])
+
   if (!paired) return <Pairing status={status} onPaired={() => setPaired(true)} />
 
   return (
@@ -88,25 +97,27 @@ export default function App() {
         </nav>
         <div className="hidden px-4 lg:absolute lg:bottom-5 lg:block lg:w-full">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={`size-2 rounded-full ${status?.serviceState === "ready" ? "bg-primary" : "bg-warning"}`} />
+            <span className={`size-2 rounded-full ${status?.serviceState === "ready" ? "bg-foreground" : "bg-destructive"}`} />
             {status?.webAddress || "局域网服务"}
           </div>
         </div>
       </aside>
 
       <main className="min-w-0 px-4 py-5 sm:px-6 lg:col-start-2 lg:px-8 lg:py-7">
+        <div className="mx-auto max-w-[1600px]">
         {error && (
           <div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             <CircleAlert className="size-4" />{error}
             <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setError("")}>关闭</Button>
           </div>
         )}
-        {view === "overview" && <Overview status={status} setError={setError} />}
+        {view === "overview" && <Overview status={status} onStatusChanged={refreshStatus} setError={setError} />}
         {view === "search" && <SearchView setError={setError} />}
         {view === "live" && <LiveView setError={setError} />}
         {view === "sources" && <SourcesView onChanged={refreshStatus} setError={setError} />}
         {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
         {view === "device" && <DeviceView setError={setError} />}
+        </div>
       </main>
     </div>
   )
@@ -155,8 +166,9 @@ function PageHeader({ title, action }: { title: string; action?: React.ReactNode
   return <header className="mb-5 flex min-h-10 items-center justify-between gap-3"><h1 className="text-xl font-semibold sm:text-2xl">{title}</h1>{action}</header>
 }
 
-function Overview({ status, setError }: { status: Status | null; setError: (value: string) => void }) {
+function Overview({ status, onStatusChanged, setError }: { status: Status | null; onStatusChanged: () => Promise<void>; setError: (value: string) => void }) {
   const [player, setPlayer] = useState<Player | null>(null)
+  const [disconnecting, setDisconnecting] = useState(false)
 
   const refresh = useCallback(() => api.player().then(setPlayer).catch((reason) => setError(message(reason))), [setError])
   useEffect(() => {
@@ -169,14 +181,39 @@ function Overview({ status, setError }: { status: Status | null; setError: (valu
     try { setPlayer(await api.control({ action, offsetMs })) } catch (reason) { setError(message(reason)) }
   }
 
+  const disconnectAirPlay = async () => {
+    setDisconnecting(true)
+    try {
+      await api.disconnectAirPlay()
+      await onStatusChanged()
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
   return (
     <>
-      <PageHeader title="控制中心" action={<Badge variant={status?.serviceState === "ready" ? "default" : "warning"}>{status?.message || "连接中"}</Badge>} />
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={Airplay} label="AirPlay" value={status?.airPlay?.sessionActive ? "正在镜像" : status?.airPlayName || "NukaCast"} detail={status?.airPlay?.error || (status?.airPlay?.port ? `端口 ${status.airPlay.port} · 无 PIN` : "无 PIN")} />
-        <Metric icon={Wifi} label="控制地址" value={status?.webAddress?.replace(/^https?:\/\//, "") || "-"} detail="局域网" />
-        <Metric icon={Server} label="配置源" value={String(status?.sourceCount ?? 0)} detail={`${status?.siteCount ?? 0} 个站点`} />
-        <Metric icon={Film} label="正在播放" value={status?.activeMedia || "空闲"} detail={player?.state || "idle"} />
+      <PageHeader title="控制中心" action={<Badge variant={status?.serviceState === "ready" ? "secondary" : "destructive"}>{status?.message || "连接中"}</Badge>} />
+      <section className="panel flex min-h-40 flex-col justify-between gap-6 p-5 sm:flex-row sm:items-center sm:p-6">
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="grid size-12 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"><Airplay className="size-6" /></div>
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-muted-foreground">AIRPLAY</div>
+            <h2 className="mt-1 truncate text-2xl font-semibold">{status?.airPlay?.sessionActive ? "正在镜像" : status?.airPlayName || "NukaCast"}</h2>
+            {status?.airPlay?.error && <div className="mt-2 text-sm text-destructive">{status.airPlay.error}</div>}
+          </div>
+        </div>
+        {status?.airPlay?.sessionActive
+          ? <Button variant="outline" disabled={disconnecting} onClick={disconnectAirPlay}>{disconnecting ? <LoaderCircle className="animate-spin" /> : <Square />}退出投屏</Button>
+          : <Badge variant="outline">等待设备</Badge>}
+      </section>
+
+      <section className="mt-4 grid divide-y rounded-md border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <OverviewFact icon={Wifi} label="控制地址" value={status?.webAddress?.replace(/^https?:\/\//, "") || "-"} />
+        <OverviewFact icon={Server} label="片源" value={`${status?.sourceCount ?? 0} 个配置 · ${status?.siteCount ?? 0} 个站点`} />
+        <OverviewFact icon={Film} label="播放状态" value={status?.activeMedia || "空闲"} />
       </section>
 
       <section className="mt-6 border-t pt-5">
@@ -200,12 +237,11 @@ function Overview({ status, setError }: { status: Status | null; setError: (valu
   )
 }
 
-function Metric({ icon: Icon, label, value, detail }: { icon: typeof Gauge; label: string; value: string; detail: string }) {
+function OverviewFact({ icon: Icon, label, value }: { icon: typeof Gauge; label: string; value: string }) {
   return (
-    <div className="panel min-w-0 p-4">
-      <div className="mb-4 flex items-center justify-between text-muted-foreground"><span className="eyebrow">{label}</span><Icon className="size-4" /></div>
-      <div className="truncate text-lg font-semibold">{value}</div>
-      <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
+    <div className="flex min-w-0 items-center gap-3 px-4 py-3">
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-0.5 truncate text-sm font-medium">{value}</div></div>
     </div>
   )
 }
@@ -266,7 +302,7 @@ function SearchView({ setError }: { setError: (value: string) => void }) {
         </div>
       </form>
 
-      {result?.partial && <div className="mt-4 flex items-center gap-2 text-sm text-warning"><CircleAlert className="size-4" />{result.failedSites} 个站点未完成</div>}
+      {result?.partial && <div className="mt-4 flex items-center gap-2 text-sm text-destructive"><CircleAlert className="size-4" />{result.failedSites} 个站点未完成</div>}
       <section className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
         {result?.items.map((item) => <Poster key={`${item.sourceId}-${item.siteKey}-${item.vodId}`} item={item} onClick={() => openDetail(item)} />)}
       </section>
@@ -453,6 +489,7 @@ function SourcesView({ onChanged, setError }: { onChanged: () => void; setError:
             <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 /></Button>
           </div>
         ))}
+        {sources.length === 0 && <Empty icon={Library} label="还没有配置源" compact />}
       </section>
     </>
   )
@@ -521,6 +558,7 @@ function StorageView({ onChanged, setError }: { onChanged: () => void; setError:
             <Button variant="ghost" size="icon" title="删除" onClick={() => remove(mount.id)}><Trash2 /></Button>
           </div>
         ))}
+        {mounts.length === 0 && <Empty icon={HardDrive} label="还没有挂载存储" compact />}
       </section>
     </>
   )
@@ -540,18 +578,18 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
 
   return (
     <>
-      <PageHeader title="设备能力" action={<Badge variant={device?.hasHardwareAvcDecoder ? "default" : "warning"}>{device?.hasHardwareAvcDecoder ? "1080p 候选" : "待检测"}</Badge>} />
+      <PageHeader title="设备能力" action={<Badge variant={device?.hasHardwareAvcDecoder ? "secondary" : "destructive"}>{device?.hasHardwareAvcDecoder ? "1080p 候选" : "待检测"}</Badge>} />
       <section className="divide-y rounded-md border">
         {rows.map(([label, value]) => <div key={label} className="grid gap-1 px-4 py-3 sm:grid-cols-[150px_1fr]"><div className="text-sm text-muted-foreground">{label}</div><div className="break-words text-sm font-medium">{value}</div></div>)}
       </section>
-      {device?.warnings.length ? <section className="mt-5"><h2 className="section-title mb-3">检测提示</h2>{device.warnings.map((warning) => <div key={warning} className="mb-2 flex items-center gap-2 text-sm text-warning"><CircleAlert className="size-4" />{warning}</div>)}</section> : null}
+      {device?.warnings.length ? <section className="mt-5"><h2 className="section-title mb-3">检测提示</h2>{device.warnings.map((warning) => <div key={warning} className="mb-2 flex items-center gap-2 text-sm text-destructive"><CircleAlert className="size-4" />{warning}</div>)}</section> : null}
       <section className="mt-5"><h2 className="section-title mb-3">H.264 解码器</h2><div className="flex flex-wrap gap-2">{device?.avcDecoders.map((codec) => <Badge key={codec} variant="outline">{codec}</Badge>)}</div></section>
     </>
   )
 }
 
-function Empty({ icon: Icon, label }: { icon: typeof Gauge; label: string }) {
-  return <div className="grid min-h-64 place-items-center border-y"><div className="text-center text-muted-foreground"><Icon className="mx-auto mb-3 size-8" /><div className="text-sm">{label}</div></div></div>
+function Empty({ icon: Icon, label, compact = false }: { icon: typeof Gauge; label: string; compact?: boolean }) {
+  return <div className={`grid place-items-center ${compact ? "min-h-32" : "min-h-64 border-y"}`}><div className="text-center text-muted-foreground"><Icon className="mx-auto mb-3 size-8" /><div className="text-sm">{label}</div></div></div>
 }
 
 function message(reason: unknown) {

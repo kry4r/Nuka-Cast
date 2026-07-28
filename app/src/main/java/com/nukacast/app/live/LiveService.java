@@ -7,6 +7,7 @@ import com.nukacast.app.live.model.LiveCatalog;
 import com.nukacast.app.live.model.EpgSchedule;
 import com.nukacast.app.live.model.LiveSourceInfo;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.TvBoxRepository;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
@@ -27,6 +28,7 @@ import okhttp3.Response;
 
 public final class LiveService {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
+    private static final int MAX_LIVE_BYTES = 4 * 1024 * 1024;
     private static final long CACHE_MS = 10L * 60L * 1000L;
     private final TvBoxRepository repository;
     private final Map<String, CacheEntry> cache = new HashMap<String, CacheEntry>();
@@ -92,7 +94,8 @@ public final class LiveService {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("节目单 HTTP " + response.code());
             }
-            return EpgParser.parse(response.body().string(), channel.epgId, date);
+            return EpgParser.parse(ResponseBodies.string(
+                    response.body(), MAX_LIVE_BYTES, UTF_8), channel.epgId, date);
         }
     }
 
@@ -111,7 +114,8 @@ public final class LiveService {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("直播清单 HTTP " + response.code());
             }
-            return LivePlaylistParser.parse(new String(response.body().bytes(), UTF_8));
+            return LivePlaylistParser.parse(ResponseBodies.string(
+                    response.body(), MAX_LIVE_BYTES, UTF_8));
         }
     }
 

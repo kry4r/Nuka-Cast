@@ -1,7 +1,7 @@
 package com.nukacast.app.airplay;
 
 import android.content.Context;
-import android.net.wifi.WifiInfo;
+import android.content.SharedPreferences;
 import android.net.wifi.WifiManager;
 
 import com.nukacast.app.core.NetworkAddress;
@@ -9,6 +9,7 @@ import com.nukacast.app.core.NetworkAddress;
 import java.net.InetAddress;
 import java.nio.charset.Charset;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -17,6 +18,8 @@ import javax.jmdns.ServiceInfo;
 
 final class AirPlayPublisher {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
+    private static final String IDENTITY_PREFS = "airplay_identity";
+    private static final String DEVICE_ID = "device_id";
     private final Context context;
     private JmDNS jmdns;
     private WifiManager.MulticastLock multicastLock;
@@ -27,7 +30,8 @@ final class AirPlayPublisher {
 
     synchronized void start(int port, String publicKey) throws Exception {
         if (jmdns != null) return;
-        WifiManager wifi = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
+        WifiManager wifi = (WifiManager) context.getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
         if (wifi != null) {
             multicastLock = wifi.createMulticastLock("nukacast-airplay-mdns");
             multicastLock.setReferenceCounted(false);
@@ -35,8 +39,8 @@ final class AirPlayPublisher {
         }
         String addressText = NetworkAddress.findLanAddress(context);
         InetAddress address = InetAddress.getByName(addressText);
-        String mac = macAddress(wifi, address);
-        String compactMac = mac.replace(":", "").toUpperCase();
+        String mac = deviceId();
+        String compactMac = mac.replace(":", "").toUpperCase(Locale.ROOT);
         String pairId = UUID.nameUUIDFromBytes(("NukaCast|" + mac).getBytes(UTF_8)).toString();
         jmdns = JmDNS.create(address, "NukaCast");
 
@@ -87,20 +91,19 @@ final class AirPlayPublisher {
         }
     }
 
-    private static String macAddress(WifiManager wifi, InetAddress address) {
-        String mac = null;
-        if (wifi != null) {
-            try {
-                WifiInfo info = wifi.getConnectionInfo();
-                mac = info == null ? null : info.getMacAddress();
-            } catch (RuntimeException ignored) {}
+    private String deviceId() {
+        SharedPreferences preferences = context.getSharedPreferences(
+                IDENTITY_PREFS, Context.MODE_PRIVATE);
+        String saved = preferences.getString(DEVICE_ID, "");
+        if (saved.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) {
+            return saved.toUpperCase(Locale.ROOT);
         }
-        if (mac != null && mac.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")
-                && !"02:00:00:00:00:00".equals(mac)) return mac.toUpperCase();
-        byte[] bytes = address.getAddress();
-        int a = bytes.length > 0 ? bytes[bytes.length - 1] & 0xff : 1;
-        int b = bytes.length > 1 ? bytes[bytes.length - 2] & 0xff : 1;
-        int c = bytes.length > 2 ? bytes[bytes.length - 3] & 0xff : 1;
-        return String.format("02:4E:55:%02X:%02X:%02X", c, b, a);
+        UUID value = UUID.randomUUID();
+        long bits = value.getLeastSignificantBits();
+        String generated = String.format(Locale.US, "02:%02X:%02X:%02X:%02X:%02X",
+                (bits >>> 32) & 0xff, (bits >>> 24) & 0xff, (bits >>> 16) & 0xff,
+                (bits >>> 8) & 0xff, bits & 0xff);
+        preferences.edit().putString(DEVICE_ID, generated).apply();
+        return generated;
     }
 }

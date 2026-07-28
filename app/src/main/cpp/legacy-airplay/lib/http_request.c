@@ -19,6 +19,11 @@
 #include "http_request.h"
 #include "http_parser.h"
 
+#define HTTP_REQUEST_MAX_URL (8 * 1024)
+#define HTTP_REQUEST_MAX_HEADERS (64 * 1024)
+#define HTTP_REQUEST_MAX_HEADER_FIELDS 128
+#define HTTP_REQUEST_MAX_BODY (8 * 1024 * 1024)
+
 struct http_request_s {
 	http_parser parser;
 	http_parser_settings parser_settings;
@@ -29,6 +34,7 @@ struct http_request_s {
 	char **headers;
 	int headers_size;
 	int headers_index;
+	size_t headers_bytes;
 
 	char *data;
 	int datalen;
@@ -40,13 +46,38 @@ static int
 on_url(http_parser *parser, const char *at, size_t length)
 {
 	http_request_t *request = parser->data;
-	int urllen = request->url ? strlen(request->url) : 0;
+	size_t urllen = request->url ? strlen(request->url) : 0;
+	char *resized;
 
-	request->url = realloc(request->url, urllen+length+1);
-	assert(request->url);
+	if (length > HTTP_REQUEST_MAX_URL || urllen > HTTP_REQUEST_MAX_URL - length) return 1;
+	resized = realloc(request->url, urllen + length + 1);
+	if (!resized) return 1;
+	request->url = resized;
 
-	request->url[urllen] = '\0';
-	strncat(request->url, at, length);
+	memcpy(request->url + urllen, at, length);
+	request->url[urllen + length] = '\0';
+	return 0;
+}
+
+static int
+append_header(http_request_t *request, const char *at, size_t length)
+{
+	char *current;
+	char *resized;
+	size_t current_len;
+
+	if (!request || !at || request->headers_index < 0
+			|| request->headers_index >= request->headers_size) return 1;
+	if (length > HTTP_REQUEST_MAX_HEADERS
+			|| request->headers_bytes > HTTP_REQUEST_MAX_HEADERS - length) return 1;
+	current = request->headers[request->headers_index];
+	current_len = current ? strlen(current) : 0;
+	resized = realloc(current, current_len + length + 1);
+	if (!resized) return 1;
+	memcpy(resized + current_len, at, length);
+	resized[current_len + length] = '\0';
+	request->headers[request->headers_index] = resized;
+	request->headers_bytes += length;
 	return 0;
 }
 
@@ -62,27 +93,17 @@ on_header_field(http_parser *parser, const char *at, size_t length)
 
 	/* Allocate space for new field-value pair */
 	if (request->headers_index == request->headers_size) {
+		char **resized;
+		if (request->headers_size >= HTTP_REQUEST_MAX_HEADER_FIELDS) return 1;
 		request->headers_size += 2;
-		request->headers = realloc(request->headers,
-		                           request->headers_size*sizeof(char*));
-		assert(request->headers);
+		resized = realloc(request->headers, request->headers_size * sizeof(char *));
+		if (!resized) return 1;
+		request->headers = resized;
 		request->headers[request->headers_index] = NULL;
 		request->headers[request->headers_index+1] = NULL;
 	}
 
-	/* Allocate space in the current header string */
-	if (request->headers[request->headers_index] == NULL) {
-		request->headers[request->headers_index] = calloc(1, length+1);
-	} else {
-		request->headers[request->headers_index] = realloc(
-			request->headers[request->headers_index],
-			strlen(request->headers[request->headers_index])+length+1
-		);
-	}
-	assert(request->headers[request->headers_index]);
-
-	strncat(request->headers[request->headers_index], at, length);
-	return 0;
+	return append_header(request, at, length);
 }
 
 static int
@@ -95,31 +116,24 @@ on_header_value(http_parser *parser, const char *at, size_t length)
 		request->headers_index++;
 	}
 
-	/* Allocate space in the current header string */
-	if (request->headers[request->headers_index] == NULL) {
-		request->headers[request->headers_index] = calloc(1, length+1);
-	} else {
-		request->headers[request->headers_index] = realloc(
-			request->headers[request->headers_index],
-			strlen(request->headers[request->headers_index])+length+1
-		);
-	}
-	assert(request->headers[request->headers_index]);
-
-	strncat(request->headers[request->headers_index], at, length);
-	return 0;
+	return append_header(request, at, length);
 }
 
 static int
 on_body(http_parser *parser, const char *at, size_t length)
 {
 	http_request_t *request = parser->data;
+	char *resized;
+	size_t current = (size_t) request->datalen;
 
-	request->data = realloc(request->data, request->datalen+length);
-	assert(request->data);
+	if (length > HTTP_REQUEST_MAX_BODY || current > HTTP_REQUEST_MAX_BODY - length) return 1;
+	resized = realloc(request->data, current + length + 1);
+	if (!resized) return 1;
+	request->data = resized;
 
-	memcpy(request->data+request->datalen, at, length);
+	memcpy(request->data + current, at, length);
 	request->datalen += length;
+	request->data[request->datalen] = '\0';
 	return 0;
 }
 
@@ -177,6 +191,7 @@ http_request_add_data(http_request_t *request, const char *data, int datalen)
 
 	assert(request);
 
+	if (!data || datalen <= 0) return 0;
 	ret = http_parser_execute(&request->parser,
 	                          &request->parser_settings,
 	                          data, datalen);
@@ -232,8 +247,9 @@ http_request_get_header(http_request_t *request, const char *name)
 
 	assert(request);
 
-	for (i=0; i<request->headers_size; i+=2) {
-		if (!strcmp(request->headers[i], name)) {
+	for (i=0; i+1<request->headers_size; i+=2) {
+		if (request->headers[i] && request->headers[i+1]
+				&& !strcmp(request->headers[i], name)) {
 			return request->headers[i+1];
 		}
 	}

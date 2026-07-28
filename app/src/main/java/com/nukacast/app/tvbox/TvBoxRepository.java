@@ -5,6 +5,7 @@ import android.content.Context;
 import com.google.gson.Gson;
 import com.nukacast.app.BuildConfig;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.model.ConfigSource;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
@@ -29,6 +30,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 public final class TvBoxRepository {
+    private static final int MAX_CONFIG_BYTES = 2 * 1024 * 1024;
     public interface RefreshListener {
         void onRefreshComplete(int configs, int enabledSites);
     }
@@ -126,7 +128,7 @@ public final class TvBoxRepository {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException("HTTP " + response.code());
             }
-            bytes = response.body().bytes();
+            bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);
         }
         String content = new String(bytes, UTF_8);
         TvBoxConfig config;
@@ -210,12 +212,14 @@ public final class TvBoxRepository {
     }
 
     private static String readFile(File file) throws IOException {
+        if (file.length() > MAX_CONFIG_BYTES) throw new IOException("配置缓存过大");
         FileInputStream input = new FileInputStream(file);
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         try {
             int count;
             while ((count = input.read(buffer)) >= 0) {
+                if (output.size() + count > MAX_CONFIG_BYTES) throw new IOException("配置缓存过大");
                 output.write(buffer, 0, count);
             }
         } finally {

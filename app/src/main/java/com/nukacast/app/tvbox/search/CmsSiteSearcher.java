@@ -7,6 +7,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.model.SearchItem;
 import com.nukacast.app.tvbox.model.SearchQuery;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
@@ -14,15 +15,19 @@ import com.nukacast.app.tvbox.model.TvBoxConfig;
 import org.xmlpull.v1.XmlPullParser;
 
 import java.io.StringReader;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import okhttp3.HttpUrl;
 import okhttp3.Request;
 import okhttp3.Response;
 
 public final class CmsSiteSearcher implements SiteSearcher {
+    private static final int MAX_CMS_BYTES = 4 * 1024 * 1024;
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
     private final Gson gson = new Gson();
 
     @Override
@@ -46,7 +51,7 @@ public final class CmsSiteSearcher implements SiteSearcher {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("HTTP " + response.code());
             }
-            body = response.body().string();
+            body = ResponseBodies.string(response.body(), MAX_CMS_BYTES, UTF_8);
         }
         List<SearchItem> items = body.trim().startsWith("<") ? parseXml(body) : parseJson(body);
         for (SearchItem item : items) {
@@ -101,7 +106,7 @@ public final class CmsSiteSearcher implements SiteSearcher {
         int event;
         while ((event = parser.next()) != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
-                tag = parser.getName().toLowerCase();
+                tag = parser.getName().toLowerCase(Locale.ROOT);
                 if ("video".equals(tag)) {
                     current = new SearchItem();
                 }
@@ -151,7 +156,8 @@ public final class CmsSiteSearcher implements SiteSearcher {
 
     private static boolean matches(String actual, String expected) {
         return expected == null || expected.isEmpty()
-                || (actual != null && actual.toLowerCase().contains(expected.toLowerCase()));
+                || (actual != null && actual.toLowerCase(Locale.ROOT)
+                .contains(expected.toLowerCase(Locale.ROOT)));
     }
 
     private static JsonArray array(JsonObject object, String... keys) {

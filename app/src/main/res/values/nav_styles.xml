@@ -39,7 +39,7 @@
     </style>
 
     <style name="PairingCode" parent="@style/PanelBody">
-        <item name="android:textColor">@color/warning</item>
+        <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">18sp</item>
         <item name="android:textStyle">bold</item>
     </style>

@@ -18,7 +18,7 @@ typedef struct {
 } h264_decode_struct;
 
 typedef struct {
-    unsigned short *data;
+    const unsigned short *data;
     int data_len;
     unsigned int pts;
 } pcm_data_struct;

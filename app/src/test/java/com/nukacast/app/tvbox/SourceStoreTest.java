@@ -22,7 +22,7 @@ public final class SourceStoreTest {
     }
 
     @Test
-    public void migratedEmptyListIsPreservedAsUserChoice() {
-        assertFalse(SourceStore.shouldRestoreDefault(true, new ArrayList<ConfigSource>()));
+    public void emptyListAlwaysRestoresBuiltInSource() {
+        assertTrue(SourceStore.shouldRestoreDefault(true, new ArrayList<ConfigSource>()));
     }
 }

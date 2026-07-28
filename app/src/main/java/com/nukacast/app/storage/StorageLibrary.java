@@ -6,6 +6,7 @@ import android.util.Xml;
 
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.storage.model.MediaEntry;
 import com.nukacast.app.storage.model.StorageMount;
 import com.nukacast.app.tvbox.model.MediaDetail;
@@ -33,13 +34,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import jcifs.smb.NtlmPasswordAuthentication;
+import jcifs.CIFSContext;
+import jcifs.config.PropertyConfiguration;
+import jcifs.context.BaseContext;
+import jcifs.smb.NtlmPasswordAuthenticator;
 import jcifs.smb.SmbFile;
 import okhttp3.Credentials;
 import okhttp3.MediaType;
@@ -54,12 +59,14 @@ public final class StorageLibrary {
 
     private static final int MAX_FILES = 5000;
     private static final int MAX_DIRECTORIES = 600;
+    private static final int MAX_DAV_BYTES = 4 * 1024 * 1024;
     private static final Charset UTF_8 = Charset.forName("UTF-8");
     private static final String PROPFIND_BODY = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
             + "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/>"
             + "<d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>";
 
     private final StorageStore store;
+    private final CIFSContext smbContext = createSmbContext();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<StorageMount> mounts;
     private final List<MediaEntry> entries;
@@ -352,7 +359,7 @@ public final class StorageLibrary {
             if ((response.code() != 207 && !response.isSuccessful()) || response.body() == null) {
                 throw new IllegalStateException("WebDAV HTTP " + response.code());
             }
-            return parseDav(uri, response.body().string());
+            return parseDav(uri, ResponseBodies.string(response.body(), MAX_DAV_BYTES, UTF_8));
         }
     }
 
@@ -417,8 +424,28 @@ public final class StorageLibrary {
         throw new IllegalArgumentException("找不到存储挂载");
     }
 
-    private static NtlmPasswordAuthentication auth(StorageMount mount) {
-        return new NtlmPasswordAuthentication(null, mount.username, mount.password);
+    private CIFSContext auth(StorageMount mount) {
+        if (mount.username.isEmpty()) return smbContext;
+        String domain = "";
+        String username = mount.username;
+        int separator = username.indexOf('\\');
+        if (separator > 0) {
+            domain = username.substring(0, separator);
+            username = username.substring(separator + 1);
+        }
+        return smbContext.withCredentials(
+                new NtlmPasswordAuthenticator(domain, username, mount.password));
+    }
+
+    private static CIFSContext createSmbContext() {
+        try {
+            Properties properties = new Properties();
+            properties.setProperty("jcifs.smb.client.minVersion", "SMB202");
+            properties.setProperty("jcifs.smb.client.maxVersion", "SMB311");
+            return new BaseContext(new PropertyConfiguration(properties));
+        } catch (Exception failure) {
+            throw new IllegalStateException("无法初始化 SMB2/3 客户端", failure);
+        }
     }
 
     private static String localPoster(File video) {

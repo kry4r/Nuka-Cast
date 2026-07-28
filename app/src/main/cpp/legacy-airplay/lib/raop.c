@@ -19,7 +19,6 @@
 
 #include "raop.h"
 #include "raop_rtp.h"
-#include "raop_rtp.h"
 #include "pairing.h"
 #include "httpd.h"
 
@@ -51,6 +50,9 @@ struct raop_conn_s {
 	raop_rtp_mirror_t *raop_rtp_mirror;
 	fairplay_t *fairplay;
 	pairing_session_t *pairing;
+	int crypto_ready;
+	int mirror_ready;
+	int audio_ready;
 
 	unsigned char *local;
 	int locallen;
@@ -112,11 +114,22 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
 	}
 
 	conn->local = malloc(locallen);
-	assert(conn->local);
+	if (!conn->local) {
+		pairing_session_destroy(conn->pairing);
+		fairplay_destroy(conn->fairplay);
+		free(conn);
+		return NULL;
+	}
 	memcpy(conn->local, local, locallen);
 
 	conn->remote = malloc(remotelen);
-	assert(conn->remote);
+	if (!conn->remote) {
+		free(conn->local);
+		pairing_session_destroy(conn->pairing);
+		fairplay_destroy(conn->fairplay);
+		free(conn);
+		return NULL;
+	}
 	memcpy(conn->remote, remote, remotelen);
 
 	conn->locallen = locallen;

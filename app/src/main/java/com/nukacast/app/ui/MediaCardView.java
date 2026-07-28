@@ -22,6 +22,10 @@ public final class MediaCardView extends LinearLayout {
 
     private PreviewListener previewListener;
 
+    public MediaCardView(Context context) {
+        super(context);
+    }
+
     public MediaCardView(Context context, SearchItem item, int positionMs, int durationMs,
                          PosterImageLoader images) {
         super(context);
@@ -51,7 +55,7 @@ public final class MediaCardView extends LinearLayout {
             badge.setPadding(dp(6), dp(2), dp(6), dp(2));
             badge.setBackgroundResource(R.drawable.bg_badge);
             FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(dp(84), dp(24),
-                    Gravity.RIGHT | Gravity.TOP);
+                    Gravity.END | Gravity.TOP);
             badgeParams.setMargins(0, dp(6), dp(6), 0);
             artwork.addView(badge, badgeParams);
         }

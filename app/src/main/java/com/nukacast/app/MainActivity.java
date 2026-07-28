@@ -1,11 +1,17 @@
 package com.nukacast.app;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -53,6 +59,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements AppState.Listener, SurfaceHolder.Callback {
+    private static final int REQUEST_STORAGE_PERMISSION = 4101;
+    private static final int REQUEST_MANAGE_STORAGE = 4102;
+    private static final int REQUEST_NOTIFICATIONS = 4103;
     private static final String PAGE_HOME = "home";
     private static final String PAGE_MOVIES = "movies";
     private static final String PAGE_CAST = "cast";
@@ -75,7 +84,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView webAddress;
     private TextView pairingCode;
     private TextView airplayState;
-    private TextView airplayStats;
     private TextView deviceSummary;
     private TextView codecSummary;
     private TextView sourceSummary;
@@ -87,6 +95,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView featuredPlot;
     private ImageView featuredPoster;
     private SurfaceView videoSurface;
+    private View castPlaybackOverlay;
+    private Button castStopOverlay;
     private Button refreshSourcesButton;
     private Button restoreDefaultSourceButton;
     private Button scanStorageButton;
@@ -113,7 +123,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         bindNavigation();
         videoSurface.getHolder().addCallback(this);
         runtime.getState().addListener(this);
-        startService(new Intent(this, NukaCastService.class));
+        startReceiverService();
+        requestNotificationPermission();
         showPage(PAGE_HOME);
         render();
         loadHome(false);
@@ -127,6 +138,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         hideSystemUi();
         render();
         if (PAGE_HOME.equals(currentPage)) renderHome();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_MANAGE_STORAGE && hasStoragePermission()) scanStorage();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_STORAGE_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                scanStorage();
+            } else {
+                Toast.makeText(this, "未获得存储权限，无法扫描本机或 U 盘",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     @Override
@@ -230,7 +261,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         webAddress = (TextView) findViewById(R.id.webAddress);
         pairingCode = (TextView) findViewById(R.id.pairingCode);
         airplayState = (TextView) findViewById(R.id.airplayState);
-        airplayStats = (TextView) findViewById(R.id.airplayStats);
         deviceSummary = (TextView) findViewById(R.id.deviceSummary);
         codecSummary = (TextView) findViewById(R.id.codecSummary);
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
@@ -240,6 +270,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         scanStorageButton = (Button) findViewById(R.id.scanStorageButton);
         themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
         videoSurface = (SurfaceView) findViewById(R.id.videoSurface);
+        castPlaybackOverlay = findViewById(R.id.castPlaybackOverlay);
+        castStopOverlay = (Button) findViewById(R.id.castStopOverlay);
     }
 
     private void bindNavigation() {
@@ -278,6 +310,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void onClick(View view) {
                 TvTheme.toggle(MainActivity.this);
                 recreate();
+            }
+        });
+        castStopOverlay.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                runtime.getAirPlayReceiver().disconnectSession();
+                Toast.makeText(MainActivity.this, "已退出 AirPlay 投屏", Toast.LENGTH_SHORT).show();
             }
         });
         findViewById(R.id.clearPairingButton).setOnClickListener(new View.OnClickListener() {
@@ -391,7 +429,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setGravity(Gravity.CENTER_VERTICAL);
 
-        featuredEyebrow = featuredText(12, TvTheme.accent(this), true);
+        featuredEyebrow = featuredText(12, TvTheme.secondary(this), true);
         featuredTitle = featuredText(32, TvTheme.primary(this), true);
         featuredTitle.setSingleLine(true);
         featuredTitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -443,14 +481,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void updateFeatured(SearchItem item) {
         if (featuredPanel == null || featuredTitle == null) return;
         if (item == null) {
-            featuredEyebrow.setText("NUKACAST");
-            featuredTitle.setText("片库准备中");
+            featuredEyebrow.setText(R.string.app_name);
+            featuredTitle.setText(R.string.featured_preparing);
             featuredMeta.setText(runtime.getState().getStatusMessage());
             featuredPlot.setText("");
             featuredPoster.setImageDrawable(null);
             return;
         }
-        featuredEyebrow.setText(safe(item.siteName).isEmpty() ? "精选推荐" : item.siteName);
+        featuredEyebrow.setText(safe(item.siteName).isEmpty()
+                ? getString(R.string.featured_recommendation) : item.siteName);
         featuredTitle.setText(safe(item.name));
         featuredMeta.setText(joinMeta(item.typeName, item.year, item.area, item.remarks));
         featuredPlot.setText(safe(item.plot));
@@ -906,22 +945,68 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void scanStorage() {
+        if (!ensureStoragePermission()) return;
         if (runtime.getStorageLibrary().isScanning()) return;
         scanStorageButton.setEnabled(false);
-        scanStorageButton.setText("正在扫描…");
+        scanStorageButton.setText(R.string.scanning_library);
         runtime.getStorageLibrary().scanAllAsync(new com.nukacast.app.storage.StorageLibrary.ScanListener() {
             @Override public void onComplete(final int mounts, final int files) {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         scanStorageButton.setEnabled(true);
-                        scanStorageButton.setText("扫描片库");
-                        storageSummary.setText(mounts + " 个挂载 · " + files + " 个媒体文件");
+                        scanStorageButton.setText(R.string.scan_library);
+                        storageSummary.setText(getString(R.string.storage_summary, mounts, files));
                         homeLoaded = false;
                         loadHome(true);
                     }
                 });
             }
         });
+    }
+
+    private void startReceiverService() {
+        Intent service = new Intent(this, NukaCastService.class);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+        else startService(service);
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_NOTIFICATIONS);
+        }
+    }
+
+    private boolean ensureStoragePermission() {
+        if (hasStoragePermission()) return true;
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivityForResult(intent, REQUEST_MANAGE_STORAGE);
+            } catch (RuntimeException unavailable) {
+                startActivityForResult(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                        REQUEST_MANAGE_STORAGE);
+            }
+            Toast.makeText(this, "请允许 NukaCast 访问本机和 U 盘媒体文件",
+                    Toast.LENGTH_LONG).show();
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            requestPermissions(new String[] {Manifest.permission.READ_EXTERNAL_STORAGE},
+                    REQUEST_STORAGE_PERMISSION);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean hasStoragePermission() {
+        if (Build.VERSION.SDK_INT >= 30) return Environment.isExternalStorageManager();
+        return Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void render() {
@@ -932,7 +1017,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         String host = address.replace("http://", "").replace(":" + NukaRuntime.CONTROL_PORT, "");
         networkStatus.setText("0.0.0.0".equals(host) ? "网络未连接" : "已联网 · " + host);
         webAddress.setText(address);
-        pairingCode.setText("配对码 " + runtime.getPairingManager().getPairingCode());
+        String code = runtime.getPairingManager().getPairingCode();
+        pairingCode.setText(code.length() == 6
+                ? code.substring(0, 3) + " " + code.substring(3) : code);
         deviceSummary.setText(profile.displaySummary());
         codecSummary.setText(profile.codecSummary());
         sourceSummary.setText(String.format(Locale.CHINA, "%d 个配置源 · %d 个站点",
@@ -944,20 +1031,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         AirPlayReceiver.Snapshot airplay = runtime.getAirPlayReceiver().snapshot();
         airplayState.setText(airplay.sessionActive ? "正在接收镜像" : castState(airplay));
-        airplayStats.setText(String.format(Locale.CHINA,
-                "端口 %d · 视频 %,d 帧（丢弃 %,d）· 音频 %,d 包（丢弃 %,d）",
-                airplay.port, airplay.videoFrames, airplay.videoDrops,
-                airplay.audioPackets, airplay.audioDrops));
-
         boolean hasMedia = state.getActiveMedia() != null && !state.getActiveMedia().isEmpty();
+        boolean airplayMedia = airplay.sessionActive
+                || "AirPlay 镜像".equals(state.getActiveMedia());
+        boolean overlayWasVisible = castPlaybackOverlay.getVisibility() == View.VISIBLE;
         appShell.setVisibility(hasMedia ? View.GONE : View.VISIBLE);
         videoSurface.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
+        castPlaybackOverlay.setVisibility(airplayMedia ? View.VISIBLE : View.GONE);
+        if (airplayMedia && !overlayWasVisible) {
+            castStopOverlay.requestFocus();
+        } else if (!airplayMedia && overlayWasVisible) {
+            findViewById(R.id.navCast).requestFocus();
+        }
     }
 
     private String castState(AirPlayReceiver.Snapshot snapshot) {
         if ("error".equals(snapshot.state)) return "启动失败 · " + safe(snapshot.error);
-        if ("ready".equals(snapshot.state)) return "无 PIN · 1080p30 · 等待设备连接";
-        return "接收器" + safe(snapshot.state);
+        if ("ready".equals(snapshot.state)) return "等待连接";
+        if ("starting".equals(snapshot.state) || "restarting".equals(snapshot.state)) {
+            return "正在准备";
+        }
+        if ("stopped".equals(snapshot.state)) return "接收器已停止";
+        return safe(snapshot.state);
     }
 
     private MediaCardView card(SearchItem item, int positionMs, int durationMs) {

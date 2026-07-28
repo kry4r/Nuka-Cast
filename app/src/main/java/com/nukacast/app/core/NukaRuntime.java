@@ -64,10 +64,18 @@ public final class NukaRuntime {
             return;
         }
         state.updateService(AppState.ServiceState.STARTING, "正在启动局域网服务");
-        controlServer = new ControlServer(context, CONTROL_PORT, this);
-        controlServer.start(5000, false);
-        airPlayReceiver.start();
-        state.updateService(AppState.ServiceState.READY, "等待连接");
+        ControlServer server = new ControlServer(context, CONTROL_PORT, this);
+        try {
+            server.start(5000, false);
+            airPlayReceiver.start();
+            controlServer = server;
+            state.updateService(AppState.ServiceState.READY, "等待连接");
+        } catch (Exception failure) {
+            server.stop();
+            airPlayReceiver.stop();
+            controlServer = null;
+            throw failure;
+        }
     }
 
     public synchronized void stopServices() {
@@ -76,10 +84,7 @@ public final class NukaRuntime {
             controlServer = null;
         }
         airPlayReceiver.stop();
-        searchEngine.shutdown();
-        contentService.shutdown();
-        storageLibrary.shutdown();
-        spiderManager.destroy();
+        state.updateService(AppState.ServiceState.STOPPED, "服务已停止");
     }
 
     public Context getContext() { return context; }

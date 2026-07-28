@@ -3,6 +3,8 @@ plugins {
 }
 
 def releaseKeystorePath = System.getenv("NUKACAST_KEYSTORE_PATH")
+def debugAbis = ["armeabi-v7a", "arm64-v8a"]
+if (project.hasProperty("includeTestAbi")) debugAbis.add("x86_64")
 
 android {
     namespace "com.nukacast.app"
@@ -12,20 +14,20 @@ android {
     defaultConfig {
         applicationId "com.nukacast.app"
         minSdk 17
-        targetSdk 28
+        targetSdk 35
         multiDexEnabled true
-        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 2
-        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.2.0"
+        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 6
+        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.3.0"
 
         ndk {
-            abiFilters "armeabi-v7a"
+            abiFilters(*debugAbis)
         }
 
-        testInstrumentationRunner "android.test.InstrumentationTestRunner"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
             cmake {
-                abiFilters "armeabi-v7a"
+                abiFilters(*debugAbis)
             }
         }
     }
@@ -76,7 +78,8 @@ android {
     lint {
         abortOnError true
         checkReleaseBuilds true
-        disable "ExpiredTargetSdkVersion"
+        // Navigation icons are intentionally authored once for a fixed-density TV surface.
+        disable "ExpiredTargetSdkVersion", "IconMissingDensityFolder", "ChromeOsAbiSupport"
     }
 
     packaging {
@@ -97,12 +100,16 @@ dependencies {
     implementation "org.nanohttpd:nanohttpd:2.3.1"
     implementation "org.nanohttpd:nanohttpd-websocket:2.3.1"
     implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"
-    implementation "com.google.android.exoplayer:exoplayer-core:2.17.1"
-    implementation "com.google.android.exoplayer:exoplayer-hls:2.17.1"
-    implementation "com.google.android.exoplayer:exoplayer-dash:2.17.1"
+    implementation "com.google.android.exoplayer:exoplayer-core:2.18.5"
+    implementation "com.google.android.exoplayer:exoplayer-hls:2.18.5"
+    implementation "com.google.android.exoplayer:exoplayer-dash:2.18.5"
     implementation "org.jmdns:jmdns:3.5.8"
-    implementation "jcifs:jcifs:1.3.17"
+    implementation "eu.agno3.jcifs:jcifs-ng:2.1.10"
 
     testImplementation "junit:junit:4.13.2"
-    androidTestImplementation "junit:junit:4.13.2"
+    // Last AndroidX Test line compatible with the app's API 17 floor.
+    //noinspection GradleDependency
+    androidTestImplementation "androidx.test:runner:1.5.2"
+    //noinspection GradleDependency
+    androidTestImplementation "androidx.test.ext:junit:1.1.5"
 }
