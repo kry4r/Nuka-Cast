@@ -12,6 +12,7 @@ import com.nukacast.app.diagnostics.AppLog;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -73,13 +74,17 @@ final class H264VideoRenderer {
             return;
         }
         if (type == 0) {
-            codecConfig = data;
-            pendingKeyFrame = null;
-            retainedKeyFrame = null;
-            softwareFallback = false;
             configPackets.incrementAndGet();
-            queue.clear();
-            decoderResetRequested = true;
+            boolean changed = !sameCodecConfiguration(codecConfig, data);
+            codecConfig = data;
+            if (changed) {
+                pendingKeyFrame = null;
+                retainedKeyFrame = null;
+                softwareFallback = false;
+                queue.clear();
+                decoderResetRequested = true;
+            }
+            return;
         }
         Frame frame = new Frame(data, type, ptsUs);
         byte[] retained = retainedKeyFrame == null ? null : retainedKeyFrame.data;
@@ -402,6 +407,28 @@ final class H264VideoRenderer {
             start = next;
         }
         return null;
+    }
+
+    static boolean sameCodecConfiguration(byte[] first, byte[] second) {
+        if (first == null || second == null) return false;
+        return sameNalPayload(parameterSet(first, 7), parameterSet(second, 7))
+                && sameNalPayload(parameterSet(first, 8), parameterSet(second, 8));
+    }
+
+    private static boolean sameNalPayload(byte[] first, byte[] second) {
+        if (first == null || second == null) return false;
+        int firstOffset = nalPayloadOffset(first);
+        int secondOffset = nalPayloadOffset(second);
+        return Arrays.equals(Arrays.copyOfRange(first, firstOffset, first.length),
+                Arrays.copyOfRange(second, secondOffset, second.length));
+    }
+
+    private static int nalPayloadOffset(byte[] data) {
+        if (data.length >= 4 && data[0] == 0 && data[1] == 0) {
+            if (data[2] == 1) return 3;
+            if (data[2] == 0 && data[3] == 1) return 4;
+        }
+        return 0;
     }
 
     static boolean containsNalType(byte[] data, int wantedType) {

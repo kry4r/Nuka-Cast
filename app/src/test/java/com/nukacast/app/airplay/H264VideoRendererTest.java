@@ -56,6 +56,26 @@ public final class H264VideoRendererTest {
     }
 
     @Test
+    public void recognizesRepeatedSpsAndPpsWithoutResettingForPrefixLength() {
+        byte[] first = new byte[] {
+                0, 0, 0, 1, 0x67, 0x42, 0, 0x1f,
+                0, 0, 1, 0x68, (byte) 0xce, 0x3c, (byte) 0x80
+        };
+        byte[] sameParameters = new byte[] {
+                0, 0, 1, 0x67, 0x42, 0, 0x1f,
+                0, 0, 0, 1, 0x68, (byte) 0xce, 0x3c, (byte) 0x80
+        };
+        byte[] changedPps = new byte[] {
+                0, 0, 1, 0x67, 0x42, 0, 0x1f,
+                0, 0, 1, 0x68, (byte) 0xce, 0x3c, (byte) 0x81
+        };
+
+        assertTrue(H264VideoRenderer.sameCodecConfiguration(first, sameParameters));
+        assertFalse(H264VideoRenderer.sameCodecConfiguration(first, changedPps));
+        assertFalse(H264VideoRenderer.sameCodecConfiguration(null, first));
+    }
+
+    @Test
     public void identifiesIdrAcrossThreeAndFourByteStartCodes() {
         assertTrue(H264VideoRenderer.containsNalType(
                 new byte[] {0, 0, 1, 0x65, 1, 2, 3}, 5));
