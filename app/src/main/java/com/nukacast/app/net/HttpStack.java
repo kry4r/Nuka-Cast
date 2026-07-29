@@ -2,10 +2,16 @@ package com.nukacast.app.net;
 
 import android.os.Build;
 
+import org.conscrypt.Conscrypt;
+
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -49,8 +55,11 @@ public final class HttpStack {
                 .retryOnConnectionFailure(true);
         if (Build.VERSION.SDK_INT < 22) {
             try {
-                X509TrustManager trustManager = platformTrustManager();
-                SSLContext context = SSLContext.getInstance("TLS");
+                X509TrustManager trustManager = new FallbackTrustManager(
+                        platformTrustManager(), bundledTrustManager());
+                SSLContext context = usesBundledConscrypt(Build.VERSION.SDK_INT)
+                        ? SSLContext.getInstance("TLS", Conscrypt.newProvider())
+                        : SSLContext.getInstance("TLS");
                 context.init(null, new TrustManager[] {trustManager}, null);
                 builder.sslSocketFactory(new Tls12SocketFactory(
                                 context.getSocketFactory(), Build.VERSION.SDK_INT), trustManager)
@@ -66,9 +75,33 @@ public final class HttpStack {
     }
 
     private static X509TrustManager platformTrustManager() throws Exception {
+        return trustManager(null);
+    }
+
+    static X509TrustManager bundledTrustManager() throws Exception {
+        InputStream input = HttpStack.class.getResourceAsStream(
+                "/com/nukacast/app/net/digicert_global_root_g2.pem");
+        if (input == null) throw new IOException("缺少 DigiCert Global Root G2 证书资源");
+        try {
+            Certificate certificate = CertificateFactory.getInstance("X.509")
+                    .generateCertificate(input);
+            KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+            store.load(null, null);
+            store.setCertificateEntry("digicert-global-root-g2", certificate);
+            return trustManager(store);
+        } finally {
+            input.close();
+        }
+    }
+
+    static boolean usesBundledConscrypt(int sdk) {
+        return sdk >= 16 && sdk < 22;
+    }
+
+    private static X509TrustManager trustManager(KeyStore store) throws Exception {
         TrustManagerFactory factory = TrustManagerFactory.getInstance(
                 TrustManagerFactory.getDefaultAlgorithm());
-        factory.init((KeyStore) null);
+        factory.init(store);
         for (TrustManager manager : factory.getTrustManagers()) {
             if (manager instanceof X509TrustManager) return (X509TrustManager) manager;
         }

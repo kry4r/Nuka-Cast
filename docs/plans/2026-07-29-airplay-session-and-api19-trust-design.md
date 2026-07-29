@@ -53,9 +53,10 @@ receiver restart.
 
 Bundle the official DigiCert Global Root G2 certificate. On SDK 16-21, construct
 a composite `X509TrustManager` that first attempts the Android platform trust
-manager and then a trust manager backed only by the bundled root. Use that
-composite manager in the existing TLS 1.2 socket factory. SDK 22 and newer keep
-their platform defaults.
+manager and then a trust manager backed only by the bundled root. Use the
+application Conscrypt provider for this legacy SSL context because the API 19
+system provider has no AES-GCM suites while the reported JAR redirect endpoint
+accepts only AES-GCM over TLS 1.2. SDK 22 and newer keep their platform defaults.
 
 This does not add a trust-all verifier. OkHttp hostname verification remains
 enabled, unrelated unknown roots remain rejected, redirects are verified per

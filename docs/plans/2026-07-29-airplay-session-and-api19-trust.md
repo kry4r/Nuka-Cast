@@ -99,8 +99,9 @@ git commit -m "fix: keep static AirPlay sessions connected"
 ### Task 3: Add Strict DigiCert G2 Trust on API 19
 
 **Files:**
+- Modify: `app/build.gradle`
 - Create: `app/src/main/java/com/nukacast/app/net/FallbackTrustManager.java`
-- Create: `app/src/main/res/raw/digicert_global_root_g2.pem`
+- Create: `app/src/main/resources/com/nukacast/app/net/digicert_global_root_g2.pem`
 - Create: `app/src/test/java/com/nukacast/app/net/FallbackTrustManagerTest.java`
 - Modify: `app/src/main/java/com/nukacast/app/net/HttpStack.java`
 - Temporarily create, then delete: `app/src/androidTest/java/com/nukacast/app/spider/ReportedJarApi19Test.java`
@@ -126,7 +127,7 @@ Expected: compilation fails because `FallbackTrustManager` does not exist.
 
 Create a package-private `FallbackTrustManager` that tries the primary manager and catches only `CertificateException` before trying the fallback. Do not add a hostname verifier or trust-all path.
 
-Add the official PEM certificate from `https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem`. In `HttpStack`, load it with `CertificateFactory`, insert it into an in-memory `KeyStore`, create a second `X509TrustManager`, then initialize the API 16-21 `SSLContext` with `new FallbackTrustManager(platform, bundled)`.
+Add the official PEM certificate from `https://cacerts.digicert.com/DigiCertGlobalRootG2.crt.pem`. In `HttpStack`, load it with `CertificateFactory`, insert it into an in-memory `KeyStore`, and create a second `X509TrustManager`. Add the official `conscrypt-android` dependency and initialize the API 16-21 Conscrypt `SSLContext` with `new FallbackTrustManager(platform, bundled)`, providing AES-GCM without changing global providers.
 
 **Step 4: Run unit tests to verify green**
 
@@ -149,7 +150,7 @@ Expected: one API 19 test passes. Delete the temporary live-site test afterward 
 **Step 6: Commit**
 
 ```powershell
-git add app/src/main/java/com/nukacast/app/net app/src/main/res/raw/digicert_global_root_g2.pem app/src/test/java/com/nukacast/app/net
+git add app/build.gradle app/src/main/java/com/nukacast/app/net app/src/main/resources/com/nukacast/app/net/digicert_global_root_g2.pem app/src/test/java/com/nukacast/app/net
 git commit -m "fix: trust modern DigiCert chains on Android 4"
 ```
 

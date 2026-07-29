@@ -102,6 +102,7 @@ dependencies {
     implementation "com.google.code.gson:gson:2.10.1"
     implementation "org.jsoup:jsoup:1.13.1"
     implementation "com.squareup.okhttp3:okhttp:3.12.13"
+    implementation "org.conscrypt:conscrypt-android:2.5.3"
     implementation "org.nanohttpd:nanohttpd:2.3.1"
     implementation "org.nanohttpd:nanohttpd-websocket:2.3.1"
     implementation "io.github.taoweiji.quickjs:quickjs-android:1.4.6"
