@@ -2,6 +2,7 @@ package com.nukacast.app.airplay;
 
 import org.junit.Test;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
@@ -9,10 +10,25 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
 
 public final class H264VideoRendererTest {
+    @Test
+    public void api19UsesCachedLegacyInputBuffers() {
+        assertTrue(H264VideoRenderer.usesLegacyInputBuffers(19));
+        assertFalse(H264VideoRenderer.usesLegacyInputBuffers(21));
+    }
+
+    @Test
+    public void selectsCachedInputBufferWithoutRefreshingCodecBuffers() {
+        ByteBuffer second = ByteBuffer.allocate(8);
+
+        assertSame(second, H264VideoRenderer.cachedInputBuffer(
+                new ByteBuffer[] {ByteBuffer.allocate(4), second}, 1));
+    }
+
     @Test
     public void prefersGoogleWhenFallingBackAcrossSoftwareDecoders() {
         ArrayList<String> decoders = new ArrayList<String>(Arrays.asList(

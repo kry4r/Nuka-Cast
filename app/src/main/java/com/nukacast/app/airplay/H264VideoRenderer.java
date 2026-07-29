@@ -4,6 +4,7 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.view.Surface;
 
 import com.nukacast.app.diagnostics.AppLog;
@@ -44,6 +45,7 @@ final class H264VideoRenderer {
     private long decoderInputsAtStart;
     private long decoderOutputsAtStart;
     private boolean waitingForKeyFrame = true;
+    private ByteBuffer[] legacyInputBuffers;
 
     H264VideoRenderer() {
         thread = new Thread(new Runnable() {
@@ -113,7 +115,6 @@ final class H264VideoRenderer {
         running = false;
         thread.interrupt();
         try { thread.join(1000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
-        releaseDecoder();
         queue.clear();
     }
 
@@ -131,44 +132,54 @@ final class H264VideoRenderer {
     boolean softwareFallback() { return softwareFallback; }
 
     private void decodeLoop() {
-        while (running) {
-            try {
-                if (decoderResetRequested) {
-                    decoderResetRequested = false;
-                    releaseDecoder();
-                    waitingForKeyFrame = true;
-                }
-                Frame frame = queue.poll(10, TimeUnit.MILLISECONDS);
-                if (frame == null) {
+        try {
+            while (running) {
+                try {
+                    if (decoderResetRequested) {
+                        decoderResetRequested = false;
+                        releaseDecoder();
+                        waitingForKeyFrame = true;
+                    }
+                    Frame frame = queue.poll(10, TimeUnit.MILLISECONDS);
+                    if (frame == null) {
+                        drain();
+                        maybeFallback();
+                        continue;
+                    }
+                    if (frame.type == 0) continue;
+                    if (decoder == null && !createDecoder(softwareFallback)) {
+                        if (containsNalType(frame.data, 5)) pendingKeyFrame = frame;
+                        dropped.incrementAndGet();
+                        continue;
+                    }
+                    boolean keyFrame = containsNalType(frame.data, 5);
+                    if (waitingForKeyFrame && !keyFrame) {
+                        dropped.incrementAndGet();
+                        continue;
+                    }
+                    waitingForKeyFrame = false;
+                    if (keyFrame) pendingKeyFrame = null;
+                    queueInput(frame);
                     drain();
                     maybeFallback();
-                    continue;
-                }
-                if (frame.type == 0) continue;
-                if (decoder == null && !createDecoder(softwareFallback)) {
-                    if (containsNalType(frame.data, 5)) pendingKeyFrame = frame;
+                } catch (InterruptedException ignored) {
+                    if (!running) return;
+                } catch (RuntimeException failure) {
                     dropped.incrementAndGet();
-                    continue;
+                    this.error = failure.getMessage() == null
+                            ? failure.getClass().getSimpleName() : failure.getMessage();
+                    AppLog.e("AirPlay 视频", "解码循环异常：" + this.error, failure);
+                    releaseDecoder();
+                    waitingForKeyFrame = true;
+                    Frame recovery = retainedKeyFrame;
+                    if (recovery != null) {
+                        queue.clear();
+                        queue.offer(recovery);
+                    }
                 }
-                boolean keyFrame = containsNalType(frame.data, 5);
-                if (waitingForKeyFrame && !keyFrame) {
-                    dropped.incrementAndGet();
-                    continue;
-                }
-                waitingForKeyFrame = false;
-                if (keyFrame) pendingKeyFrame = null;
-                queueInput(frame);
-                drain();
-                maybeFallback();
-            } catch (InterruptedException ignored) {
-                if (!running) return;
-            } catch (RuntimeException error) {
-                dropped.incrementAndGet();
-                this.error = error.getMessage() == null
-                        ? error.getClass().getSimpleName() : error.getMessage();
-                AppLog.e("AirPlay 视频", "解码循环异常：" + this.error, error);
-                releaseDecoder();
             }
+        } finally {
+            releaseDecoder();
         }
     }
 
@@ -200,7 +211,10 @@ final class H264VideoRenderer {
                     candidate.configure(format, target, null, 0);
                     candidate.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
                     candidate.start();
+                    ByteBuffer[] buffers = usesLegacyInputBuffers(Build.VERSION.SDK_INT)
+                            ? candidate.getInputBuffers() : null;
                     decoder = candidate;
+                    legacyInputBuffers = buffers;
                     decoderName = candidateName;
                     softwareFallback = isSoftwareCodec(candidateName);
                     videoWidth = dimensions.width;
@@ -243,7 +257,9 @@ final class H264VideoRenderer {
             dropped.incrementAndGet();
             return;
         }
-        ByteBuffer input = active.getInputBuffers()[index];
+        ByteBuffer input = usesLegacyInputBuffers(Build.VERSION.SDK_INT)
+                ? cachedInputBuffer(legacyInputBuffers, index) : active.getInputBuffer(index);
+        if (input == null) throw new IllegalStateException("H.264 输入缓冲区不可用");
         input.clear();
         if (frame.data.length > input.remaining()) {
             active.queueInputBuffer(index, 0, 0, timestamp(frame.ptsUs), 0);
@@ -306,11 +322,23 @@ final class H264VideoRenderer {
         return candidate;
     }
 
-    private synchronized void releaseDecoder() {
+    private void releaseDecoder() {
         if (decoder == null) return;
         try { decoder.stop(); } catch (RuntimeException ignored) {}
         try { decoder.release(); } catch (RuntimeException ignored) {}
         decoder = null;
+        legacyInputBuffers = null;
+    }
+
+    static boolean usesLegacyInputBuffers(int sdk) {
+        return sdk < 21;
+    }
+
+    static ByteBuffer cachedInputBuffer(ByteBuffer[] buffers, int index) {
+        if (buffers == null || index < 0 || index >= buffers.length || buffers[index] == null) {
+            throw new IllegalStateException("H.264 输入缓冲区不可用");
+        }
+        return buffers[index];
     }
 
     private static List<String> decoderNames(boolean softwareOnly) {
