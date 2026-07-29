@@ -1,5 +1,6 @@
 package com.nukacast.app.airplay;
 
+import android.annotation.TargetApi;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -258,7 +259,7 @@ final class H264VideoRenderer {
             return;
         }
         ByteBuffer input = usesLegacyInputBuffers(Build.VERSION.SDK_INT)
-                ? cachedInputBuffer(legacyInputBuffers, index) : active.getInputBuffer(index);
+                ? cachedInputBuffer(legacyInputBuffers, index) : inputBuffer(active, index);
         if (input == null) throw new IllegalStateException("H.264 输入缓冲区不可用");
         input.clear();
         if (frame.data.length > input.remaining()) {
@@ -339,6 +340,11 @@ final class H264VideoRenderer {
             throw new IllegalStateException("H.264 输入缓冲区不可用");
         }
         return buffers[index];
+    }
+
+    @TargetApi(21)
+    private static ByteBuffer inputBuffer(MediaCodec codec, int index) {
+        return codec.getInputBuffer(index);
     }
 
     private static List<String> decoderNames(boolean softwareOnly) {
