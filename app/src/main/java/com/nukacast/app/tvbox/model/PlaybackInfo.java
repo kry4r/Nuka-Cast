@@ -9,6 +9,7 @@ public final class PlaybackInfo {
     public String url = "";
     public int parse;
     public boolean direct;
+    public String sniffUrl = "";
     public String error = "";
     public Map<String, String> headers = new LinkedHashMap<String, String>();
 }

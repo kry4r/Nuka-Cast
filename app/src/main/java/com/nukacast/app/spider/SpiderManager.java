@@ -3,14 +3,18 @@ package com.nukacast.app.spider;
 import android.content.Context;
 
 import com.github.catvod.crawler.Spider;
+import com.github.catvod.crawler.SpiderApi;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Collections;
@@ -32,16 +36,23 @@ import okhttp3.Response;
 public final class SpiderManager {
     private static final long RECHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L;
     private static final int MAX_JAR_BYTES = 20 * 1024 * 1024;
-    private static final int MAX_SESSIONS = 16;
+    private static final int MAX_SESSIONS = 64;
     private static final long CALL_TIMEOUT_SECONDS = 10L;
     private final Context context;
     private final JarTrustStore trustStore;
     private final Map<String, SpiderSession> sessions = new HashMap<String, SpiderSession>();
+    private final Map<String, LoadedJar> loadedJars = new HashMap<String, LoadedJar>();
+    private final Map<String, Spider> siteSpiders = new HashMap<String, Spider>();
+    private final Map<String, LoadedJar> siteJars = new HashMap<String, LoadedJar>();
     private final ExecutorService calls = Executors.newFixedThreadPool(4);
+    private LoadedJar recentJar;
+    private Spider recentSpider;
 
     public SpiderManager(Context context) {
         this.context = context.getApplicationContext();
         this.trustStore = new JarTrustStore(this.context);
+        com.github.catvod.SpiderContext.set(this.context);
+        com.github.catvod.Proxy.set(com.nukacast.app.core.NukaRuntime.CONTROL_PORT);
     }
 
     public String search(final TvBoxConfig.Site site, final String keyword, final int page)
@@ -76,11 +87,19 @@ public final class SpiderManager {
 
     public String play(final TvBoxConfig.Site site, final String flag, final String id)
             throws Exception {
+        return play(site, flag, id, Collections.<String>emptyList());
+    }
+
+    public String play(final TvBoxConfig.Site site, final String flag, final String id,
+                       final List<String> vipFlags) throws Exception {
         return invoke(new Callable<String>() {
             @Override public String call() throws Exception {
                 SpiderSession session = session(site);
                 synchronized (session) {
-                    return session.play(flag, id, Collections.<String>emptyList());
+                    String result = session.play(flag, id, vipFlags == null
+                            ? Collections.<String>emptyList() : vipFlags);
+                    pinProxy(site);
+                    return result;
                 }
             }
         });
@@ -93,6 +112,11 @@ public final class SpiderManager {
             } catch (RuntimeException ignored) {}
         }
         sessions.clear();
+        siteSpiders.clear();
+        siteJars.clear();
+        loadedJars.clear();
+        recentJar = null;
+        recentSpider = null;
         calls.shutdownNow();
     }
 
@@ -126,9 +150,16 @@ public final class SpiderManager {
         while (iterator.hasNext()) {
             Map.Entry<String, SpiderSession> entry = iterator.next();
             if (!entry.getKey().startsWith(spec + "|")) continue;
+            if (entry.getValue() instanceof JavaSpiderSession) {
+                removeSpider((JavaSpiderSession) entry.getValue());
+            }
             try { entry.getValue().destroy(); } catch (RuntimeException ignored) {}
             iterator.remove();
         }
+        LoadedJar removed = loadedJars.remove(spec);
+        Iterator<Map.Entry<String, LoadedJar>> jars = siteJars.entrySet().iterator();
+        while (jars.hasNext()) if (jars.next().getValue() == removed) jars.remove();
+        if (recentJar == removed) recentJar = null;
     }
 
     private synchronized SpiderSession session(TvBoxConfig.Site site) throws Exception {
@@ -146,30 +177,105 @@ public final class SpiderManager {
             throw new IllegalStateException("站点未配置 Spider JAR");
         }
         String className = spiderClassName(site.api);
-        String sessionKey = jarSpec + "|" + className + "|" + site.extension();
+        LoadedJar loaded = loadedJar(jarSpec);
+        String sessionKey = jarSpec + "|" + safe(site.key) + "|" + className
+                + "|" + site.extension();
         SpiderSession existing = sessions.get(sessionKey);
-        if (existing != null) {
-            return existing;
-        }
+        if (existing != null) return existing;
         if (sessions.size() >= MAX_SESSIONS) throw new IllegalStateException("Spider 会话数已达上限");
 
+        Class<?> type = loaded.loader.loadClass(className);
+        Object instance = type.newInstance();
+        if (!(instance instanceof Spider)) {
+            throw new IllegalStateException(className + " 未继承 CatVod Spider");
+        }
+        Spider spider = (Spider) instance;
+        spider.siteKey = safe(site.key);
+        spider.initApi(new SpiderApi(context));
+        spider.init(context, site.extension());
+        SpiderSession created = new JavaSpiderSession(spider);
+        sessions.put(sessionKey, created);
+        siteSpiders.put(safe(site.key), spider);
+        siteJars.put(siteIdentity(site), loaded);
+        return created;
+    }
+
+    private synchronized void pinProxy(TvBoxConfig.Site site) {
+        recentJar = siteJars.get(siteIdentity(site));
+        recentSpider = siteSpiders.get(safe(site.key));
+    }
+
+    public synchronized Object[] proxy(Map<String, String> params) throws Exception {
+        if (params == null) return null;
+        if (params.containsKey("do")) {
+            Spider spider = siteSpiders.get(safe(params.get("siteKey")));
+            if (spider == null) spider = recentSpider;
+            return spider == null ? null : spider.proxyLocal(params);
+        }
+        if (params.containsKey("go") && recentJar != null && recentJar.proxy != null) {
+            try {
+                return (Object[]) recentJar.proxy.invoke(null, params);
+            } catch (InvocationTargetException error) {
+                throw cause(error);
+            }
+        }
+        return null;
+    }
+
+    private LoadedJar loadedJar(String jarSpec) throws Exception {
+        LoadedJar existing = loadedJars.get(jarSpec);
+        if (existing != null) return existing;
         File jar = obtainJar(jarSpec);
+        AppLog.i("Spider", "Spider JAR 已就绪");
+        if (!jar.setReadOnly() && jar.canWrite()) {
+            throw new IOException("无法保护 Spider JAR");
+        }
         File optimized = new File(context.getFilesDir(), "spider-dex");
         if (!optimized.exists() && !optimized.mkdirs()) {
             throw new IOException("无法创建 Spider DEX 目录");
         }
         DexClassLoader loader = new DexClassLoader(
                 jar.getAbsolutePath(), optimized.getAbsolutePath(), null, context.getClassLoader());
-        Class<?> type = loader.loadClass(className);
-        Object instance = type.newInstance();
-        if (!(instance instanceof Spider)) {
-            throw new IllegalStateException(className + " 未继承 CatVod Spider");
+        invokeJarInit(loader);
+        AppLog.d("Spider", "Spider JAR 初始化完成");
+        Method proxy = null;
+        try {
+            proxy = loader.loadClass("com.github.catvod.spider.Proxy")
+                    .getMethod("proxy", Map.class);
+        } catch (ClassNotFoundException ignored) {
+        } catch (NoSuchMethodException ignored) {
         }
-        Spider spider = (Spider) instance;
-        spider.init(context, site.extension());
-        SpiderSession created = new JavaSpiderSession(spider);
-        sessions.put(sessionKey, created);
-        return created;
+        LoadedJar loaded = new LoadedJar(loader, proxy);
+        loadedJars.put(jarSpec, loaded);
+        return loaded;
+    }
+
+    private void invokeJarInit(DexClassLoader loader) throws Exception {
+        try {
+            Class<?> init = loader.loadClass("com.github.catvod.spider.Init");
+            Method method = init.getMethod("init", Context.class);
+            method.invoke(null, context);
+        } catch (ClassNotFoundException ignored) {
+        } catch (NoSuchMethodException ignored) {
+        } catch (InvocationTargetException error) {
+            throw cause(error);
+        }
+    }
+
+    private void removeSpider(JavaSpiderSession session) {
+        Spider spider = session.spider();
+        Iterator<Map.Entry<String, Spider>> entries = siteSpiders.entrySet().iterator();
+        while (entries.hasNext()) {
+            if (entries.next().getValue() == spider) entries.remove();
+        }
+        if (recentSpider == spider) recentSpider = null;
+    }
+
+    private static Exception cause(InvocationTargetException error) {
+        Throwable cause = error.getCause();
+        if (cause instanceof Exception) return (Exception) cause;
+        if (cause instanceof Error) throw (Error) cause;
+        return new Exception(cause);
     }
 
     private File obtainJar(String spec) throws IOException {
@@ -203,6 +309,7 @@ public final class SpiderManager {
             }
             content = ResponseBodies.bytes(response.body(), MAX_JAR_BYTES);
         }
+        AppLog.i("Spider", "Spider JAR 下载完成，大小 " + content.length + " 字节");
         if (!jarSpec.matches(content)) {
             throw new SecurityException("Spider JAR " + jarSpec.algorithm.toUpperCase(
                     java.util.Locale.US) + " 不匹配");
@@ -272,6 +379,10 @@ public final class SpiderManager {
 
     private static String safe(String value) { return value == null ? "" : value; }
 
+    private static String siteIdentity(TvBoxConfig.Site site) {
+        return safe(site.sourceId) + "|" + safe(site.key);
+    }
+
     static final class JarSpec {
         final String url;
         final String algorithm;
@@ -325,9 +436,23 @@ public final class SpiderManager {
         Future<T> future = calls.submit(operation);
         try {
             return future.get(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw interrupted;
         } catch (TimeoutException timeout) {
             future.cancel(true);
             throw new IOException("Spider 执行超时", timeout);
+        }
+    }
+
+    private static final class LoadedJar {
+        final DexClassLoader loader;
+        final Method proxy;
+
+        LoadedJar(DexClassLoader loader, Method proxy) {
+            this.loader = loader;
+            this.proxy = proxy;
         }
     }
 }

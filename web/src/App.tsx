@@ -4,6 +4,7 @@ import {
   Cast,
   CircleAlert,
   Film,
+  FileWarning,
   Gauge,
   HardDrive,
   Library,
@@ -26,7 +27,7 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, AUTH_EXPIRED_EVENT, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, AUTH_EXPIRED_EVENT, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
@@ -34,7 +35,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "search" | "live" | "sources" | "storage" | "device"
+type View = "overview" | "search" | "live" | "sources" | "storage" | "device" | "logs"
 
 const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "overview", label: "总览", icon: Gauge },
@@ -43,6 +44,7 @@ const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "sources", label: "源管理", icon: Library },
   { id: "storage", label: "存储", icon: HardDrive },
   { id: "device", label: "设备", icon: MonitorCog },
+  { id: "logs", label: "日志", icon: FileWarning },
 ]
 
 export default function App() {
@@ -119,6 +121,7 @@ export default function App() {
         {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
         {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
         {view === "device" && <DeviceView setError={setError} />}
+        {view === "logs" && <LogView setError={setError} />}
         </div>
       </main>
     </div>
@@ -694,6 +697,96 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
 
 function DiagnosticFact({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 px-4 py-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 break-words text-sm font-medium">{value}</div></div>
+}
+
+const logFilters: { value: "ALL" | LogLevel; label: string }[] = [
+  { value: "ALL", label: "全部" },
+  { value: "DEBUG", label: "调试" },
+  { value: "INFO", label: "信息" },
+  { value: "WARN", label: "警告" },
+  { value: "ERROR", label: "错误" },
+]
+
+function LogView({ setError }: { setError: (value: string) => void }) {
+  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [filter, setFilter] = useState<"ALL" | LogLevel>("ALL")
+  const [refreshing, setRefreshing] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      setEntries(await api.logs())
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setRefreshing(false)
+    }
+  }, [setError])
+
+  useEffect(() => {
+    void refresh()
+    const timer = window.setInterval(refresh, 5000)
+    return () => window.clearInterval(timer)
+  }, [refresh])
+
+  const visible = useMemo(() => filter === "ALL"
+    ? entries : entries.filter((entry) => entry.level === filter), [entries, filter])
+
+  const clear = async () => {
+    setClearing(true)
+    try {
+      await api.clearLogs()
+      setEntries([])
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <>
+      <PageHeader title="错误日志" action={
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">{visible.length} / {entries.length}</Badge>
+          <Button variant="outline" size="icon" title="刷新日志" disabled={refreshing} onClick={refresh}>
+            <RefreshCw className={refreshing ? "animate-spin" : ""} />
+          </Button>
+          <Button variant="outline" size="icon" title="清空日志" disabled={clearing || entries.length === 0} onClick={clear}>
+            {clearing ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+          </Button>
+        </div>
+      } />
+      <div className="mb-4 flex flex-wrap gap-2">
+        {logFilters.map((item) => (
+          <Button key={item.value} size="sm" variant={filter === item.value ? "secondary" : "outline"}
+            onClick={() => setFilter(item.value)}>{item.label}</Button>
+        ))}
+      </div>
+      <section className="divide-y rounded-md border">
+        {visible.slice().reverse().map((entry, index) => (
+          <article key={`${entry.timestamp}-${index}`} className="p-4">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge variant={entry.level === "ERROR" ? "destructive" : "outline"}>{logLevelLabel(entry.level)}</Badge>
+              <span className="text-sm font-medium">{entry.component}</span>
+              <time className="text-xs text-muted-foreground">{new Date(entry.timestamp).toLocaleString("zh-CN", { hour12: false })}</time>
+            </div>
+            <div className="break-words text-sm leading-6">{entry.message}</div>
+            {entry.trace && <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap border-t pt-3 text-xs leading-5 text-muted-foreground">{entry.trace}</pre>}
+          </article>
+        ))}
+        {visible.length === 0 && <Empty icon={FileWarning} label="当前级别暂无日志" compact />}
+      </section>
+    </>
+  )
+}
+
+function logLevelLabel(level: LogLevel) {
+  if (level === "DEBUG") return "调试"
+  if (level === "INFO") return "信息"
+  if (level === "WARN") return "警告"
+  return "错误"
 }
 
 function sourceLabel(source: Source, allSources: Source[]) {

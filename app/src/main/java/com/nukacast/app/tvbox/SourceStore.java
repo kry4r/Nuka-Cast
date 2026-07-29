@@ -18,10 +18,9 @@ import java.util.Set;
 public final class SourceStore {
     private static final String PREFS = "tvbox_sources";
     private static final String KEY_SOURCES = "sources";
-    private static final String KEY_DEFAULTS_MIGRATED = "defaults_migrated_v2";
+    private static final String KEY_USER_MANAGED_MIGRATED = "user_managed_sources_v1";
     private static final int MAX_WAREHOUSE_CHILDREN = 64;
-    public static final String DEFAULT_SOURCE_NAME = "小盒子多仓";
-    public static final String DEFAULT_SOURCE_URL = "http://xhztv.top/dc";
+    static final String REMOVED_BUILT_IN_URL = "http://xhztv.top/dc";
     private static final Type SOURCE_LIST = new TypeToken<List<ConfigSource>>() {}.getType();
 
     private final SharedPreferences preferences;
@@ -29,7 +28,7 @@ public final class SourceStore {
 
     public SourceStore(Context context) {
         preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        ensureDefaults();
+        removeLegacyBuiltIn();
     }
 
     public synchronized List<ConfigSource> getSources() {
@@ -63,15 +62,6 @@ public final class SourceStore {
         return source;
     }
 
-    public synchronized ConfigSource restoreDefault() {
-        for (ConfigSource source : getSources()) {
-            if (DEFAULT_SOURCE_URL.equals(source.url)) {
-                return source;
-            }
-        }
-        return add(DEFAULT_SOURCE_NAME, DEFAULT_SOURCE_URL);
-    }
-
     public synchronized void update(ConfigSource updated) {
         normalize(updated);
         List<ConfigSource> sources = getSources();
@@ -101,16 +91,19 @@ public final class SourceStore {
         return merged;
     }
 
-    private synchronized void ensureDefaults() {
-        boolean migrated = preferences.getBoolean(KEY_DEFAULTS_MIGRATED, false);
-        List<ConfigSource> sources = getSources();
-        if (migrated) return;
-        if (shouldRestoreDefault(migrated, sources)) restoreDefault();
-        preferences.edit().putBoolean(KEY_DEFAULTS_MIGRATED, true).apply();
+    private synchronized void removeLegacyBuiltIn() {
+        if (preferences.getBoolean(KEY_USER_MANAGED_MIGRATED, false)) return;
+        save(removeBuiltInTree(getSources(), REMOVED_BUILT_IN_URL));
+        preferences.edit().putBoolean(KEY_USER_MANAGED_MIGRATED, true).apply();
     }
 
-    static boolean shouldRestoreDefault(boolean migrated, List<ConfigSource> sources) {
-        return sources == null || sources.isEmpty();
+    static List<ConfigSource> removeBuiltInTree(List<ConfigSource> sources, String url) {
+        if (sources == null || sources.isEmpty()) return Collections.emptyList();
+        List<ConfigSource> result = new ArrayList<ConfigSource>(sources);
+        for (ConfigSource source : sources) {
+            if (url.equals(source.url) && !source.isChild()) result = removeTree(result, source.id);
+        }
+        return result;
     }
 
     static List<ConfigSource> mergeChildren(List<ConfigSource> current, ConfigSource parent,

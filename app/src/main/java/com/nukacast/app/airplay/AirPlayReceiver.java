@@ -6,6 +6,7 @@ import android.os.Looper;
 import android.view.SurfaceHolder;
 
 import com.nukacast.app.core.AppState;
+import com.nukacast.app.diagnostics.AppLog;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -62,17 +63,18 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         stopped = false;
         state = "starting";
         error = "";
+        AppLog.i("AirPlay", "正在启动接收器");
         try {
             bridge.start();
-            publisher.start(bridge.port(), bridge.publicKey());
             session.receiverStarted();
-            state = "ready";
+            publishOrWait();
             appState.updateActiveMedia("");
         } catch (Exception failure) {
             publisher.stop();
             bridge.stop();
             state = "error";
             error = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+            AppLog.e("AirPlay", "接收器启动失败：" + error, failure);
             throw failure;
         }
     }
@@ -86,6 +88,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         appState.updateActiveMedia("");
         video.flush();
         audio.flush();
+        AppLog.i("AirPlay", "接收器已停止");
     }
 
     public void disconnectSession() {
@@ -146,6 +149,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         int result = session.recordPacket(System.currentTimeMillis());
         if (result == AirPlaySessionState.PACKET_REJECTED) return false;
         if (result == AirPlaySessionState.PACKET_STARTED) {
+            AppLog.i("AirPlay", "镜像会话开始接收数据");
             mainHandler.post(new Runnable() {
                 @Override public void run() {
                     if (onSessionStart != null) onSessionStart.run();
@@ -161,6 +165,11 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     }
 
     private void checkIdle() {
+        if (!stopped && !session.isActive() && publisher.needsPublish()) {
+            synchronized (this) {
+                if (!stopped && !session.isActive()) publishOrWait();
+            }
+        }
         if (session.isIdle(System.currentTimeMillis(), 2000L)) {
             endSession();
             scheduleRestart();
@@ -168,10 +177,12 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     }
 
     private void endSession() {
+        boolean wasActive = session.isActive();
         session.disconnect();
         video.flush();
         audio.flush();
         appState.updateActiveMedia("");
+        if (wasActive) AppLog.i("AirPlay", "镜像会话已结束");
     }
 
     private synchronized void restartNativeReceiver() {
@@ -183,16 +194,36 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         if (stopped) return;
         try {
             bridge.start();
-            publisher.start(bridge.port(), bridge.publicKey());
             session.receiverStarted();
-            state = "ready";
+            publishOrWait();
         } catch (Exception failure) {
             publisher.stop();
             bridge.stop();
             state = "error";
             error = failure.getMessage() == null
                     ? failure.getClass().getSimpleName() : failure.getMessage();
+            AppLog.e("AirPlay", "接收器重启失败：" + error, failure);
             appState.updateActiveMedia("");
+        }
+    }
+
+    private void publishOrWait() {
+        String previousState = state;
+        String previousError = error;
+        try {
+            publisher.start(bridge.port(), bridge.publicKey());
+            state = "ready";
+            error = "";
+            if (!"ready".equals(previousState)) {
+                AppLog.i("AirPlay", "接收器已发布，可被 iOS 发现，端口 " + bridge.port());
+            }
+        } catch (Exception failure) {
+            state = "waiting_network";
+            error = failure.getMessage() == null
+                    ? failure.getClass().getSimpleName() : failure.getMessage();
+            if (!"waiting_network".equals(previousState) || !error.equals(previousError)) {
+                AppLog.w("AirPlay", "等待可用局域网后重新发布：" + error, failure);
+            }
         }
     }
 

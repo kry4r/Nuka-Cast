@@ -70,6 +70,9 @@ public final class ConfigDecoder {
         if (config.parses == null) {
             config.parses = new java.util.ArrayList<TvBoxConfig.ParseEndpoint>();
         }
+        if (config.flags == null) {
+            config.flags = new java.util.ArrayList<String>();
+        }
     }
 
     public JsonObject decodeTree(String content) {

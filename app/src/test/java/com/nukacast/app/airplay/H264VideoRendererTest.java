@@ -2,6 +2,8 @@ package com.nukacast.app.airplay;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -11,6 +13,18 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
 
 public final class H264VideoRendererTest {
+    @Test
+    public void prefersGoogleWhenFallingBackAcrossSoftwareDecoders() {
+        ArrayList<String> decoders = new ArrayList<String>(Arrays.asList(
+                "OMX.vendor.h264.sw.decoder", "OMX.google.h264.decoder"));
+
+        H264VideoRenderer.moveGoogleDecoderFirst(decoders);
+
+        assertEquals("OMX.google.h264.decoder", decoders.get(0));
+        assertEquals("OMX.vendor.h264.sw.decoder", decoders.get(1));
+        assertTrue(H264VideoRenderer.isSoftwareCodec("OMX.vendor.h264.sw.decoder"));
+    }
+
     @Test
     public void extractsSpsAndPpsFromAnnexBConfig() {
         byte[] config = new byte[] {

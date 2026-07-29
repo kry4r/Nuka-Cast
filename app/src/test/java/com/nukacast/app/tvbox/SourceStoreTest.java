@@ -14,18 +14,18 @@ import static org.junit.Assert.assertTrue;
 
 public final class SourceStoreTest {
     @Test
-    public void unmigratedEmptyInstallRestoresDefault() {
-        List<ConfigSource> empty = new ArrayList<ConfigSource>();
-        List<ConfigSource> populated = new ArrayList<ConfigSource>();
-        populated.add(new ConfigSource("自定义", "https://example.com/tvbox.json"));
+    public void removesOnlyLegacyBuiltInTreeAndKeepsUserSources() {
+        ConfigSource builtIn = source("built-in", "Old built in", SourceStore.REMOVED_BUILT_IN_URL);
+        builtIn.kind = ConfigSource.KIND_WAREHOUSE;
+        ConfigSource child = source("child", "Child", "https://example.com/child.json");
+        child.parentId = builtIn.id;
+        ConfigSource user = source("user", "User", "https://example.com/user.json");
 
-        assertTrue(SourceStore.shouldRestoreDefault(false, empty));
-        assertFalse(SourceStore.shouldRestoreDefault(false, populated));
-    }
+        List<ConfigSource> result = SourceStore.removeBuiltInTree(
+                Arrays.asList(builtIn, child, user), SourceStore.REMOVED_BUILT_IN_URL);
 
-    @Test
-    public void emptyListAlwaysRestoresBuiltInSource() {
-        assertTrue(SourceStore.shouldRestoreDefault(true, new ArrayList<ConfigSource>()));
+        assertEquals(1, result.size());
+        assertEquals("user", result.get(0).id);
     }
 
     @Test

@@ -52,6 +52,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".tvbox.SniffingActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/AppTheme"
+            tools:ignore="DiscouragedApi" />
+
         <service
             android:name=".service.NukaCastService"
             android:enabled="true"

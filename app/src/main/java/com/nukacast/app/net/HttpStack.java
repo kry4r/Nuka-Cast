@@ -34,6 +34,10 @@ public final class HttpStack {
         return CLIENT;
     }
 
+    public static Dns dns() {
+        return IPV4_DNS;
+    }
+
     private static OkHttpClient createClient() {
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .dns(IPV4_DNS)
@@ -43,7 +47,7 @@ public final class HttpStack {
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true);
-        if (Build.VERSION.SDK_INT >= 16 && Build.VERSION.SDK_INT < 22) {
+        if (Build.VERSION.SDK_INT < 22) {
             try {
                 X509TrustManager trustManager = platformTrustManager();
                 SSLContext context = SSLContext.getInstance("TLS");

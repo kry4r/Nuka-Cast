@@ -5,6 +5,7 @@ import android.content.Context;
 import com.google.gson.Gson;
 import com.google.gson.JsonPrimitive;
 import com.nukacast.app.BuildConfig;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.model.ConfigSource;
@@ -218,6 +219,7 @@ public final class TvBoxRepository {
                 sourceStore.synchronizeChildren(source, document.warehouses);
                 deleteCache(source.id);
                 pruneConfigsAndCaches();
+                AppLog.i("片源", "仓库刷新成功 [" + safe(source.name) + "]");
                 return null;
             }
 
@@ -236,12 +238,16 @@ public final class TvBoxRepository {
                 pruneConfigsAndCaches();
             }
             saveCache(source.id, content);
+            AppLog.i("片源", "配置刷新成功 [" + safe(source.name) + "]："
+                    + config.sites.size() + " 个站点");
             return config;
         } catch (Exception error) {
             source.error = message(error);
             source.updatedAt = System.currentTimeMillis();
             source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
             sourceStore.update(source);
+            AppLog.w("片源", "配置刷新失败 [" + safe(source.name) + "]："
+                    + source.error, error);
             if (error instanceof IOException) throw (IOException) error;
             throw new IOException(source.error, error);
         }

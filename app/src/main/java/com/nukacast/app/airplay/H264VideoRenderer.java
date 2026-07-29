@@ -6,7 +6,11 @@ import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.view.Surface;
 
+import com.nukacast.app.diagnostics.AppLog;
+
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -162,6 +166,7 @@ final class H264VideoRenderer {
                 dropped.incrementAndGet();
                 this.error = error.getMessage() == null
                         ? error.getClass().getSimpleName() : error.getMessage();
+                AppLog.e("AirPlay 视频", "解码循环异常：" + this.error, error);
                 releaseDecoder();
             }
         }
@@ -171,6 +176,7 @@ final class H264VideoRenderer {
         Surface target = surface;
         byte[] config = codecConfig;
         if (target == null || !target.isValid() || config == null) return false;
+        Exception lastFailure = null;
         try {
             byte[] sps = parameterSet(config, 7);
             byte[] pps = parameterSet(config, 8);
@@ -182,26 +188,48 @@ final class H264VideoRenderer {
                     Math.max(2 * 1024 * 1024, dimensions.width * dimensions.height));
             format.setByteBuffer("csd-0", ByteBuffer.wrap(sps));
             format.setByteBuffer("csd-1", ByteBuffer.wrap(pps));
-            String selectedName = findDecoderName(forceSoftware);
-            if (selectedName == null) {
+            List<String> candidates = decoderNames(forceSoftware);
+            if (candidates.isEmpty()) {
                 throw new IllegalStateException(forceSoftware
-                        ? "设备没有 OMX.google.h264.decoder" : "设备没有 H.264 解码器");
+                        ? "设备没有 H.264 软件解码器" : "设备没有 H.264 解码器");
             }
-            decoderName = selectedName;
-            decoder = MediaCodec.createByCodecName(selectedName);
-            decoder.configure(format, target, null, 0);
-            decoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
-            decoder.start();
-            videoWidth = dimensions.width;
-            videoHeight = dimensions.height;
-            decoderStartedAtMs = System.currentTimeMillis();
-            decoderInputsAtStart = decoderInputs.get();
-            decoderOutputsAtStart = decoderOutputs.get();
-            error = "";
-            return true;
+            for (String candidateName : candidates) {
+                MediaCodec candidate = null;
+                try {
+                    candidate = MediaCodec.createByCodecName(candidateName);
+                    candidate.configure(format, target, null, 0);
+                    candidate.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
+                    candidate.start();
+                    decoder = candidate;
+                    decoderName = candidateName;
+                    softwareFallback = isSoftwareCodec(candidateName);
+                    videoWidth = dimensions.width;
+                    videoHeight = dimensions.height;
+                    decoderStartedAtMs = System.currentTimeMillis();
+                    decoderInputsAtStart = decoderInputs.get();
+                    decoderOutputsAtStart = decoderOutputs.get();
+                    error = "";
+                    AppLog.i("AirPlay 视频", "使用 " + candidateName + " 解码 "
+                            + dimensions.width + "x" + dimensions.height
+                            + (softwareFallback ? "（软件）" : "（硬件）"));
+                    return true;
+                } catch (Exception failure) {
+                    lastFailure = failure;
+                    AppLog.d("AirPlay 视频", "解码器不可用：" + candidateName + " · "
+                            + (failure.getMessage() == null
+                            ? failure.getClass().getSimpleName() : failure.getMessage()));
+                    if (candidate != null) {
+                        try { candidate.stop(); } catch (RuntimeException ignored) {}
+                        try { candidate.release(); } catch (RuntimeException ignored) {}
+                    }
+                }
+            }
+            throw lastFailure == null
+                    ? new IllegalStateException("H.264 解码器启动失败") : lastFailure;
         } catch (Exception error) {
             this.error = error.getMessage() == null
                     ? error.getClass().getSimpleName() : error.getMessage();
+            AppLog.e("AirPlay 视频", "H.264 解码器启动失败：" + this.error, error);
             releaseDecoder();
             return false;
         }
@@ -253,12 +281,16 @@ final class H264VideoRenderer {
         if (!fallbackPolicy.shouldFallback(decoderName, inputs, outputs, elapsed)) return;
 
         Frame recovery = retainedKeyFrame;
+        String failedDecoder = decoderName;
         softwareFallback = true;
         releaseDecoder();
         waitingForKeyFrame = true;
+        AppLog.w("AirPlay 视频", "硬解码器 " + failedDecoder
+                + " 无输出，正在切换软件解码器");
         if (!createDecoder(true)) return;
         if (recovery == null) {
             error = "硬解码器无输出，软件解码器正在等待 IDR";
+            AppLog.w("AirPlay 视频", error);
             return;
         }
         waitingForKeyFrame = false;
@@ -281,22 +313,30 @@ final class H264VideoRenderer {
         decoder = null;
     }
 
-    private static String findDecoderName(boolean software) {
-        String fallback = null;
+    private static List<String> decoderNames(boolean softwareOnly) {
+        List<String> hardware = new ArrayList<String>();
+        List<String> software = new ArrayList<String>();
         int count = MediaCodecList.getCodecCount();
         for (int i = 0; i < count; i++) {
             MediaCodecInfo info = MediaCodecList.getCodecInfoAt(i);
             if (info.isEncoder() || !supportsAvc(info)) continue;
             String name = info.getName();
-            if (software) {
-                if ("OMX.google.h264.decoder".equalsIgnoreCase(name)) return name;
-            } else if (!isSoftwareCodec(name)) {
-                return name;
-            } else if (fallback == null) {
-                fallback = name;
-            }
+            if (isSoftwareCodec(name)) software.add(name);
+            else hardware.add(name);
         }
-        return software ? null : fallback;
+        moveGoogleDecoderFirst(software);
+        if (softwareOnly) return software;
+        hardware.addAll(software);
+        return hardware;
+    }
+
+    static void moveGoogleDecoderFirst(List<String> decoders) {
+        for (int i = 0; i < decoders.size(); i++) {
+            if (!"OMX.google.h264.decoder".equalsIgnoreCase(decoders.get(i))) continue;
+            String google = decoders.remove(i);
+            decoders.add(0, google);
+            return;
+        }
     }
 
     private static boolean supportsAvc(MediaCodecInfo info) {
@@ -306,10 +346,11 @@ final class H264VideoRenderer {
         return false;
     }
 
-    private static boolean isSoftwareCodec(String codecName) {
+    static boolean isSoftwareCodec(String codecName) {
         String name = codecName == null ? "" : codecName.toLowerCase(java.util.Locale.US);
         return name.startsWith("omx.google.") || name.contains("software")
-                || name.contains("ffmpeg");
+                || name.contains("ffmpeg") || name.contains(".sw.")
+                || name.contains(".soft.") || name.startsWith("c2.android.");
     }
 
     static byte[] parameterSet(byte[] data, int wantedType) {

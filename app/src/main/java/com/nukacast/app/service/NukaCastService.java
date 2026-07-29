@@ -14,6 +14,7 @@ import com.nukacast.app.NukaCastApp;
 import com.nukacast.app.R;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.tvbox.TvBoxRepository;
 
 public final class NukaCastService extends Service {
@@ -41,6 +42,7 @@ public final class NukaCastService extends Service {
                 }
             });
         } catch (Exception error) {
+            AppLog.e("服务", "接收服务启动失败", error);
             runtime.getState().updateService(AppState.ServiceState.ERROR,
                     error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
         }

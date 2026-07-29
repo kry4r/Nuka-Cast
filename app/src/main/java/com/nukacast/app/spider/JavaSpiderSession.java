@@ -12,6 +12,10 @@ final class JavaSpiderSession implements SpiderSession {
         this.spider = spider;
     }
 
+    Spider spider() {
+        return spider;
+    }
+
     @Override public String home(boolean filter) throws Exception {
         return spider.homeContent(filter);
     }

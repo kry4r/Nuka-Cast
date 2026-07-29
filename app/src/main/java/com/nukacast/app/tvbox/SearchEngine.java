@@ -2,6 +2,7 @@ package com.nukacast.app.tvbox;
 
 import android.content.Context;
 
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.spider.SpiderManager;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.SearchItem;
@@ -78,6 +79,7 @@ public final class SearchEngine {
             Future<SiteOutcome> future = futures.get(i);
             if (future.isCancelled()) {
                 TvBoxConfig.Site site = sites.get(i);
+                AppLog.w("搜索", "站点搜索超时 [" + site.name + "]");
                 response.failedSites++;
                 response.partial = true;
                 response.errors.add(new SearchResponse.SiteError(site.key, site.name, "搜索超时"));
@@ -86,6 +88,8 @@ public final class SearchEngine {
             try {
                 SiteOutcome outcome = future.get();
                 if (outcome.error != null) {
+                    AppLog.w("搜索", "站点搜索失败 [" + outcome.site.name + "]："
+                            + message(outcome.error), outcome.error);
                     response.failedSites++;
                     response.errors.add(new SearchResponse.SiteError(
                             outcome.site.key, outcome.site.name, message(outcome.error)));
@@ -94,6 +98,7 @@ public final class SearchEngine {
                 successfulItems.add(outcome.items);
                 successfulSiteCount++;
             } catch (Exception error) {
+                AppLog.w("搜索", "搜索任务失败：" + message(error), error);
                 response.failedSites++;
                 response.partial = true;
             }

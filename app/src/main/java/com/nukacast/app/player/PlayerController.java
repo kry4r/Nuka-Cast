@@ -14,6 +14,7 @@ import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
 import com.nukacast.app.core.AppState;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.net.HttpStack;
 
 import java.util.Collections;
@@ -170,6 +171,7 @@ public final class PlayerController {
             url = mediaUrl;
             error = "";
             state = "loading";
+            AppLog.i("播放器", "开始播放：" + (title.isEmpty() ? "未命名媒体" : title));
             appState.updateActiveMedia(title);
 
             OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(httpClient())
@@ -211,6 +213,7 @@ public final class PlayerController {
                         state = "error";
                         error = failure.getErrorCodeName() + ": "
                                 + (failure.getMessage() == null ? "播放失败" : failure.getMessage());
+                        AppLog.e("播放器", error, failure);
                         reportProgress();
                         appState.updateActiveMedia("");
                     }

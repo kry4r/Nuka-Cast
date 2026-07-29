@@ -7,6 +7,11 @@
     <string name="nav_settings">设置</string>
     <string name="status_ready">等待连接</string>
     <string name="search_hint">搜索电影、电视剧、综艺</string>
+    <string name="search_initial_title">首字母搜索</string>
+    <string name="search_initial_hint">输入首字母或片名</string>
+    <string name="search_initial_empty">输入首字母开始搜索</string>
+    <string name="search_in_progress">正在搜索 “%1$s”…</string>
+    <string name="search_result_summary">“%1$s” · %2$d 个结果 · %3$d 个站点</string>
     <string name="network_checking">正在检查网络</string>
     <string name="loading_home">正在整理首页内容…</string>
     <string name="filter_all">全部</string>
@@ -25,9 +30,8 @@
     <string name="device_checking">检测中</string>
     <string name="source_health">片源状态</string>
     <string name="source_empty">0 个配置源</string>
-    <string name="source_web_note">可恢复内置源；添加和删除其他配置源请使用网页控制。</string>
+    <string name="source_web_note">配置源完全由用户管理；请在网页控制的“源管理”中添加接口地址。</string>
     <string name="refresh_sources">刷新全部配置源</string>
-    <string name="restore_default_source">恢复内置源</string>
     <string name="privacy_title">网页配对</string>
     <string name="privacy_note">清除后，已配对的浏览器需要重新输入六位码。</string>
     <string name="clear_pairing">清除已配对浏览器</string>
@@ -42,4 +46,7 @@
     <string name="appearance_title">外观</string>
     <string name="appearance_note">深色与浅色主题</string>
     <string name="theme_toggle">切换主题</string>
+    <string name="diagnostics_title">错误日志</string>
+    <string name="diagnostics_note">查看 AirPlay、播放和片源解析的分级诊断记录。</string>
+    <string name="view_logs">查看日志</string>
 </resources>

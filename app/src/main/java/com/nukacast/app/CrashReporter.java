@@ -3,6 +3,8 @@ package com.nukacast.app;
 import android.content.Context;
 import android.os.Build;
 
+import com.nukacast.app.diagnostics.AppLog;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -23,6 +25,7 @@ public final class CrashReporter {
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override public void uncaughtException(Thread thread, Throwable error) {
+                AppLog.e("崩溃", "线程 " + thread.getName() + " 发生未捕获异常", error);
                 write(appContext, thread, error);
                 if (previous != null) previous.uncaughtException(thread, error);
             }

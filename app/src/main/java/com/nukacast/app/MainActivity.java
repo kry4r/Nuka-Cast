@@ -12,7 +12,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
-import android.text.InputType;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -22,14 +23,13 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,6 +37,7 @@ import com.nukacast.app.airplay.AirPlayReceiver;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.DeviceProfile;
 import com.nukacast.app.core.NukaRuntime;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.library.LibraryItem;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.service.NukaCastService;
@@ -46,12 +47,12 @@ import com.nukacast.app.tvbox.model.PlaybackInfo;
 import com.nukacast.app.tvbox.model.SearchItem;
 import com.nukacast.app.tvbox.model.SearchQuery;
 import com.nukacast.app.tvbox.model.SearchResponse;
+import com.nukacast.app.tvbox.SniffingActivity;
 import com.nukacast.app.ui.MediaCardView;
 import com.nukacast.app.ui.PosterImageLoader;
 import com.nukacast.app.ui.TvTheme;
 
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -62,8 +63,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final int REQUEST_STORAGE_PERMISSION = 4101;
     private static final int REQUEST_MANAGE_STORAGE = 4102;
     private static final int REQUEST_NOTIFICATIONS = 4103;
+    private static final int REQUEST_SNIFF_PLAYBACK = 4104;
     private static final String PAGE_HOME = "home";
     private static final String PAGE_MOVIES = "movies";
+    private static final String PAGE_SEARCH = "search";
     private static final String PAGE_CAST = "cast";
     private static final String PAGE_SETTINGS = "settings";
 
@@ -74,10 +77,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private View appShell;
     private View homePage;
     private View moviesPage;
+    private View searchPage;
     private View castPage;
     private View settingsPage;
     private LinearLayout homeContent;
     private LinearLayout moviesContent;
+    private LinearLayout searchResults;
+    private GridLayout searchKeyboard;
+    private EditText searchKeyword;
+    private TextView searchStatus;
     private TextView homeLoading;
     private TextView serviceStatus;
     private TextView networkStatus;
@@ -98,14 +106,20 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private View castPlaybackOverlay;
     private Button castStopOverlay;
     private Button refreshSourcesButton;
-    private Button restoreDefaultSourceButton;
     private Button scanStorageButton;
     private Button themeToggleButton;
+    private Button viewLogsButton;
     private String currentPage = PAGE_HOME;
     private String currentMovieFilter = "";
     private boolean homeRequestRunning;
     private boolean homeLoaded;
     private int lastSiteCount = -1;
+    private PendingPlayback pendingPlayback;
+    private final Handler searchHandler = new Handler(Looper.getMainLooper());
+    private int searchGeneration;
+    private final Runnable delayedSearch = new Runnable() {
+        @Override public void run() { searchFromKeyboard(); }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,6 +158,25 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_MANAGE_STORAGE && hasStoragePermission()) scanStorage();
+        if (requestCode == REQUEST_SNIFF_PLAYBACK) {
+            PendingPlayback pending = pendingPlayback;
+            pendingPlayback = null;
+            String url = data == null ? "" : safe(data.getStringExtra(SniffingActivity.RESULT_URL));
+            if (resultCode == RESULT_OK && pending != null && !url.isEmpty()) {
+                mergeSniffHeader(pending.info.headers, "Cookie", data,
+                        SniffingActivity.RESULT_COOKIE);
+                mergeSniffHeader(pending.info.headers, "Referer", data,
+                        SniffingActivity.RESULT_REFERER);
+                mergeSniffHeader(pending.info.headers, "User-Agent", data,
+                        SniffingActivity.RESULT_USER_AGENT);
+                completePlayback(pending, url);
+            } else {
+                String error = data == null ? "未嗅探到媒体地址" : safe(data.getStringExtra("error"));
+                AppLog.w("解析", error.isEmpty() ? "未嗅探到媒体地址" : error);
+                Toast.makeText(this, error.isEmpty() ? "未嗅探到媒体地址" : error,
+                        Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
     @Override
@@ -200,7 +233,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_SEARCH) {
-            showSearchDialog();
+            showSearchPage();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
@@ -251,10 +284,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         appShell = findViewById(R.id.appShell);
         homePage = findViewById(R.id.homePage);
         moviesPage = findViewById(R.id.moviesPage);
+        searchPage = findViewById(R.id.searchPage);
         castPage = findViewById(R.id.castPage);
         settingsPage = findViewById(R.id.settingsPage);
         homeContent = (LinearLayout) findViewById(R.id.homeContent);
         moviesContent = (LinearLayout) findViewById(R.id.moviesContent);
+        searchResults = (LinearLayout) findViewById(R.id.searchResults);
+        searchKeyboard = (GridLayout) findViewById(R.id.searchKeyboard);
+        searchKeyword = (EditText) findViewById(R.id.searchKeyword);
+        searchStatus = (TextView) findViewById(R.id.searchStatus);
         homeLoading = (TextView) findViewById(R.id.homeLoading);
         serviceStatus = (TextView) findViewById(R.id.serviceStatus);
         networkStatus = (TextView) findViewById(R.id.networkStatus);
@@ -266,9 +304,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
         storageSummary = (TextView) findViewById(R.id.storageSummary);
         refreshSourcesButton = (Button) findViewById(R.id.refreshSourcesButton);
-        restoreDefaultSourceButton = (Button) findViewById(R.id.restoreDefaultSourceButton);
         scanStorageButton = (Button) findViewById(R.id.scanStorageButton);
         themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
+        viewLogsButton = (Button) findViewById(R.id.viewLogsButton);
         videoSurface = (SurfaceView) findViewById(R.id.videoSurface);
         castPlaybackOverlay = findViewById(R.id.castPlaybackOverlay);
         castStopOverlay = (Button) findViewById(R.id.castStopOverlay);
@@ -288,8 +326,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void onClick(View view) { showPage(PAGE_SETTINGS); }
         });
         findViewById(R.id.searchButton).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showSearchDialog(); }
+            @Override public void onClick(View view) { showSearchPage(); }
         });
+        buildSearchKeyboard();
 
         bindFilter(R.id.filterAll, "");
         bindFilter(R.id.filterMovie, "电影");
@@ -300,9 +339,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
         });
-        restoreDefaultSourceButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { restoreDefaultSource(); }
-        });
         scanStorageButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { scanStorage(); }
         });
@@ -311,6 +347,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 TvTheme.toggle(MainActivity.this);
                 recreate();
             }
+        });
+        viewLogsButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showLogViewer(); }
         });
         castStopOverlay.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
@@ -336,6 +375,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         currentPage = page;
         homePage.setVisibility(PAGE_HOME.equals(page) ? View.VISIBLE : View.GONE);
         moviesPage.setVisibility(PAGE_MOVIES.equals(page) ? View.VISIBLE : View.GONE);
+        searchPage.setVisibility(PAGE_SEARCH.equals(page) ? View.VISIBLE : View.GONE);
         castPage.setVisibility(PAGE_CAST.equals(page) ? View.VISIBLE : View.GONE);
         settingsPage.setVisibility(PAGE_SETTINGS.equals(page) ? View.VISIBLE : View.GONE);
         findViewById(R.id.navHome).setSelected(PAGE_HOME.equals(page));
@@ -640,69 +680,77 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return result;
     }
 
-    private void showSearchDialog() {
-        final LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(24), dp(8), dp(24), 0);
+    private void showSearchPage() {
+        showPage(PAGE_SEARCH);
+        if (searchKeyboard.getChildCount() > 2) searchKeyboard.getChildAt(2).requestFocus();
+        else searchKeyword.requestFocus();
+    }
 
-        final EditText keyword = new EditText(this);
-        keyword.setSingleLine(true);
-        keyword.setHint("片名、演员或关键词");
-        keyword.setInputType(InputType.TYPE_CLASS_TEXT);
-        content.addView(keyword, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
-
-        final String[] types = {"全部类型", "电影", "电视剧", "综艺", "动漫"};
-        final Spinner type = spinner(types);
-        addField(content, "类型", type);
-
-        int year = Calendar.getInstance().get(Calendar.YEAR);
-        String[] years = {"全部年份", String.valueOf(year), String.valueOf(year - 1),
-                String.valueOf(year - 2), String.valueOf(year - 3), "2020", "2010"};
-        final Spinner yearSpinner = spinner(years);
-        addField(content, "年份", yearSpinner);
-
-        final String[] regions = {"全部地区", "中国大陆", "中国香港", "中国台湾", "美国", "日本", "韩国"};
-        final Spinner region = spinner(regions);
-        addField(content, "地区", region);
-
-        final AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("全站搜索")
-                .setView(content)
-                .setNegativeButton("取消", null)
-                .setPositiveButton("搜索", null)
-                .create();
-        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
-            @Override public void onShow(DialogInterface ignored) {
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View view) {
-                        String value = keyword.getText().toString().trim();
-                        if (value.isEmpty()) {
-                            keyword.setError("请输入搜索关键词");
-                            return;
-                        }
-                        SearchQuery query = new SearchQuery();
-                        query.keyword = value;
-                        query.contentType = selected(type, types, "全部类型");
-                        query.year = selected(yearSpinner, null, "全部年份");
-                        query.region = selected(region, regions, "全部地区");
-                        dialog.dismiss();
-                        performSearch(query);
-                    }
-                });
-                keyword.requestFocus();
+    private void buildSearchKeyboard() {
+        searchKeyboard.removeAllViews();
+        String[] keys = {"清空", "退格", "A", "B", "C", "D", "E", "F", "G", "H",
+                "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
+                "W", "X", "Y", "Z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "搜索"};
+        for (final String key : keys) {
+            Button button = new Button(this);
+            button.setText(key);
+            button.setTextSize(key.length() > 1 ? 13 : 16);
+            button.setTextColor(TvTheme.primary(this));
+            button.setAllCaps(false);
+            button.setFocusable(true);
+            button.setBackgroundDrawable(TvTheme.focusable(this));
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+            params.width = key.length() > 1 ? dp(98) : dp(44);
+            params.height = dp(42);
+            params.setMargins(dp(3), dp(3), dp(3), dp(3));
+            if ("清空".equals(key) || "退格".equals(key) || "搜索".equals(key)) {
+                params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 2);
             }
-        });
-        dialog.getWindow();
-        dialog.show();
+            button.setLayoutParams(params);
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { pressSearchKey(key); }
+            });
+            searchKeyboard.addView(button);
+        }
+    }
+
+    private void pressSearchKey(String key) {
+        String current = searchKeyword.getText().toString();
+        if ("清空".equals(key)) searchKeyword.setText("");
+        else if ("退格".equals(key)) {
+            if (!current.isEmpty()) searchKeyword.setText(current.substring(0, current.length() - 1));
+        } else if ("搜索".equals(key)) {
+            searchHandler.removeCallbacks(delayedSearch);
+            searchFromKeyboard();
+            return;
+        } else {
+            searchKeyword.append(key);
+        }
+        searchKeyword.setSelection(searchKeyword.length());
+        searchHandler.removeCallbacks(delayedSearch);
+        if (searchKeyword.length() > 0) searchHandler.postDelayed(delayedSearch, 450L);
+        else {
+            searchGeneration++;
+            searchResults.removeAllViews();
+            searchStatus.setText(R.string.search_initial_empty);
+        }
+    }
+
+    private void searchFromKeyboard() {
+        String keyword = searchKeyword.getText().toString().trim();
+        if (keyword.isEmpty()) return;
+        SearchQuery query = new SearchQuery();
+        query.keyword = keyword;
+        List<ConfigSource> ranked = runtime.getTvBoxRepository().getRankedLeafSources();
+        if (!ranked.isEmpty()) query.sourceId = ranked.get(0).id;
+        performSearch(query);
     }
 
     private void performSearch(final SearchQuery query) {
-        showPage(PAGE_MOVIES);
-        currentMovieFilter = "";
-        setFilterSelection("");
-        moviesContent.removeAllViews();
-        moviesContent.addView(bodyText("正在全站搜索“" + query.keyword + "”…"));
+        showPage(PAGE_SEARCH);
+        final int generation = ++searchGeneration;
+        searchResults.removeAllViews();
+        searchStatus.setText(getString(R.string.search_in_progress, query.keyword));
         io.execute(new Runnable() {
             @Override public void run() {
                 try {
@@ -710,9 +758,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     runtime.sourceHealthChanged();
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
-                            String title = "“" + query.keyword + "” · " + response.items.size()
-                                    + " 个结果 · " + response.searchedSites + " 个站点";
-                            renderMovieGrid(title, response.items);
+                            if (generation != searchGeneration) return;
+                            searchStatus.setText(getString(R.string.search_result_summary,
+                                    query.keyword, response.items.size(), response.searchedSites));
+                            renderGrid(searchResults, response.items,
+                                    Math.max(2, gridColumns() - 2), "没有找到匹配内容");
                             if (response.partial) {
                                 Toast.makeText(MainActivity.this, "部分站点超时或不可用", Toast.LENGTH_SHORT).show();
                             }
@@ -720,11 +770,45 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     });
                 } catch (final Exception error) {
                     runOnUiThread(new Runnable() {
-                        @Override public void run() { showError("搜索失败", error); }
+                        @Override public void run() {
+                            if (generation != searchGeneration) return;
+                            searchStatus.setText("搜索失败");
+                            showError("搜索失败", error);
+                        }
                     });
                 }
             }
         });
+    }
+
+    private void renderGrid(LinearLayout target, List<SearchItem> items, int columns,
+                            String emptyMessage) {
+        target.removeAllViews();
+        if (items.isEmpty()) {
+            TextView empty = bodyText(emptyMessage);
+            empty.setPadding(0, dp(22), 0, 0);
+            target.addView(empty);
+            return;
+        }
+        LinearLayout row = null;
+        for (int i = 0; i < items.size(); i++) {
+            if (i % columns == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setClipChildren(false);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(302));
+                rowParams.bottomMargin = dp(14);
+                target.addView(row, rowParams);
+            }
+            final SearchItem item = items.get(i);
+            MediaCardView card = card(item, 0, 0);
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { openMedia(item); }
+            });
+            bindFavoriteShortcut(card, item);
+            row.addView(card, cardParams());
+        }
     }
 
     private void openMedia(final SearchItem item) {
@@ -835,13 +919,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     final String title = detail.name + " · " + episode.name;
                     final PlaybackInfo info = runtime.getContentService().resolve(detail.sourceId,
                             detail.siteKey, source.name, episode.id, title);
-                    if (!info.direct) throw new IllegalArgumentException(
-                            info.error.isEmpty() ? "无法解析播放地址" : info.error);
-                    runtime.getMediaLibrary().start(detail, source.name, episode.id, episode.name);
-                    runtime.getPlayerController().play(MainActivity.this, info.url, title,
-                            info.headers, startPositionMs);
                     runOnUiThread(new Runnable() {
-                        @Override public void run() { renderHome(); }
+                        @Override public void run() {
+                            PendingPlayback pending = PendingPlayback.episode(title, info,
+                                    startPositionMs, detail, source, episode);
+                            if (info.direct) completePlayback(pending, info.url);
+                            else startSniffing(pending);
+                        }
                     });
                 } catch (final Exception error) {
                     runOnUiThread(new Runnable() {
@@ -861,11 +945,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                             ? "" : " · " + item.episodeName);
                     final PlaybackInfo info = runtime.getContentService().resolve(item.sourceId,
                             item.siteKey, item.playSource, item.episodeId, title);
-                    if (!info.direct) throw new IllegalArgumentException(
-                            info.error.isEmpty() ? "无法解析播放地址" : info.error);
-                    runtime.getMediaLibrary().start(item, item.playSource, item.episodeId, item.episodeName);
-                    runtime.getPlayerController().play(MainActivity.this, info.url, title,
-                            info.headers, item.positionMs);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            PendingPlayback pending = PendingPlayback.resume(title, info, item);
+                            if (info.direct) completePlayback(pending, info.url);
+                            else startSniffing(pending);
+                        }
+                    });
                 } catch (final Exception error) {
                     runOnUiThread(new Runnable() {
                         @Override public void run() { showError("续播失败", error); }
@@ -873,6 +959,80 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
             }
         });
+    }
+
+    private void startSniffing(PendingPlayback pending) {
+        if (pending.info.sniffUrl.isEmpty()) {
+            showError("播放失败", new IllegalArgumentException(pending.info.error.isEmpty()
+                    ? "配置没有可用解析器" : pending.info.error));
+            return;
+        }
+        pendingPlayback = pending;
+        Intent intent = new Intent(this, SniffingActivity.class);
+        intent.putExtra(SniffingActivity.EXTRA_URL, pending.info.sniffUrl);
+        intent.putExtra(SniffingActivity.EXTRA_USER_AGENT,
+                header(pending.info.headers, "User-Agent"));
+        startActivityForResult(intent, REQUEST_SNIFF_PLAYBACK);
+    }
+
+    private void completePlayback(PendingPlayback pending, String url) {
+        if (pending.detail != null) {
+            runtime.getMediaLibrary().start(pending.detail, pending.source.name,
+                    pending.episode.id, pending.episode.name);
+        } else if (pending.resume != null) {
+            runtime.getMediaLibrary().start(pending.resume, pending.resume.playSource,
+                    pending.resume.episodeId, pending.resume.episodeName);
+        }
+        runtime.getPlayerController().play(this, url, pending.title,
+                pending.info.headers, pending.startPositionMs);
+        renderHome();
+    }
+
+    private static String header(java.util.Map<String, String> headers, String name) {
+        if (headers == null) return "";
+        for (java.util.Map.Entry<String, String> entry : headers.entrySet()) {
+            if (name.equalsIgnoreCase(entry.getKey())) return entry.getValue();
+        }
+        return "";
+    }
+
+    private static void mergeSniffHeader(java.util.Map<String, String> headers, String name,
+                                         Intent data, String extra) {
+        if (headers == null || data == null || !header(headers, name).isEmpty()) return;
+        String value = safe(data.getStringExtra(extra));
+        if (!value.isEmpty()) headers.put(name, value);
+    }
+
+    private static final class PendingPlayback {
+        String title;
+        PlaybackInfo info;
+        int startPositionMs;
+        MediaDetail detail;
+        MediaDetail.PlaySource source;
+        MediaDetail.Episode episode;
+        LibraryItem resume;
+
+        static PendingPlayback episode(String title, PlaybackInfo info, int startPositionMs,
+                                       MediaDetail detail, MediaDetail.PlaySource source,
+                                       MediaDetail.Episode episode) {
+            PendingPlayback value = new PendingPlayback();
+            value.title = title;
+            value.info = info;
+            value.startPositionMs = startPositionMs;
+            value.detail = detail;
+            value.source = source;
+            value.episode = episode;
+            return value;
+        }
+
+        static PendingPlayback resume(String title, PlaybackInfo info, LibraryItem item) {
+            PendingPlayback value = new PendingPlayback();
+            value.title = title;
+            value.info = info;
+            value.startPositionMs = item.positionMs;
+            value.resume = item;
+            return value;
+        }
     }
 
     private void bindFavoriteShortcut(MediaCardView card, final SearchItem item) {
@@ -888,6 +1048,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void refreshSources() {
+        AppLog.i("片源", "开始刷新全部配置源");
         refreshSourcesButton.setEnabled(false);
         refreshSourcesButton.setText("正在刷新…");
         runtime.getTvBoxRepository().refreshAllAsync(new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
@@ -895,55 +1056,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 runtime.contentChanged();
             }
             @Override public void onRefreshComplete(final int configs, final int sites) {
+                AppLog.i("片源", "配置源刷新完成：" + configs + " 个配置，" + sites + " 个站点");
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         refreshSourcesButton.setEnabled(true);
                         refreshSourcesButton.setText("刷新全部配置源");
                         Toast.makeText(MainActivity.this, "片源刷新完成", Toast.LENGTH_SHORT).show();
                         loadHome(true);
-                    }
-                });
-            }
-        });
-    }
-
-    private void restoreDefaultSource() {
-        restoreDefaultSourceButton.setEnabled(false);
-        restoreDefaultSourceButton.setText("正在恢复…");
-        io.execute(new Runnable() {
-            @Override public void run() {
-                final ConfigSource source = runtime.getSourceStore().restoreDefault();
-                String failure = "";
-                try {
-                    runtime.getTvBoxRepository().refresh(source);
-                } catch (Exception error) {
-                    failure = error.getMessage() == null
-                            ? error.getClass().getSimpleName() : error.getMessage();
-                }
-                final String message = failure;
-                runtime.contentChanged();
-                if (source.isWarehouse()) {
-                    runtime.getTvBoxRepository().refreshChildrenAsync(source.id,
-                            new com.nukacast.app.tvbox.TvBoxRepository.RefreshListener() {
-                                @Override public void onSourceRefreshed(int configs, int sites) {
-                                    runtime.contentChanged();
-                                }
-                                @Override public void onRefreshComplete(int configs, int sites) {
-                                    runOnUiThread(new Runnable() {
-                                        @Override public void run() { loadHome(true); }
-                                    });
-                                }
-                            });
-                }
-                runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        restoreDefaultSourceButton.setEnabled(true);
-                        restoreDefaultSourceButton.setText("恢复内置源");
-                        Toast.makeText(MainActivity.this, message.isEmpty()
-                                        ? "已恢复并刷新内置源"
-                                        : "已恢复内置源，刷新失败：" + message,
-                                Toast.LENGTH_LONG).show();
-                        if (message.isEmpty()) loadHome(true);
                     }
                 });
             }
@@ -1125,28 +1244,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return button;
     }
 
-    private Spinner spinner(String[] values) {
-        Spinner spinner = new Spinner(this);
-        spinner.setAdapter(new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_dropdown_item, values));
-        spinner.setFocusable(true);
-        return spinner;
-    }
-
-    private void addField(LinearLayout parent, String label, Spinner spinner) {
-        TextView title = bodyText(label);
-        title.setPadding(0, dp(12), 0, dp(4));
-        parent.addView(title);
-        parent.addView(spinner, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(46)));
-    }
-
-    private String selected(Spinner spinner, String[] ignored, String allLabel) {
-        Object value = spinner.getSelectedItem();
-        String text = value == null ? "" : value.toString();
-        return allLabel.equals(text) ? "" : text;
-    }
-
     private void setFavoriteLabel(Button button, MediaDetail detail) {
         boolean favorite = runtime.getMediaLibrary()
                 .isFavorite(detail.sourceId, detail.siteKey, detail.vodId);
@@ -1165,7 +1262,99 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void showError(String prefix, Throwable error) {
         String detail = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        AppLog.e("界面", prefix + "：" + detail, error);
         Toast.makeText(this, prefix + "：" + detail, Toast.LENGTH_LONG).show();
+    }
+
+    private void showLogViewer() {
+        final LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(28), dp(22), dp(28), dp(22));
+        root.setBackgroundResource(R.drawable.bg_panel);
+
+        TextView title = sectionTitle("错误日志 · 最近 500 条");
+        root.addView(title);
+
+        final TextView logText = bodyText("");
+        logText.setTextSize(13);
+        logText.setTypeface(Typeface.MONOSPACE);
+        logText.setTextIsSelectable(true);
+        logText.setPadding(dp(12), dp(10), dp(12), dp(18));
+
+        final AppLog.Level[] selected = new AppLog.Level[] {null};
+        final List<Button> filters = new ArrayList<Button>();
+        LinearLayout filterBar = new LinearLayout(this);
+        filterBar.setOrientation(LinearLayout.HORIZONTAL);
+        String[] labels = {"全部", "调试", "信息", "警告", "错误"};
+        final AppLog.Level[] levels = {null, AppLog.Level.DEBUG, AppLog.Level.INFO,
+                AppLog.Level.WARN, AppLog.Level.ERROR};
+        for (int i = 0; i < labels.length; i++) {
+            final int index = i;
+            Button filter = actionButton(labels[i], 92);
+            filter.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    selected[0] = levels[index];
+                    updateLogText(logText, selected[0]);
+                    for (int j = 0; j < filters.size(); j++) {
+                        filters.get(j).setSelected(j == index);
+                    }
+                }
+            });
+            filters.add(filter);
+            filterBar.addView(filter);
+        }
+        filters.get(0).setSelected(true);
+        root.addView(filterBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(50)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundResource(R.drawable.bg_focusable);
+        scroll.addView(logText, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        scrollParams.setMargins(0, dp(8), 0, dp(12));
+        root.addView(scroll, scrollParams);
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        final AlertDialog[] holder = new AlertDialog[1];
+        Button clear = actionButton("清空", 110);
+        Button close = actionButton("关闭", 110);
+        clear.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                AppLog.clear();
+                updateLogText(logText, selected[0]);
+            }
+        });
+        close.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                if (holder[0] != null) holder[0].dismiss();
+            }
+        });
+        actions.addView(clear);
+        actions.addView(close);
+        root.addView(actions, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48)));
+
+        updateLogText(logText, null);
+        AlertDialog dialog = new AlertDialog.Builder(this).setView(root).create();
+        holder[0] = dialog;
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface ignored) {
+                Window window = holder[0].getWindow();
+                if (window != null) window.setLayout(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+                filters.get(0).requestFocus();
+            }
+        });
+        dialog.show();
+    }
+
+    private void updateLogText(TextView view, AppLog.Level level) {
+        String value = AppLog.format(level);
+        view.setText(value.isEmpty() ? "当前级别暂无日志" : value);
     }
 
     private void showPreviousCrash() {

@@ -8,6 +8,7 @@ import com.nukacast.app.BuildConfig;
 import com.nukacast.app.CrashReporter;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.live.model.LiveCatalog;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.storage.StorageLibrary;
@@ -51,6 +52,11 @@ public final class ControlServer extends NanoHTTPD {
                 return decorate(newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, ""));
             }
             String path = session.getUri();
+            if (("/proxy".equals(path) || "/".equals(path))
+                    && (session.getParms().containsKey("do")
+                    || session.getParms().containsKey("go"))) {
+                return decorate(serveSpiderProxy(session));
+            }
             if (path.startsWith("/media/")) {
                 return decorate(serveStorageMedia(session, path.substring("/media/".length())));
             }
@@ -63,6 +69,7 @@ public final class ControlServer extends NanoHTTPD {
         } catch (IllegalArgumentException error) {
             return decorate(json(Response.Status.BAD_REQUEST, error(error.getMessage())));
         } catch (Exception error) {
+            AppLog.e("网页服务", "请求处理失败 [" + session.getUri() + "]", error);
             return decorate(json(Response.Status.INTERNAL_ERROR, error(message(error))));
         }
     }
@@ -90,6 +97,13 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/diagnostics".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, diagnostics());
+        }
+        if ("/api/logs".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, AppLog.snapshot(null));
+        }
+        if ("/api/logs".equals(path) && Method.DELETE.equals(session.getMethod())) {
+            AppLog.clear();
+            return json(Response.Status.OK, Collections.singletonMap("cleared", true));
         }
         if ("/api/sites".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getTvBoxRepository().getEnabledSites());
@@ -292,6 +306,40 @@ public final class ControlServer extends NanoHTTPD {
         response.addHeader("Accept-Ranges", "bytes");
         if (offset > 0) response.addHeader("Content-Range", "bytes " + offset + "-"
                 + (stream.totalLength - 1) + "/" + stream.totalLength);
+        return response;
+    }
+
+    private Response serveSpiderProxy(IHTTPSession session) throws Exception {
+        Map<String, String> params = new HashMap<String, String>(session.getParms());
+        params.putAll(session.getHeaders());
+        Object[] result = runtime.getSpiderManager().proxy(params);
+        if (result == null || result.length < 3) {
+            return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT,
+                    "Spider proxy returned no response");
+        }
+        if (result[0] instanceof Response) return (Response) result[0];
+        int code = result[0] instanceof Number ? ((Number) result[0]).intValue() : 500;
+        Response.Status status = Response.Status.lookup(code);
+        if (status == null) status = Response.Status.INTERNAL_ERROR;
+        String mime = result[1] == null ? MIME_PLAINTEXT : String.valueOf(result[1]);
+        InputStream input;
+        if (result[2] instanceof InputStream) {
+            input = (InputStream) result[2];
+        } else if (result[2] instanceof byte[]) {
+            input = new ByteArrayInputStream((byte[]) result[2]);
+        } else {
+            String value = result[2] == null ? "" : String.valueOf(result[2]);
+            input = new ByteArrayInputStream(value.getBytes(UTF_8));
+        }
+        Response response = newChunkedResponse(status, mime, input);
+        if (result.length >= 4 && result[3] instanceof Map) {
+            Map<?, ?> headers = (Map<?, ?>) result[3];
+            for (Map.Entry<?, ?> header : headers.entrySet()) {
+                if (header.getKey() != null && header.getValue() != null) {
+                    response.addHeader(String.valueOf(header.getKey()), String.valueOf(header.getValue()));
+                }
+            }
+        }
         return response;
     }
 

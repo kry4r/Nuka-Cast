@@ -7,6 +7,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.spider.SpiderManager;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.MediaDetail;
@@ -25,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -95,6 +97,8 @@ public final class TvBoxContentService {
                         return result;
                     } catch (Throwable error) {
                         homeFailures.failure(site, error);
+                        AppLog.w("片源", "首页站点失败 [" + safe(site.name) + "]："
+                                + message(error), error);
                         return Collections.emptyList();
                     }
                 }
@@ -107,12 +111,15 @@ public final class TvBoxContentService {
             Future<List<SearchItem>> future = futures.get(i);
             if (future.isCancelled()) {
                 homeFailures.failure(selected.get(i), "首页请求超时");
+                AppLog.w("片源", "首页站点超时 [" + safe(selected.get(i).name) + "]");
                 continue;
             }
             try {
                 groups.add(future.get());
             } catch (Exception error) {
                 homeFailures.failure(selected.get(i), error);
+                AppLog.w("片源", "首页站点失败 [" + safe(selected.get(i).name) + "]："
+                        + message(error), error);
             }
         }
         return SearchResultMerger.merge(groups, Math.max(1, maxItems));
@@ -134,18 +141,20 @@ public final class TvBoxContentService {
                                 String title) throws Exception {
         if (isStorage(sourceId)) return requireStorage().resolve(episodeId, title);
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);
+        TvBoxConfig config = repository.getConfig(site.sourceId);
         PlaybackInfo info = site.type == 3
-                ? PlaybackInfoParser.parse(spiders.play(site, safe(flag), episodeId), episodeId)
-                : PlaybackInfoParser.parse(null, episodeId);
+                ? PlaybackInfoParser.parse(spiders.play(site, safe(flag), episodeId,
+                        config == null || config.flags == null
+                                ? Collections.<String>emptyList() : config.flags), episodeId)
+                : PlaybackInfoParser.episode(episodeId);
         info.siteKey = site.key;
         info.title = safe(title);
         if (!info.direct && !info.url.isEmpty()) {
-            String parsed = resolveWithConfiguredParsers(site, info.url);
-            if (!parsed.isEmpty()) {
-                info.url = parsed;
-                info.direct = true;
+            if (PlaybackInfoParser.isSpiderProxy(info.url)) {
+                info.sniffUrl = info.url;
+                info.error = "播放地址需要通过 Spider 代理页嗅探";
             } else {
-                info.error = "播放地址仍需要第三方解析";
+                resolveWithConfiguredParsers(site, info);
             }
         }
         return info;
@@ -169,30 +178,70 @@ public final class TvBoxContentService {
         }
     }
 
-    private String resolveWithConfiguredParsers(TvBoxConfig.Site site, String mediaUrl) {
+    private void resolveWithConfiguredParsers(TvBoxConfig.Site site, PlaybackInfo info) {
+        String directSniff = info.url.startsWith("http://") || info.url.startsWith("https://")
+                ? info.url : "";
         TvBoxConfig config = repository.getConfig(site.sourceId);
-        if (config == null) return "";
-        for (TvBoxConfig.ParseEndpoint parser : config.parses) {
-            if (parser.url == null || parser.url.trim().isEmpty()) continue;
-            String requestUrl = parser.url + mediaUrl;
+        List<TvBoxConfig.ParseEndpoint> parsers = new ArrayList<TvBoxConfig.ParseEndpoint>();
+        if (site.playerUrl != null && !site.playerUrl.trim().isEmpty()) {
+            TvBoxConfig.ParseEndpoint siteParser = new TvBoxConfig.ParseEndpoint();
+            siteParser.name = site.name;
+            siteParser.url = site.playerUrl.trim();
+            siteParser.type = site.playerType;
+            parsers.add(siteParser);
+        }
+        if (config != null && config.parses != null) parsers.addAll(config.parses);
+        for (TvBoxConfig.ParseEndpoint parser : parsers) {
+            if (parser == null || parser.url == null || parser.url.trim().isEmpty()) continue;
+            String requestUrl = parserRequest(parser.url.trim(), info.url);
+            if (info.sniffUrl.isEmpty()) info.sniffUrl = requestUrl;
             try {
-                Request request = new Request.Builder().url(requestUrl)
-                        .header("User-Agent", "NukaCast/0.1 Parser")
-                        .build();
-                try (Response response = HttpStack.client().newCall(request).execute()) {
+                Request.Builder request = new Request.Builder().url(requestUrl)
+                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.4; NukaCast) AppleWebKit/537.36");
+                applyHeaders(request, parser.header);
+                try (Response response = HttpStack.client().newCall(request.build()).execute()) {
                     if (!response.isSuccessful() || response.body() == null) continue;
                     String body = ResponseBodies.string(
                             response.body(), MAX_CMS_BYTES, UTF_8).trim();
                     PlaybackInfo parsed = PlaybackInfoParser.parse(body, "");
-                    if (PlaybackInfoParser.isDirectMedia(parsed.url)) return parsed.url;
+                    if (parsed.direct && !parsed.url.isEmpty()) {
+                        info.url = parsed.url;
+                        info.direct = true;
+                        info.headers.putAll(parsed.headers);
+                        info.error = "";
+                        return;
+                    }
                     if (PlaybackInfoParser.isDirectMedia(response.request().url().toString())) {
-                        return response.request().url().toString();
+                        info.url = response.request().url().toString();
+                        info.direct = true;
+                        info.error = "";
+                        return;
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception failure) {
+                AppLog.w("解析", "解析接口失败 [" + safe(parser.name) + "]："
+                        + message(failure), failure);
             }
         }
-        return "";
+        if (info.sniffUrl.isEmpty()) info.sniffUrl = directSniff;
+        info.error = info.sniffUrl.isEmpty()
+                ? "播放地址需要解析，但配置没有可用解析器"
+                : "解析接口未返回直链，需要嗅探解析页";
+    }
+
+    private static String parserRequest(String parserUrl, String mediaUrl) {
+        if (parserUrl.contains("{url}")) return parserUrl.replace("{url}", mediaUrl);
+        return parserUrl + mediaUrl;
+    }
+
+    private static void applyHeaders(Request.Builder request, com.google.gson.JsonElement value) {
+        if (value == null || !value.isJsonObject()) return;
+        for (Map.Entry<String, com.google.gson.JsonElement> entry
+                : value.getAsJsonObject().entrySet()) {
+            if (entry.getValue() != null && entry.getValue().isJsonPrimitive()) {
+                request.header(entry.getKey(), entry.getValue().getAsString());
+            }
+        }
     }
 
     private TvBoxConfig.Site requireSite(String sourceId, String siteKey) {
@@ -270,4 +319,8 @@ public final class TvBoxContentService {
     }
 
     private static String safe(String value) { return value == null ? "" : value; }
+
+    private static String message(Throwable error) {
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+    }
 }

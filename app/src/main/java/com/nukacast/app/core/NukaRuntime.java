@@ -98,6 +98,7 @@ public final class NukaRuntime {
     public TvBoxRepository getTvBoxRepository() { return tvBoxRepository; }
     public SearchEngine getSearchEngine() { return searchEngine; }
     public TvBoxContentService getContentService() { return contentService; }
+    public SpiderManager getSpiderManager() { return spiderManager; }
     public StorageLibrary getStorageLibrary() { return storageLibrary; }
     public LiveService getLiveService() { return liveService; }
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }

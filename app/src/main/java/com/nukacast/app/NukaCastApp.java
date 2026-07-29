@@ -6,6 +6,7 @@ import android.content.Context;
 import androidx.multidex.MultiDex;
 
 import com.nukacast.app.core.NukaRuntime;
+import com.nukacast.app.diagnostics.AppLog;
 
 public final class NukaCastApp extends Application {
     private NukaRuntime runtime;
@@ -19,7 +20,9 @@ public final class NukaCastApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        AppLog.initialize(this);
         CrashReporter.install(this);
+        AppLog.i("应用", "NukaCast 启动");
         runtime = new NukaRuntime(this);
     }
 

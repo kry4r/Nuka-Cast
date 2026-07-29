@@ -79,6 +79,16 @@ export type Diagnostics = {
   homeErrors: { sourceId: string; siteKey: string; siteName: string; error: string; updatedAt: number }[]
 }
 
+export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR"
+
+export type LogEntry = {
+  timestamp: number
+  level: LogLevel
+  component: string
+  message: string
+  trace: string
+}
+
 export type SearchItem = {
   siteKey: string
   siteName: string
@@ -116,6 +126,7 @@ export type PlaybackInfo = {
   url: string
   parse: number
   direct: boolean
+  sniffUrl: string
   error: string
   headers: Record<string, string>
 }
@@ -238,6 +249,8 @@ export const api = {
   },
   device: () => request<Device>("/api/device"),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
+  logs: () => request<LogEntry[]>("/api/logs"),
+  clearLogs: () => request<{ cleared: boolean }>("/api/logs", { method: "DELETE" }),
   sources: () => request<Source[]>("/api/sources"),
   sites: () => request<Site[]>("/api/sites"),
   addSource: (name: string, url: string) => request<Source>("/api/sources", {
