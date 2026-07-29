@@ -138,7 +138,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
 
     @Override public void onSession(boolean active) {
         if (active) {
-            packetReceived();
+            sessionTransition(session.nativeConnected(System.currentTimeMillis()));
             return;
         }
         endSession();
@@ -148,6 +148,11 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     private boolean packetReceived() {
         int result = session.recordPacket(System.currentTimeMillis());
         if (result == AirPlaySessionState.PACKET_REJECTED) return false;
+        sessionTransition(result);
+        return true;
+    }
+
+    private void sessionTransition(int result) {
         if (result == AirPlaySessionState.PACKET_STARTED) {
             AppLog.i("AirPlay", "镜像会话开始接收数据");
             mainHandler.post(new Runnable() {
@@ -161,7 +166,6 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
                 }
             });
         }
-        return true;
     }
 
     private void checkIdle() {

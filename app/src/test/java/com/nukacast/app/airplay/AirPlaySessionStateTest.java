@@ -27,17 +27,17 @@ public final class AirPlaySessionStateTest {
     }
 
     @Test
-    public void idleTimeoutOnlyAppliesToAnActiveSession() {
+    public void mediaSilenceDoesNotOverrideNativeSessionState() {
         AirPlaySessionState state = new AirPlaySessionState();
         state.receiverStarted();
         assertFalse(state.isIdle(5000L, 2000L));
 
-        state.recordPacket(1000L);
-        assertFalse(state.isIdle(3000L, 2000L));
-        assertTrue(state.isIdle(3001L, 2000L));
+        assertEquals(AirPlaySessionState.PACKET_STARTED, state.nativeConnected(1000L));
+        assertFalse(state.isIdle(600000L, 2000L));
+        assertTrue(state.isActive());
 
-        state.receiverStopped();
-        assertFalse(state.isIdle(9000L, 2000L));
+        state.disconnect();
         assertFalse(state.isActive());
+        assertEquals(AirPlaySessionState.PACKET_REJECTED, state.recordPacket(600001L));
     }
 }

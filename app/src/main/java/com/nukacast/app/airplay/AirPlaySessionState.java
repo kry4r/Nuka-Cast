@@ -8,22 +8,35 @@ final class AirPlaySessionState {
 
     private boolean acceptingPackets;
     private boolean active;
+    private boolean nativeConnectionActive;
     private long lastPacketAt;
 
     synchronized void receiverStarted() {
         acceptingPackets = true;
         active = false;
+        nativeConnectionActive = false;
         lastPacketAt = 0L;
     }
 
     synchronized void receiverStopped() {
         acceptingPackets = false;
         active = false;
+        nativeConnectionActive = false;
         lastPacketAt = 0L;
     }
 
     synchronized int recordPacket(long nowMs) {
         if (!acceptingPackets) return PACKET_REJECTED;
+        return recordAccepted(nowMs);
+    }
+
+    synchronized int nativeConnected(long nowMs) {
+        if (!acceptingPackets) return PACKET_REJECTED;
+        nativeConnectionActive = true;
+        return recordAccepted(nowMs);
+    }
+
+    private int recordAccepted(long nowMs) {
         lastPacketAt = nowMs;
         if (active) return PACKET_CONTINUING;
         active = true;
@@ -33,6 +46,7 @@ final class AirPlaySessionState {
     synchronized void disconnect() {
         acceptingPackets = false;
         active = false;
+        nativeConnectionActive = false;
         lastPacketAt = 0L;
     }
 
@@ -41,6 +55,7 @@ final class AirPlaySessionState {
     }
 
     synchronized boolean isIdle(long nowMs, long timeoutMs) {
-        return active && lastPacketAt > 0L && nowMs - lastPacketAt > timeoutMs;
+        return active && !nativeConnectionActive && lastPacketAt > 0L
+                && nowMs - lastPacketAt > timeoutMs;
     }
 }
