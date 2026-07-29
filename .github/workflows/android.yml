@@ -138,14 +138,20 @@ jobs:
           sed -i 's#mirrors.cloud.tencent.com/gradle/#services.gradle.org/distributions/#' gradle/wrapper/gradle-wrapper.properties
           chmod +x gradlew
 
-      - name: Enable KVM acceleration
+      - name: Detect KVM acceleration
+        id: kvm
         shell: bash
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm && test -w /dev/kvm
+          AVAILABLE=false
+          if test -e /dev/kvm; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules || true
+            sudo udevadm trigger --name-match=kvm || true
+            if test -r /dev/kvm && test -w /dev/kvm; then AVAILABLE=true; fi
+          fi
+          echo "available=$AVAILABLE" >> "$GITHUB_OUTPUT"
+          echo "KVM acceleration available: $AVAILABLE"
 
       - name: Run API 35 instrumentation smoke test
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
@@ -153,7 +159,7 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          disable-linux-hw-accel: false
+          disable-linux-hw-accel: ${{ steps.kvm.outputs.available != 'true' }}
           script: bash .github/scripts/run-instrumentation.sh
 
       - name: Upload instrumentation diagnostics
