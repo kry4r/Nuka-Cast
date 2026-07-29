@@ -78,20 +78,6 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/status".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, status());
         }
-        if ("/api/pair".equals(path) && Method.POST.equals(session.getMethod())) {
-            PairRequest request = body(session, PairRequest.class);
-            String token = runtime.getPairingManager().pair(
-                    request.code, session.getRemoteIpAddress());
-            if (token == null) {
-                throw new SecurityException("配对码无效");
-            }
-            Map<String, Object> result = new HashMap<String, Object>();
-            result.put("token", token);
-            result.put("paired", true);
-            return json(Response.Status.OK, result);
-        }
-        requireAuth(session);
-
         if ("/api/device".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getDeviceProfile());
         }
@@ -274,7 +260,7 @@ public final class ControlServer extends NanoHTTPD {
         result.put("libraryItemCount", runtime.getStorageLibrary().entries().size());
         result.put("storageScanning", runtime.getStorageLibrary().isScanning());
         result.put("webAddress", runtime.getWebAddress());
-        result.put("pairingRequired", true);
+        result.put("pairingRequired", false);
         result.put("airPlayName", "NukaCast");
         result.put("airPlay", runtime.getAirPlayReceiver().snapshot());
         return result;
@@ -351,13 +337,8 @@ public final class ControlServer extends NanoHTTPD {
         try { return Math.max(0, Long.parseLong(value)); } catch (Exception ignored) { return 0; }
     }
 
-    private void requireAuth(IHTTPSession session) {
-        String authorization = session.getHeaders().get("authorization");
-        String token = authorization != null && authorization.startsWith("Bearer ")
-                ? authorization.substring(7).trim() : null;
-        if (!runtime.getPairingManager().isAuthorized(token, session.getRemoteIpAddress())) {
-            throw new SecurityException("请先与电视配对");
-        }
+    static boolean requiresAuthentication(String path) {
+        return false;
     }
 
     private Response serveAsset(String requestPath) throws IOException {
@@ -446,7 +427,6 @@ public final class ControlServer extends NanoHTTPD {
 
     private static String safe(String value) { return value == null ? "" : value; }
 
-    private static final class PairRequest { String code; }
     private static final class SourceRequest { String name; String url; }
     private static final class StorageRequest {
         String name;

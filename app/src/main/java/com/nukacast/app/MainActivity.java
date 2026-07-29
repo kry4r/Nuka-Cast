@@ -90,7 +90,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView serviceStatus;
     private TextView networkStatus;
     private TextView webAddress;
-    private TextView pairingCode;
     private TextView airplayState;
     private TextView deviceSummary;
     private TextView codecSummary;
@@ -297,7 +296,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         serviceStatus = (TextView) findViewById(R.id.serviceStatus);
         networkStatus = (TextView) findViewById(R.id.networkStatus);
         webAddress = (TextView) findViewById(R.id.webAddress);
-        pairingCode = (TextView) findViewById(R.id.pairingCode);
         airplayState = (TextView) findViewById(R.id.airplayState);
         deviceSummary = (TextView) findViewById(R.id.deviceSummary);
         codecSummary = (TextView) findViewById(R.id.codecSummary);
@@ -355,12 +353,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void onClick(View view) {
                 runtime.getAirPlayReceiver().disconnectSession();
                 Toast.makeText(MainActivity.this, "已退出 AirPlay 投屏", Toast.LENGTH_SHORT).show();
-            }
-        });
-        findViewById(R.id.clearPairingButton).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                runtime.getPairingManager().revokeAll();
-                Toast.makeText(MainActivity.this, "已清除网页配对", Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -1151,9 +1143,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         String host = address.replace("http://", "").replace(":" + NukaRuntime.CONTROL_PORT, "");
         networkStatus.setText("0.0.0.0".equals(host) ? "网络未连接" : "已联网 · " + host);
         webAddress.setText(address);
-        String code = runtime.getPairingManager().getPairingCode();
-        pairingCode.setText(code.length() == 6
-                ? code.substring(0, 3) + " " + code.substring(3) : code);
         deviceSummary.setText(profile.displaySummary());
         codecSummary.setText(profile.codecSummary());
         sourceSummary.setText(String.format(Locale.CHINA, "%d 个配置源 · %d 个站点",

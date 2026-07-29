@@ -343,18 +343,6 @@
                                 style="@style/PanelValue"
                                 android:text="@string/web_placeholder"
                                 android:textSize="22sp" />
-                            <View
-                                android:layout_width="match_parent"
-                                android:layout_height="1dp"
-                                android:layout_marginTop="22dp"
-                                android:layout_marginBottom="20dp"
-                                android:background="@color/line" />
-                            <TextView style="@style/PanelTitle" android:text="@string/pairing_code_title" />
-                            <TextView
-                                android:id="@+id/pairingCode"
-                                style="@style/PairingCode"
-                                android:text="@string/pairing_placeholder"
-                                android:textSize="28sp" />
                         </LinearLayout>
                     </LinearLayout>
                 </ScrollView>
@@ -407,26 +395,14 @@
                             android:orientation="horizontal">
                             <LinearLayout
                                 style="@style/SettingsBand"
-                                android:layout_width="0dp"
+                                android:layout_width="match_parent"
                                 android:layout_marginStart="0dp"
-                                android:layout_marginEnd="7dp"
-                                android:layout_weight="1"
+                                android:layout_marginEnd="0dp"
                                 android:minHeight="170dp">
                                 <TextView style="@style/PanelTitle" android:text="@string/storage_title" />
                                 <TextView android:id="@+id/storageSummary" style="@style/PanelValue" android:text="@string/storage_empty" />
                                 <TextView style="@style/PanelBody" android:text="@string/storage_web_note" />
                                 <Button android:id="@+id/scanStorageButton" style="@style/ActionButton" android:text="@string/scan_library" />
-                            </LinearLayout>
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="0dp"
-                                android:layout_marginStart="7dp"
-                                android:layout_marginEnd="0dp"
-                                android:layout_weight="1"
-                                android:minHeight="170dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/privacy_title" />
-                                <TextView style="@style/PanelBody" android:text="@string/privacy_note" />
-                                <Button android:id="@+id/clearPairingButton" style="@style/ActionButton" android:text="@string/clear_pairing" />
                             </LinearLayout>
                         </LinearLayout>
                         <LinearLayout

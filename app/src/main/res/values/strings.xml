@@ -23,8 +23,6 @@
     <string name="cast_waiting">等待连接</string>
     <string name="web_remote_title">局域网遥控器</string>
     <string name="web_placeholder">http://0.0.0.0:9978</string>
-    <string name="pairing_placeholder">000 000</string>
-    <string name="pairing_code_title">浏览器配对码</string>
     <string name="cast_disconnect">退出投屏</string>
     <string name="device_profile">设备能力</string>
     <string name="device_checking">检测中</string>
@@ -32,9 +30,6 @@
     <string name="source_empty">0 个配置源</string>
     <string name="source_web_note">配置源完全由用户管理；请在网页控制的“源管理”中添加接口地址。</string>
     <string name="refresh_sources">刷新全部配置源</string>
-    <string name="privacy_title">网页配对</string>
-    <string name="privacy_note">清除后，已配对的浏览器需要重新输入六位码。</string>
-    <string name="clear_pairing">清除已配对浏览器</string>
     <string name="featured_preparing">片库准备中</string>
     <string name="featured_recommendation">精选推荐</string>
     <string name="storage_title">存储与片库</string>

@@ -6,7 +6,6 @@ import com.nukacast.app.airplay.AirPlayReceiver;
 import com.nukacast.app.live.LiveService;
 import com.nukacast.app.library.MediaLibraryStore;
 import com.nukacast.app.player.PlayerController;
-import com.nukacast.app.security.PairingManager;
 import com.nukacast.app.server.ControlServer;
 import com.nukacast.app.spider.SpiderManager;
 import com.nukacast.app.storage.StorageLibrary;
@@ -24,7 +23,6 @@ public final class NukaRuntime {
     private final Context context;
     private final AppState state = new AppState();
     private final DeviceProfile deviceProfile;
-    private final PairingManager pairingManager;
     private final SourceStore sourceStore;
     private final TvBoxRepository tvBoxRepository;
     private final SpiderManager spiderManager;
@@ -40,7 +38,6 @@ public final class NukaRuntime {
     public NukaRuntime(Context context) {
         this.context = context.getApplicationContext();
         deviceProfile = DeviceProbe.inspect(this.context);
-        pairingManager = new PairingManager(this.context);
         sourceStore = new SourceStore(this.context);
         tvBoxRepository = new TvBoxRepository(this.context, sourceStore);
         spiderManager = new SpiderManager(this.context);
@@ -93,7 +90,6 @@ public final class NukaRuntime {
     public Context getContext() { return context; }
     public AppState getState() { return state; }
     public DeviceProfile getDeviceProfile() { return deviceProfile; }
-    public PairingManager getPairingManager() { return pairingManager; }
     public SourceStore getSourceStore() { return sourceStore; }
     public TvBoxRepository getTvBoxRepository() { return tvBoxRepository; }
     public SearchEngine getSearchEngine() { return searchEngine; }
