@@ -260,7 +260,6 @@ public final class ControlServer extends NanoHTTPD {
         result.put("libraryItemCount", runtime.getStorageLibrary().entries().size());
         result.put("storageScanning", runtime.getStorageLibrary().isScanning());
         result.put("webAddress", runtime.getWebAddress());
-        result.put("pairingRequired", false);
         result.put("airPlayName", "NukaCast");
         result.put("airPlay", runtime.getAirPlayReceiver().snapshot());
         return result;

@@ -27,7 +27,7 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, AUTH_EXPIRED_EVENT, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
@@ -48,7 +48,6 @@ const nav: { id: View; label: string; icon: typeof Gauge }[] = [
 ]
 
 export default function App() {
-  const [paired, setPaired] = useState(api.hasToken())
   const [status, setStatus] = useState<Status | null>(null)
   const [view, setView] = useState<View>("overview")
   const [error, setError] = useState("")
@@ -66,17 +65,6 @@ export default function App() {
     const timer = window.setInterval(refreshStatus, 2500)
     return () => window.clearInterval(timer)
   }, [refreshStatus])
-
-  useEffect(() => {
-    const expired = () => {
-      setPaired(false)
-      setError("")
-    }
-    window.addEventListener(AUTH_EXPIRED_EVENT, expired)
-    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, expired)
-  }, [])
-
-  if (!paired) return <Pairing status={status} onPaired={() => setPaired(true)} />
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[220px_1fr]">
@@ -125,45 +113,6 @@ export default function App() {
         </div>
       </main>
     </div>
-  )
-}
-
-function Pairing({ status, onPaired }: { status: Status | null; onPaired: () => void }) {
-  const [code, setCode] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState("")
-
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    setBusy(true)
-    setError("")
-    try {
-      await api.pair(code)
-      onPaired()
-    } catch (reason) {
-      setError(message(reason))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <main className="grid min-h-screen place-items-center px-4">
-      <form onSubmit={submit} className="panel w-full max-w-sm p-5">
-        <div className="mb-5 flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-md border bg-background text-primary"><Cast /></div>
-          <div><h1 className="text-lg font-semibold">NukaCast</h1><p className="text-sm text-muted-foreground">{status?.message || "局域网控制"}</p></div>
-        </div>
-        <label htmlFor="pair-code" className="mb-2 block text-sm font-medium">电视配对码</label>
-        <Input id="pair-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6}
-          value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
-          className="h-12 text-center text-xl" autoFocus />
-        {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
-        <Button className="mt-4 h-11 w-full" disabled={busy || code.length !== 6}>
-          {busy && <LoaderCircle className="animate-spin" />}配对
-        </Button>
-      </form>
-    </main>
   )
 }
 

@@ -1,9 +1,3 @@
-const TOKEN_KEY = "nukacast-control-token"
-export const AUTH_EXPIRED_EVENT = "nukacast-auth-expired"
-
-const tokenStore = sessionStorage
-localStorage.removeItem(TOKEN_KEY)
-
 export type Status = {
   name: string
   version: string
@@ -18,7 +12,6 @@ export type Status = {
   libraryItemCount: number
   storageScanning: boolean
   webAddress: string
-  pairingRequired: boolean
   airPlayName: string
   airPlay: {
     state: string
@@ -218,35 +211,17 @@ export type MediaEntry = {
   modifiedAt: number
 }
 
-async function request<T>(path: string, init?: RequestInit, authenticated = true): Promise<T> {
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body) headers.set("Content-Type", "application/json")
-  if (authenticated) {
-    const token = tokenStore.getItem(TOKEN_KEY)
-    if (token) headers.set("Authorization", `Bearer ${token}`)
-  }
   const response = await fetch(path, { ...init, headers })
   const body = await response.json().catch(() => ({}))
-  if (response.status === 401 && authenticated) {
-    tokenStore.removeItem(TOKEN_KEY)
-    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
-  }
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
   return body as T
 }
 
 export const api = {
-  hasToken: () => Boolean(tokenStore.getItem(TOKEN_KEY)),
-  forget: () => tokenStore.removeItem(TOKEN_KEY),
-  status: () => request<Status>("/api/status", undefined, false),
-  pair: async (code: string) => {
-    const result = await request<{ token: string }>("/api/pair", {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    }, false)
-    tokenStore.setItem(TOKEN_KEY, result.token)
-    return result
-  },
+  status: () => request<Status>("/api/status"),
   device: () => request<Device>("/api/device"),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   logs: () => request<LogEntry[]>("/api/logs"),
