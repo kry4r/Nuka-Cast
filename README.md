@@ -94,8 +94,8 @@ Set-Location ..
 推送标签即可自动创建带 SHA-256 校验文件的 GitHub Release：
 
 ```bash
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.3.3
+git push origin v0.3.3
 ```
 
 ## 兼容边界
