@@ -14,6 +14,29 @@ import static org.junit.Assert.assertTrue;
 
 public final class SourceStoreTest {
     @Test
+    public void usesResolvedConfigUrlWhenAvailable() {
+        ConfigSource source = source("source", "Source", "https://example.com/home");
+        assertEquals("https://example.com/home", source.configUrl());
+
+        source.resolvedUrl = "https://cdn.example.com/config/main.json";
+
+        assertEquals("https://cdn.example.com/config/main.json", source.configUrl());
+    }
+
+    @Test
+    public void resolvesWarehouseChildrenAgainstDiscoveredConfigUrl() {
+        ConfigSource parent = source("parent", "Warehouse", "https://example.com/home");
+        parent.resolvedUrl = "https://cdn.example.com/config/index.json";
+
+        List<ConfigSource> merged = SourceStore.mergeChildren(
+                Arrays.asList(parent), parent,
+                Arrays.asList(new ConfigDecoder.WarehouseEntry("Child", "./child.json")));
+
+        assertEquals(parent.id,
+                findByUrl(merged, "https://cdn.example.com/config/child.json").parentId);
+    }
+
+    @Test
     public void removesOnlyLegacyBuiltInTreeAndKeepsUserSources() {
         ConfigSource builtIn = source("built-in", "Old built in", SourceStore.REMOVED_BUILT_IN_URL);
         builtIn.kind = ConfigSource.KIND_WAREHOUSE;

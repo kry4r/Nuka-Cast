@@ -45,6 +45,7 @@ public final class TvBoxRepository {
     private final SourceStore sourceStore;
     private final Gson gson = new Gson();
     private final ConfigDecoder decoder = new ConfigDecoder(gson);
+    private final ConfigPayloadResolver payloadResolver = new ConfigPayloadResolver(decoder);
     private final Map<String, TvBoxConfig> configs = new ConcurrentHashMap<String, TvBoxConfig>();
     private final ExecutorService refreshExecutor = Executors.newSingleThreadExecutor();
 
@@ -186,26 +187,15 @@ public final class TvBoxRepository {
     public TvBoxConfig refresh(ConfigSource source) throws IOException {
         long startedAt = System.currentTimeMillis();
         try {
-            Request request = new Request.Builder()
-                    .url(source.url)
-                    .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
-                    .header("Accept", "application/json,text/plain,*/*")
-                    .build();
-            byte[] bytes;
-            try (Response response = HttpStack.client().newCall(request).execute()) {
-                if (!response.isSuccessful() || response.body() == null) {
-                    throw new IOException("HTTP " + response.code());
+            ConfigPayloadResolver.Resolved resolved = payloadResolver.resolve(source.url,
+                    new ConfigPayloadResolver.Fetcher() {
+                @Override public ConfigPayloadResolver.Payload fetch(String url) throws IOException {
+                    return fetchConfig(url);
                 }
-                bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);
-            }
-            String content = new String(bytes, UTF_8);
-            ConfigDecoder.Document document;
-            try {
-                document = decoder.decodeDocument(content);
-            } catch (RuntimeException error) {
-                throw new IOException(error.getMessage(), error);
-            }
-            source.contentHash = Digests.sha256(bytes);
+            });
+            ConfigDecoder.Document document = resolved.document;
+            source.resolvedUrl = resolved.url;
+            source.contentHash = Digests.sha256(resolved.bytes);
             source.updatedAt = System.currentTimeMillis();
             source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
             source.error = "";
@@ -237,7 +227,7 @@ public final class TvBoxRepository {
                         Collections.<ConfigDecoder.WarehouseEntry>emptyList());
                 pruneConfigsAndCaches();
             }
-            saveCache(source.id, content);
+            saveCache(source.id, resolved.content);
             AppLog.i("片源", "配置刷新成功 [" + safe(source.name) + "]："
                     + config.sites.size() + " 个站点");
             return config;
@@ -281,26 +271,44 @@ public final class TvBoxRepository {
         }
     }
 
+    private ConfigPayloadResolver.Payload fetchConfig(String url) throws IOException {
+        Request request = new Request.Builder()
+                .url(url)
+                .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
+                .header("Accept", "application/json,text/plain,text/html,*/*")
+                .build();
+        try (Response response = HttpStack.client().newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("HTTP " + response.code());
+            }
+            String contentType = response.header("Content-Type", "");
+            byte[] bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);
+            return new ConfigPayloadResolver.Payload(
+                    response.request().url().toString(), bytes, contentType);
+        }
+    }
+
     private void enrich(ConfigSource source, TvBoxConfig config) {
+        String baseUrl = source.configUrl();
         config.sourceId = source.id;
-        config.baseUrl = source.url;
-        config.spider = Urls.resolve(source.url, config.spider);
+        config.baseUrl = baseUrl;
+        config.spider = Urls.resolve(baseUrl, config.spider);
         for (TvBoxConfig.Site site : config.sites) {
             site.sourceId = source.id;
             site.sourceName = source.name;
-            site.configBaseUrl = source.url;
+            site.configBaseUrl = baseUrl;
             site.globalSpider = config.spider;
-            site.jar = Urls.resolve(source.url, site.jar);
+            site.jar = Urls.resolve(baseUrl, site.jar);
             String extension = site.extension();
             if (extension.startsWith("./") || extension.startsWith("../")) {
-                site.ext = new JsonPrimitive(Urls.resolve(source.url, extension));
+                site.ext = new JsonPrimitive(Urls.resolve(baseUrl, extension));
             }
         }
         for (TvBoxConfig.LiveSource live : config.lives) {
             live.sourceId = source.id;
-            live.url = Urls.resolve(source.url, live.url);
-            live.epg = Urls.resolve(source.url, live.epg);
-            live.logo = Urls.resolve(source.url, live.logo);
+            live.url = Urls.resolve(baseUrl, live.url);
+            live.epg = Urls.resolve(baseUrl, live.epg);
+            live.logo = Urls.resolve(baseUrl, live.logo);
         }
     }
 

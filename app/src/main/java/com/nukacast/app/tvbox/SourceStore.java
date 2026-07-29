@@ -120,7 +120,7 @@ public final class SourceStore {
         int count = 0;
         for (ConfigDecoder.WarehouseEntry entry : entries) {
             if (count >= MAX_WAREHOUSE_CHILDREN) break;
-            String resolved = Urls.resolve(parent.url, entry.url);
+            String resolved = Urls.resolve(parent.configUrl(), entry.url);
             if (!isHttpUrl(resolved) || !added.add(resolved)) continue;
             ConfigSource child = findByUrl(oldChildren, resolved);
             if (child == null) child = new ConfigSource(entry.name, resolved);
@@ -175,6 +175,7 @@ public final class SourceStore {
 
     private static void normalize(ConfigSource source) {
         if (source.kind == null || source.kind.isEmpty()) source.kind = ConfigSource.KIND_SINGLE;
+        if (source.resolvedUrl == null) source.resolvedUrl = "";
         if (source.parentId == null) source.parentId = "";
         if (source.contentHash == null) source.contentHash = "";
         if (source.error == null) source.error = "";

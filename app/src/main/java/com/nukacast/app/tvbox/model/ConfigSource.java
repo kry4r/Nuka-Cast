@@ -9,6 +9,7 @@ public final class ConfigSource {
     public String id;
     public String name;
     public String url;
+    public String resolvedUrl = "";
     public String kind = KIND_SINGLE;
     public String parentId = "";
     public boolean enabled = true;
@@ -35,5 +36,9 @@ public final class ConfigSource {
 
     public boolean isChild() {
         return parentId != null && !parentId.isEmpty();
+    }
+
+    public String configUrl() {
+        return resolvedUrl == null || resolvedUrl.isEmpty() ? url : resolvedUrl;
     }
 }
