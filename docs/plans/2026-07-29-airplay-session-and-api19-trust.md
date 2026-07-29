@@ -65,7 +65,7 @@ git commit -m "fix: preserve AirPlay decoder fallback progress"
 
 **Step 1: Write the failing test**
 
-Replace the idle-disconnect expectation with a test named `mediaSilenceDoesNotOverrideNativeSessionState`. Start the receiver state, record one packet, and assert `isIdle(600000L, 2000L)` remains false until an explicit `disconnect()` call.
+Replace the idle-disconnect expectation with a test named `mediaSilenceDoesNotOverrideNativeSessionState`. Start the receiver state, call a new `nativeConnected(1000L)` transition, and assert `isIdle(600000L, 2000L)` remains false. Add a second assertion that explicit `disconnect()` makes the state inactive and rejects later packets.
 
 **Step 2: Run test to verify it fails**
 
@@ -77,7 +77,7 @@ Expected: the silence assertion fails because the current two-second timeout ret
 
 **Step 3: Write minimal implementation**
 
-Make `AirPlaySessionState.isIdle()` return false with a short comment that native connection callbacks own lifetime. Remove the idle-triggered `endSession()` and `scheduleRestart()` branch from `AirPlayReceiver.checkIdle()`; retain network republishing when no session is active. Explicit native `onSession(false)` and user disconnect behavior remain unchanged.
+Track a `nativeConnected` flag in `AirPlaySessionState`. The new `nativeConnected(long)` transition marks the session active and returns the same started/continuing result used by packet receipt. `isIdle()` may only report a stale packet-only session when no native connection is active. Clear the flag on explicit disconnect/receiver stop. Refactor `AirPlayReceiver.onSession(true)` to use this transition and share the existing one-time session-start logging/UI callback with `packetReceived()`. Explicit native `onSession(false)` and user disconnect behavior remain unchanged.
 
 **Step 4: Run test to verify it passes**
 
