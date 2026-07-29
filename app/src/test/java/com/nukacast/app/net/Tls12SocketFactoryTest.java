@@ -6,8 +6,8 @@ import static org.junit.Assert.assertArrayEquals;
 
 public final class Tls12SocketFactoryTest {
     @Test
-    public void api19AddsTls12AheadOfLegacyEnabledProtocols() {
-        assertArrayEquals(new String[] {"TLSv1.2", "TLSv1"},
+    public void api19EnablesOnlyTls12() {
+        assertArrayEquals(new String[] {"TLSv1.2"},
                 Tls12SocketFactory.protocolsFor(19,
                         new String[] {"TLSv1", "TLSv1.1", "TLSv1.2"},
                         new String[] {"TLSv1"}));

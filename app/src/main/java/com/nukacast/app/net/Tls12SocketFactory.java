@@ -3,9 +3,6 @@ package com.nukacast.app.net;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.List;
-
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
@@ -63,16 +60,10 @@ final class Tls12SocketFactory extends SSLSocketFactory {
     }
 
     static String[] protocolsFor(int sdk, String[] supported, String[] enabled) {
-        if (sdk < 16 || sdk >= 22 || !contains(supported, "TLSv1.2")
-                || contains(enabled, "TLSv1.2")) {
+        if (sdk < 16 || sdk >= 22 || !contains(supported, "TLSv1.2")) {
             return enabled;
         }
-        List<String> protocols = new ArrayList<String>();
-        protocols.add("TLSv1.2");
-        for (String protocol : enabled) {
-            if (!protocols.contains(protocol)) protocols.add(protocol);
-        }
-        return protocols.toArray(new String[protocols.size()]);
+        return new String[] {"TLSv1.2"};
     }
 
     private static boolean contains(String[] values, String wanted) {
