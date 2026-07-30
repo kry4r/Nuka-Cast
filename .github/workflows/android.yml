@@ -157,9 +157,14 @@ jobs:
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
+          target: aosp_atd
           arch: x86_64
           disable-animations: true
           disable-linux-hw-accel: ${{ steps.kvm.outputs.available != 'true' }}
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          pre-emulator-launch-script: >-
+            ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+            -PincludeTestAbi=true --stacktrace --console=plain
           script: bash .github/scripts/run-instrumentation.sh
 
       - name: Upload instrumentation diagnostics
