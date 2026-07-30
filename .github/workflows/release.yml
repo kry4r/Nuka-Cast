@@ -111,7 +111,11 @@ jobs:
           unzip -l "$APK" | grep "lib/arm64-v8a/libnukacast_airplay.so"
           ! unzip -l "$APK" | grep -q "lib/x86_64/"
           cp "$APK" "$OUT"
-          sha256sum "$OUT" > "${OUT}.sha256"
+          (
+            cd dist
+            sha256sum "NukaCast-${GITHUB_REF_NAME}.apk" \
+              > "NukaCast-${GITHUB_REF_NAME}.apk.sha256"
+          )
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
