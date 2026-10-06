@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Pass includeTestAbi (modern x86_64 emulator) or includeLegacyTestAbi (API 19 x86 emulator).
+ABI_PROPERTY="${1:-includeTestAbi}"
+
 adb logcat -c
 set +e
 ./gradlew :app:connectedDebugAndroidTest \
-  -PincludeTestAbi=true \
+  -P"${ABI_PROPERTY}=true" \
   --stacktrace \
   --console=plain
 test_status=$?
