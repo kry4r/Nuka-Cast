@@ -41,4 +41,21 @@ public final class HttpStackTest {
         assertEquals("CN=DigiCert Global Root G2,OU=www.digicert.com,O=DigiCert Inc,C=US",
                 manager.getAcceptedIssuers()[0].getSubjectX500Principal().getName());
     }
+
+    @Test
+    public void alwaysProvidesAClientEvenWhenLegacyTlsSetupFails() {
+        assertFalse(HttpStack.client() == null);
+        assertFalse(HttpStack.fallbackClient() == null);
+        assertTrue(HttpStack.fallbackClient().connectTimeoutMillis() > 0);
+    }
+
+    @Test
+    public void reportsTheRootCauseOfAnInitializationFailure() {
+        String described = HttpStack.describeInitFailure(new IllegalStateException(
+                "无法初始化 Android 4.4 TLS 1.2", new UnsatisfiedLinkError("no conscrypt")));
+        assertTrue(described.contains("UnsatisfiedLinkError"));
+        assertTrue(described.contains("no conscrypt"));
+        assertEquals("RuntimeException", HttpStack.describeInitFailure(
+                new RuntimeException()));
+    }
 }

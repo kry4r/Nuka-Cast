@@ -32,12 +32,67 @@ public final class HttpStack {
             return ipv4Only(Dns.SYSTEM.lookup(hostname), hostname);
         }
     };
-    private static final OkHttpClient CLIENT = createClient();
+    /**
+     * The client is built inside a static block that contains every failure mode: on API 16-21 the
+     * TLS 1.2 setup loads Conscrypt, and a linker/initializer {@link Error} escaping class
+     * initialization would otherwise crash whichever thread touched the network first. When the
+     * legacy TLS path cannot be built we keep a plain platform-TLS client and publish the reason
+     * instead of taking the process down or silently weakening certificate validation.
+     */
+    private static final OkHttpClient CLIENT;
+    private static final String INIT_ERROR;
+
+    static {
+        OkHttpClient client = null;
+        String error = "";
+        try {
+            client = createClient();
+        } catch (Throwable failure) {
+            error = describeInitFailure(failure);
+        }
+        if (client == null) client = fallbackClient();
+        CLIENT = client;
+        INIT_ERROR = error;
+    }
 
     private HttpStack() {}
 
     public static OkHttpClient client() {
         return CLIENT;
+    }
+
+    /** True when the legacy TLS 1.2 stack could not be built and platform TLS is in use. */
+    public static boolean degraded() {
+        return !INIT_ERROR.isEmpty();
+    }
+
+    public static String initError() {
+        return INIT_ERROR;
+    }
+
+    static String describeInitFailure(Throwable failure) {
+        Throwable root = failure;
+        while (root != null && root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        if (root == null) return "未知错误";
+        String message = root.getMessage();
+        return message == null || message.trim().isEmpty()
+                ? root.getClass().getSimpleName()
+                : root.getClass().getSimpleName() + "：" + message;
+    }
+
+    /** Plain platform-TLS client used when the legacy TLS 1.2 stack is unavailable. */
+    static OkHttpClient fallbackClient() {
+        return new OkHttpClient.Builder()
+                .dns(IPV4_DNS)
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build();
     }
 
     public static Dns dns() {
