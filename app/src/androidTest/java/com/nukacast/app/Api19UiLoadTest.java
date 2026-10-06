@@ -53,6 +53,16 @@ public final class Api19UiLoadTest {
         Class.forName("com.nukacast.app.airplay.DecoderFallbackPolicy");
     }
 
+    /**
+     * F11 from the audit: the sniffer's WebViewClient references the API 21 WebResourceRequest type.
+     * On API 19 the class must still verify; the new override is never invoked by the platform.
+     */
+    @Test
+    public void snifferAndPlayerClassesVerifyOnApi19() throws Exception {
+        Class.forName("com.nukacast.app.tvbox.SniffingActivity");
+        Class.forName("com.nukacast.app.player.PlayerController");
+    }
+
     @Test
     public void bundlesWebControlAssets() throws Exception {
         AssetManager assets = context().getAssets();
