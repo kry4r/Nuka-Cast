@@ -3,6 +3,7 @@ import {
   Airplay,
   Cast,
   CircleAlert,
+  Clapperboard,
   Film,
   FileWarning,
   Gauge,
@@ -27,19 +28,21 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, type Device, type Diagnostics, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, type Device, type Diagnostics, type DramaDetail, type DramaItem, type DramaLine, type DramaLineResult, type DramaProvider, type DramaSearchResult, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
+import { dramaFacts, lineLabel, matchLabel, missingLineHint } from "@/lib/drama"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "search" | "live" | "sources" | "storage" | "device" | "logs"
+type View = "overview" | "search" | "drama" | "live" | "sources" | "storage" | "device" | "logs"
 
 const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "overview", label: "总览", icon: Gauge },
   { id: "search", label: "影视", icon: Film },
+  { id: "drama", label: "短剧", icon: Clapperboard },
   { id: "live", label: "直播", icon: Radio },
   { id: "sources", label: "源管理", icon: Library },
   { id: "storage", label: "存储", icon: HardDrive },
@@ -105,6 +108,7 @@ export default function App() {
         )}
         {view === "overview" && <Overview status={status} onStatusChanged={refreshStatus} setError={setError} />}
         {view === "search" && <SearchView sourceVersion={status?.stateVersion ?? 0} setError={setError} />}
+        {view === "drama" && <DramaView setError={setError} />}
         {view === "live" && <LiveView contentVersion={status?.contentVersion ?? 0} setError={setError} />}
         {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
         {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
@@ -332,33 +336,7 @@ function Poster({ item, onClick }: { item: SearchItem; onClick: () => void }) {
 }
 
 function DetailDialog({ detail, onClose, setError }: { detail: MediaDetail; onClose: () => void; setError: (value: string) => void }) {
-  const [playing, setPlaying] = useState("")
   const [posterFailed, setPosterFailed] = useState(false)
-
-  async function play(flag: string, episodeId: string, episodeName: string) {
-    setPlaying(`${flag}-${episodeId}`)
-    try {
-      await api.playItem({
-        sourceId: detail.sourceId,
-        siteKey: detail.siteKey,
-        siteName: detail.siteName,
-        vodId: detail.vodId,
-        name: detail.name,
-        poster: detail.poster,
-        remarks: detail.remarks,
-        year: detail.year,
-        typeName: detail.typeName,
-        flag,
-        episodeId,
-        episodeName,
-        title: `${detail.name} · ${episodeName}`,
-      })
-    } catch (reason) {
-      setError(message(reason))
-    } finally {
-      setPlaying("")
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={detail.name}>
@@ -377,20 +355,289 @@ function DetailDialog({ detail, onClose, setError }: { detail: MediaDetail; onCl
           <div className="min-w-0">
             <div className="grid gap-2 text-sm sm:grid-cols-[70px_1fr]"><span className="text-muted-foreground">主演</span><span>{detail.actor || "-"}</span><span className="text-muted-foreground">导演</span><span>{detail.director || "-"}</span></div>
             {detail.plot && <p className="mt-4 max-h-28 overflow-y-auto border-y py-3 text-sm leading-6 text-muted-foreground">{detail.plot.replace(/<[^>]+>/g, "")}</p>}
-            <section className="mt-5 space-y-5">
-              {detail.playSources.map((source) => (
-                <div key={source.name}>
-                  <div className="mb-2 flex items-center gap-2"><h3 className="section-title">{source.name}</h3><Badge variant="secondary">{source.episodes.length}</Badge></div>
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-7">
-                    {source.episodes.map((episode) => {
-                      const key = `${source.name}-${episode.id}`
-                      return <Button key={key} variant="outline" size="sm" className="min-w-0 justify-center truncate" title={episode.name} disabled={playing === key} onClick={() => play(source.name, episode.id, episode.name)}>{playing === key ? <LoaderCircle className="animate-spin" /> : episode.name}</Button>
-                    })}
-                  </div>
+            <PlaySources detail={detail} title={detail.name} setError={setError} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PlaySources({ detail, title, setError }: { detail: MediaDetail; title: string; setError: (value: string) => void }) {
+  const [playing, setPlaying] = useState("")
+
+  async function play(flag: string, episodeId: string, episodeName: string) {
+    setPlaying(`${flag}-${episodeId}`)
+    try {
+      await api.playItem({
+        sourceId: detail.sourceId,
+        siteKey: detail.siteKey,
+        siteName: detail.siteName,
+        vodId: detail.vodId,
+        name: title,
+        poster: detail.poster,
+        remarks: detail.remarks,
+        year: detail.year,
+        typeName: detail.typeName,
+        flag,
+        episodeId,
+        episodeName,
+        title: `${title} · ${episodeName}`,
+      })
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setPlaying("")
+    }
+  }
+
+  return (
+    <section className="mt-5 space-y-5">
+      {detail.playSources.map((source) => (
+        <div key={source.name}>
+          <div className="mb-2 flex items-center gap-2"><h3 className="section-title">{source.name}</h3><Badge variant="secondary">{source.episodes.length}</Badge></div>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-7">
+            {source.episodes.map((episode) => {
+              const key = `${source.name}-${episode.id}`
+              return <Button key={key} variant="outline" size="sm" className="min-w-0 justify-center truncate" title={episode.name} disabled={playing === key} onClick={() => play(source.name, episode.id, episode.name)}>{playing === key ? <LoaderCircle className="animate-spin" /> : episode.name}</Button>
+            })}
+          </div>
+        </div>
+      ))}
+      {detail.playSources.length === 0 && <Empty icon={Film} label="该站点未返回可播放选集" />}
+    </section>
+  )
+}
+
+/**
+ * Short-drama catalog. The catalog only ships metadata: playback lines are matched against the
+ * user's enabled TVBox sources and every candidate is shown for confirmation before playback.
+ */
+function DramaView({ setError }: { setError: (value: string) => void }) {
+  const [providers, setProviders] = useState<DramaProvider[]>([])
+  const [suggested, setSuggested] = useState({ name: "", url: "" })
+  const [keyword, setKeyword] = useState("")
+  const [result, setResult] = useState<DramaSearchResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [detail, setDetail] = useState<DramaDetail | null>(null)
+  const [detailBusy, setDetailBusy] = useState(false)
+  const [showCustom, setShowCustom] = useState(false)
+  const [customName, setCustomName] = useState("")
+  const [customUrl, setCustomUrl] = useState("")
+  const [providerBusy, setProviderBusy] = useState(false)
+  const requestGate = useMemo(() => createLatestRequestGate(), [])
+
+  const loadProviders = useCallback(() => api.dramaProviders().then((data) => {
+    setProviders(data.providers)
+    setSuggested({ name: data.suggestedName, url: data.suggestedUrl })
+  }).catch((reason) => setError(message(reason))), [setError])
+
+  useEffect(() => { void loadProviders() }, [loadProviders])
+
+  const enabled = providers.filter((provider) => provider.enabled)
+  const hasSuggested = providers.some((provider) => provider.baseUrl === suggested.url)
+
+  async function search(event?: FormEvent) {
+    event?.preventDefault()
+    if (!keyword.trim() || enabled.length === 0) return
+    const request = requestGate.begin()
+    setBusy(true)
+    try {
+      const next = await api.dramaSearch({ providerId: enabled[0].id, keyword: keyword.trim() })
+      if (!requestGate.isLatest(request)) return
+      setResult(next)
+      if (!next.ok) setError(next.error || "短剧搜索失败")
+    } catch (reason) {
+      if (requestGate.isLatest(request)) setError(message(reason))
+    } finally {
+      if (requestGate.isLatest(request)) setBusy(false)
+    }
+  }
+
+  async function openDetail(item: DramaItem) {
+    setDetailBusy(true)
+    setDetail(null)
+    try {
+      setDetail(await api.dramaDetail({ providerId: item.providerId, dramaId: item.dramaId }))
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setDetailBusy(false)
+    }
+  }
+
+  async function runProviderAction(action: () => Promise<unknown>) {
+    setProviderBusy(true)
+    try {
+      await action()
+      await loadProviders()
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setProviderBusy(false)
+    }
+  }
+
+  async function addCustom(event: FormEvent) {
+    event.preventDefault()
+    await runProviderAction(async () => {
+      await api.addDramaProvider({ name: customName, url: customUrl })
+      setCustomName("")
+      setCustomUrl("")
+      setShowCustom(false)
+    })
+  }
+
+  return (
+    <>
+      <PageHeader title="短剧目录" action={<Badge variant={enabled.length ? "secondary" : "destructive"}>{enabled.length ? `${enabled.length} 个目录` : "未启用目录"}</Badge>} />
+
+      <section className="border-y py-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {providers.map((provider) => (
+            <div key={provider.id} className="flex items-center gap-1 rounded-md border bg-card px-2 py-1">
+              <Clapperboard className="size-4 text-muted-foreground" />
+              <span className="max-w-48 truncate text-sm font-medium">{provider.name}</span>
+              <span className="hidden max-w-56 truncate text-xs text-muted-foreground sm:inline">{provider.baseUrl.replace(/^https?:\/\//, "")}</span>
+              {provider.error && <Badge variant="destructive">异常</Badge>}
+              <Button variant="ghost" size="sm" disabled={providerBusy} onClick={() => runProviderAction(() => api.setDramaProviderEnabled(provider.id, !provider.enabled))}>{provider.enabled ? "停用" : "启用"}</Button>
+              <Button variant="ghost" size="icon" title="删除目录" disabled={providerBusy} onClick={() => runProviderAction(() => api.removeDramaProvider(provider.id))}><Trash2 /></Button>
+            </div>
+          ))}
+          {providers.length === 0 && <span className="text-sm text-muted-foreground">还没有短剧目录。目录只提供剧目资料，播放仍需“源管理”里的片源。</span>}
+          {!hasSuggested && <Button variant="outline" size="sm" disabled={providerBusy} onClick={() => runProviderAction(() => api.addDramaProvider({ suggested: true }))}><Plus />添加内置目录</Button>}
+          <Button variant="ghost" size="sm" onClick={() => setShowCustom(!showCustom)}><Settings2 />自定义目录</Button>
+        </div>
+        {showCustom && (
+          <form onSubmit={addCustom} className="mt-3 grid gap-2 sm:grid-cols-[200px_1fr_auto]">
+            <Input value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="名称（可选）" />
+            <Input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://...（目录站点根地址）" />
+            <Button disabled={providerBusy || !customUrl.trim()}>{providerBusy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
+          </form>
+        )}
+        {providers.some((provider) => provider.error) && <div className="mt-2 text-xs text-destructive">{providers.filter((provider) => provider.error).map((provider) => `${provider.name}：${provider.error}`).join("；")}</div>}
+      </section>
+
+      <form onSubmit={search} className="mt-5 grid gap-2 border-b pb-4 sm:grid-cols-[1fr_auto]">
+        <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="输入短剧名，如：重生" className="h-10" />
+        <Button className="h-10" disabled={busy || !keyword.trim() || enabled.length === 0}>{busy ? <LoaderCircle className="animate-spin" /> : <Search />}搜索短剧</Button>
+      </form>
+
+      {result && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline">{result.items.length} 条{result.total >= 0 ? ` / 共 ${result.total}` : ""}</Badge>
+          <span>{result.elapsedMs} ms</span>
+          {result.warning && <span className="text-destructive">{result.warning}</span>}
+          {result.partial && <span className="text-destructive">结果可能不完整</span>}
+        </div>
+      )}
+
+      <section className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
+        {result?.items.map((item) => <DramaCard key={`${item.providerId}-${item.dramaId}`} item={item} onClick={() => openDetail(item)} />)}
+      </section>
+      {result && result.items.length === 0 && <Empty icon={Clapperboard} label={keyword.trim() ? "没有匹配的短剧" : "输入剧名开始搜索"} />}
+      {!result && <Empty icon={Clapperboard} label={enabled.length === 0 ? "先添加并启用一个短剧目录" : "输入剧名开始搜索"} />}
+      {detailBusy && <div className="fixed inset-0 z-40 grid place-items-center bg-background/80"><LoaderCircle className="size-8 animate-spin text-primary" /></div>}
+      {detail && <DramaDialog detail={detail} onSwitch={openDetail} onClose={() => setDetail(null)} setError={setError} />}
+    </>
+  )
+}
+
+function DramaCard({ item, onClick }: { item: DramaItem; onClick: () => void }) {
+  const [failed, setFailed] = useState(false)
+  const facts = dramaFacts(item)
+  return (
+    <button type="button" onClick={onClick} className="group min-w-0 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+      <div className="aspect-[2/3] overflow-hidden rounded-md border bg-muted">
+        {!failed && item.cover ? <img src={item.cover} alt="" className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" loading="lazy" onError={() => setFailed(true)} /> : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-8" /></div>}
+      </div>
+      <h3 className="mt-2 truncate text-sm font-medium">{item.title}</h3>
+      <div className="mt-1 flex items-center justify-between gap-1 text-xs text-muted-foreground"><span className="truncate">{item.remark || facts[0] || "- "}</span><span className="shrink-0">{item.category}</span></div>
+    </button>
+  )
+}
+
+function DramaDialog({ detail, onSwitch, onClose, setError }: { detail: DramaDetail; onSwitch: (item: DramaItem) => void; onClose: () => void; setError: (value: string) => void }) {
+  const item = detail.item
+  const [lines, setLines] = useState<DramaLineResult | null>(null)
+  const [linesBusy, setLinesBusy] = useState(false)
+  const [selected, setSelected] = useState<{ line: DramaLine; media: MediaDetail } | null>(null)
+  const [posterFailed, setPosterFailed] = useState(false)
+
+  async function findLines() {
+    setLinesBusy(true)
+    try {
+      setLines(await api.dramaLines({ providerId: item.providerId, dramaId: item.dramaId }))
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setLinesBusy(false)
+    }
+  }
+
+  async function chooseLine(line: DramaLine) {
+    setLinesBusy(true)
+    try {
+      const media = await api.detail({ sourceId: line.sourceId, siteKey: line.siteKey, vodId: line.vodId })
+      setSelected({ line, media })
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setLinesBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
+      <div className="mx-auto min-h-full max-w-5xl border bg-background shadow-xl">
+        <header className="sticky top-0 z-10 flex min-h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
+          <div className="min-w-0 flex-1"><h2 className="truncate text-lg font-semibold">{item.title}</h2><div className="text-xs text-muted-foreground">短剧目录 · ID {item.dramaId}</div></div>
+          <Button variant="ghost" size="icon" title="关闭" onClick={onClose}><X /></Button>
+        </header>
+        <div className="grid gap-6 p-4 md:grid-cols-[190px_1fr] md:p-6">
+          <div>
+            <div className="aspect-[2/3] overflow-hidden rounded-md border bg-muted">
+              {!posterFailed && item.cover ? <img src={item.cover} alt="" className="h-full w-full object-cover" onError={() => setPosterFailed(true)} /> : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-10" /></div>}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">{dramaFacts(item).map((fact) => <Badge key={fact} variant="outline">{fact}</Badge>)}</div>
+          </div>
+          <div className="min-w-0">
+            {item.tags.length > 0 && <div className="flex flex-wrap gap-1.5">{item.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}</div>}
+            {item.intro && <p className="mt-4 max-h-28 overflow-y-auto border-y py-3 text-sm leading-6 text-muted-foreground">{item.intro}</p>}
+
+            <section className="mt-5">
+              <div className="mb-2 flex items-center gap-2"><h3 className="section-title">播放线路</h3>{lines && <Badge variant="secondary">{lines.lines.length}</Badge>}</div>
+              <div className="text-xs text-muted-foreground">播放线路来自“源管理”里已启用的片源，按片名匹配。请确认条目后再播放。</div>
+              {!lines && <Button className="mt-3" variant="outline" disabled={linesBusy} onClick={findLines}>{linesBusy ? <LoaderCircle className="animate-spin" /> : <Search />}在已启用片源中匹配</Button>}
+              {lines && (
+                <div className="mt-3 space-y-2">
+                  <div className="text-xs text-muted-foreground">已查询 {lines.searchedSites} 个站点{lines.failedSites > 0 ? `，${lines.failedSites} 个失败` : ""} · {lines.elapsedMs} ms</div>
+                  {lines.lines.map((line) => (
+                    <button key={`${line.siteKey}-${line.vodId}`} type="button" disabled={linesBusy} onClick={() => chooseLine(line)} className="flex w-full min-w-0 items-center gap-3 rounded-md border bg-card px-3 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{lineLabel(line)}</span>
+                      <Badge variant={line.matchKind === "exact" ? "secondary" : "outline"}>{matchLabel(line.matchKind)}</Badge>
+                    </button>
+                  ))}
+                  {lines.lines.length === 0 && <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">暂无可用播放线路。{missingLineHint(lines.searched, lines.failedSites)}</div>}
+                  {lines.error && lines.lines.length > 0 && <div className="text-xs text-destructive">{lines.error}</div>}
                 </div>
-              ))}
-              {detail.playSources.length === 0 && <Empty icon={Film} label="该站点未返回可播放选集" />}
+              )}
             </section>
+
+            {selected && (
+              <section className="mt-5 border-t pt-4">
+                <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="section-title">选集</h3><Badge variant="outline">{selected.line.siteName}</Badge><Button variant="ghost" size="sm" onClick={() => setSelected(null)}>重新选择线路</Button></div>
+                <PlaySources detail={selected.media} title={item.title} setError={setError} />
+              </section>
+            )}
+
+            {detail.related.length > 0 && (
+              <section className="mt-6 border-t pt-4">
+                <div className="mb-2 flex items-center gap-2"><h3 className="section-title">相关短剧</h3><Badge variant="secondary">{detail.related.length}</Badge></div>
+                <div className="flex flex-wrap gap-2">{detail.related.slice(0, 12).map((related) => <Button key={related.dramaId} variant="outline" size="sm" className="max-w-56 truncate" onClick={() => onSwitch(related)}>{related.title}</Button>)}</div>
+                {detail.relatedPartial && <div className="mt-2 text-xs text-muted-foreground">相关推荐加载不完整</div>}
+              </section>
+            )}
           </div>
         </div>
       </div>
@@ -629,11 +876,13 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
           <DiagnosticFact label="实际解码器" value={diagnostics?.airPlay.decoderName || "尚未创建"} />
           <DiagnosticFact label="解码模式" value={diagnostics?.airPlay.decoderSoftwareFallback ? "Google 软件回退" : "系统硬解优先"} />
         </div>
+        {diagnostics?.airPlay.identity && <div className="mt-3 break-all font-mono text-xs text-muted-foreground">原生 /info 身份：{diagnostics.airPlay.identity}</div>}
         {diagnostics?.airPlay.error && <div className="mt-3 break-words text-sm text-destructive">AirPlay：{diagnostics.airPlay.error}</div>}
       </section>
       <section className="mt-7 border-t pt-5">
         <h2 className="section-title mb-3">源与启动诊断</h2>
         <div className="space-y-2">
+          {diagnostics?.httpStack?.degraded && <div className="flex items-center gap-2 border-b py-2 text-sm text-destructive"><CircleAlert className="size-4 shrink-0" />旧版 TLS 初始化失败，已回退平台 TLS：{diagnostics.httpStack.initError}</div>}
           {diagnostics?.sources.filter((source) => source.error || source.searchError).map((source) => <div key={source.id} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{source.name}</span><span className="break-words text-destructive">{source.error || source.searchError}</span></div>)}
           {diagnostics?.homeErrors.map((failure) => <div key={`${failure.sourceId}-${failure.siteKey}`} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{failure.siteName}</span><span className="break-words text-destructive">首页：{failure.error}</span></div>)}
           {diagnostics && diagnostics.sources.every((source) => !source.error && !source.searchError) && diagnostics.homeErrors.length === 0 && <div className="text-sm text-muted-foreground">当前没有源刷新或首页加载错误。</div>}

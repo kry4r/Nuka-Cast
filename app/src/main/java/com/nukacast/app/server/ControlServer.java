@@ -9,7 +9,12 @@ import com.nukacast.app.CrashReporter;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.drama.DramaService;
+import com.nukacast.app.drama.model.DramaLineResult;
+import com.nukacast.app.drama.model.DramaProviderConfig;
+import com.nukacast.app.drama.model.DramaSearchResult;
 import com.nukacast.app.live.model.LiveCatalog;
+import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.storage.model.StorageMount;
@@ -119,6 +124,48 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/sources".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getSourceStore().getSources());
+        }
+        if ("/api/drama/providers".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, dramaProviders());
+        }
+        if ("/api/drama/providers".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaProviderRequest request = body(session, DramaProviderRequest.class);
+            DramaProviderConfig provider = request.suggested
+                    ? runtime.getDramaService().registry().addSuggested()
+                    : runtime.getDramaService().registry().add(request.name, request.url);
+            return json(Response.Status.CREATED, provider);
+        }
+        if (path.startsWith("/api/drama/providers/") && Method.DELETE.equals(session.getMethod())) {
+            String id = path.substring("/api/drama/providers/".length());
+            boolean removed = runtime.getDramaService().registry().remove(id);
+            return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
+                    Collections.singletonMap("removed", removed));
+        }
+        if (path.startsWith("/api/drama/providers/") && path.endsWith("/enabled")
+                && Method.POST.equals(session.getMethod())) {
+            String id = path.substring("/api/drama/providers/".length(),
+                    path.length() - "/enabled".length());
+            DramaEnabledRequest request = body(session, DramaEnabledRequest.class);
+            boolean updated = runtime.getDramaService().registry().setEnabled(id, request.enabled);
+            return json(updated ? Response.Status.OK : Response.Status.NOT_FOUND,
+                    Collections.singletonMap("enabled", updated && request.enabled));
+        }
+        if ("/api/drama/search".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaSearchRequest request = body(session, DramaSearchRequest.class);
+            DramaSearchResult result = runtime.getDramaService().search(
+                    request.providerId, request.keyword);
+            return json(Response.Status.OK, result);
+        }
+        if ("/api/drama/detail".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaDetailRequest request = body(session, DramaDetailRequest.class);
+            return json(Response.Status.OK, runtime.getDramaService().detail(
+                    request.providerId, request.dramaId));
+        }
+        if ("/api/drama/lines".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaDetailRequest request = body(session, DramaDetailRequest.class);
+            DramaLineResult result = runtime.getDramaService().lines(
+                    request.providerId, request.dramaId, request.sourceId);
+            return json(Response.Status.OK, result);
         }
         if ("/api/sources".equals(path) && Method.POST.equals(session.getMethod())) {
             SourceRequest request = body(session, SourceRequest.class);
@@ -276,6 +323,11 @@ public final class ControlServer extends NanoHTTPD {
         result.put("player", runtime.getPlayerController().snapshot());
         result.put("sources", runtime.getSourceStore().getSources());
         result.put("homeErrors", runtime.getContentService().homeFailures());
+        result.put("drama", runtime.getDramaService().diagnostics());
+        Map<String, Object> httpStack = new HashMap<String, Object>();
+        httpStack.put("degraded", HttpStack.degraded());
+        httpStack.put("initError", HttpStack.initError());
+        result.put("httpStack", httpStack);
         return result;
     }
 
@@ -426,7 +478,31 @@ public final class ControlServer extends NanoHTTPD {
 
     private static String safe(String value) { return value == null ? "" : value; }
 
+    private Map<String, Object> dramaProviders() {
+        DramaService service = runtime.getDramaService();
+        Map<String, Object> result = new HashMap<String, Object>();
+        result.put("providers", service.registry().providers());
+        result.put("suggestedName", com.nukacast.app.drama.DramaCatalogRegistry.SUGGESTED_NAME);
+        result.put("suggestedUrl", com.nukacast.app.drama.DramaCatalogRegistry.SUGGESTED_BASE_URL);
+        return result;
+    }
+
     private static final class SourceRequest { String name; String url; }
+    private static final class DramaProviderRequest {
+        String name;
+        String url;
+        boolean suggested;
+    }
+    private static final class DramaEnabledRequest { boolean enabled; }
+    private static final class DramaSearchRequest {
+        String providerId;
+        String keyword;
+    }
+    private static final class DramaDetailRequest {
+        String providerId;
+        String dramaId;
+        String sourceId;
+    }
     private static final class StorageRequest {
         String name;
         String type;

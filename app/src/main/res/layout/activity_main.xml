@@ -179,6 +179,7 @@
                         <Button android:id="@+id/filterSeries" style="@style/FilterButton" android:text="@string/filter_series" />
                         <Button android:id="@+id/filterVariety" style="@style/FilterButton" android:text="@string/filter_variety" />
                         <Button android:id="@+id/filterAnime" style="@style/FilterButton" android:text="@string/filter_anime" />
+                        <Button android:id="@+id/filterDrama" style="@style/FilterButton" android:text="@string/filter_drama" />
                     </LinearLayout>
                     <ScrollView
                         android:layout_width="match_parent"

@@ -1,6 +1,7 @@
 package com.nukacast.app;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
@@ -38,6 +39,11 @@ import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.DeviceProfile;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.drama.model.DramaDetail;
+import com.nukacast.app.drama.model.DramaItem;
+import com.nukacast.app.drama.model.DramaLine;
+import com.nukacast.app.drama.model.DramaLineResult;
+import com.nukacast.app.drama.model.DramaSearchResult;
 import com.nukacast.app.library.LibraryItem;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.service.NukaCastService;
@@ -73,6 +79,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final PosterImageLoader images = new PosterImageLoader();
     private final List<SearchItem> homeItems = new ArrayList<SearchItem>();
+    private final List<SearchItem> dramaItems = new ArrayList<SearchItem>();
     private NukaRuntime runtime;
     private View appShell;
     private View homePage;
@@ -333,6 +340,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         bindFilter(R.id.filterSeries, "电视剧");
         bindFilter(R.id.filterVariety, "综艺");
         bindFilter(R.id.filterAnime, "动漫");
+        bindFilter(R.id.filterDrama, "短剧");
 
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
@@ -382,8 +390,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         currentMovieFilter = filter;
         showPage(PAGE_MOVIES);
         setFilterSelection(filter);
+        if ("短剧".equals(filter)) {
+            renderDramaMovies();
+            return;
+        }
         List<SearchItem> filtered = filter(homeItems, filter);
         renderMovieGrid(filter.isEmpty() ? "最近更新" : filter, filtered);
+    }
+
+    private void renderDramaMovies() {
+        if (moviesContent == null) return;
+        moviesContent.removeAllViews();
+        moviesContent.addView(sectionTitle("短剧目录 · " + dramaItems.size()));
+        if (dramaItems.isEmpty()) {
+            TextView empty = bodyText("使用顶部搜索输入剧名：匹配到的短剧会显示在这里，"
+                    + "并可继续从已启用片源中匹配播放线路。");
+            empty.setPadding(0, dp(22), 0, 0);
+            moviesContent.addView(empty);
+            return;
+        }
+        appendGrid(moviesContent, dramaItems, gridColumns());
     }
 
     private void setFilterSelection(String filter) {
@@ -392,6 +418,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         findViewById(R.id.filterSeries).setSelected("电视剧".equals(filter));
         findViewById(R.id.filterVariety).setSelected("综艺".equals(filter));
         findViewById(R.id.filterAnime).setSelected("动漫".equals(filter));
+        findViewById(R.id.filterDrama).setSelected("短剧".equals(filter));
     }
 
     private void loadHome(boolean force) {
@@ -628,7 +655,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             moviesContent.addView(empty);
             return;
         }
-        int columns = gridColumns();
+        appendGrid(moviesContent, items, gridColumns());
+    }
+
+    private void appendGrid(LinearLayout target, List<SearchItem> items, int columns) {
         LinearLayout row = null;
         for (int i = 0; i < items.size(); i++) {
             if (i % columns == 0) {
@@ -638,7 +668,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, dp(302));
                 rowParams.bottomMargin = dp(14);
-                moviesContent.addView(row, rowParams);
+                target.addView(row, rowParams);
             }
             final SearchItem item = items.get(i);
             MediaCardView card = card(item, 0, 0);
@@ -758,6 +788,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                             if (response.partial) {
                                 Toast.makeText(MainActivity.this, "部分站点超时或不可用", Toast.LENGTH_SHORT).show();
                             }
+                            loadDramaSection(query.keyword, generation);
                         }
                     });
                 } catch (final Exception error) {
@@ -782,30 +813,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             target.addView(empty);
             return;
         }
-        LinearLayout row = null;
-        for (int i = 0; i < items.size(); i++) {
-            if (i % columns == 0) {
-                row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setClipChildren(false);
-                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, dp(302));
-                rowParams.bottomMargin = dp(14);
-                target.addView(row, rowParams);
-            }
-            final SearchItem item = items.get(i);
-            MediaCardView card = card(item, 0, 0);
-            card.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { openMedia(item); }
-            });
-            bindFavoriteShortcut(card, item);
-            row.addView(card, cardParams());
-        }
+        appendGrid(target, items, columns);
     }
 
     private void openMedia(final SearchItem item) {
-        Toast.makeText(this, "正在加载“" + item.name + "”", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        if (item.sourceId != null && item.sourceId.startsWith("drama:")) {
+            openDrama(item);
+            return;
+        }
+        Toast.makeText(this, "正在加载“" + item.name + "”", Toast.LENGTH_SHORT).show();        io.execute(new Runnable() {
             @Override public void run() {
                 try {
                     final MediaDetail detail = runtime.getContentService()
@@ -816,6 +832,129 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 } catch (final Exception error) {
                     runOnUiThread(new Runnable() {
                         @Override public void run() { showError("详情加载失败", error); }
+                    });
+                }
+            }
+        });
+    }
+
+    /**
+     * Adds a short-drama catalog section under the regular TVBox search results. It runs after the
+     * site results are rendered so a late catalog reply can never wipe the search grid.
+     */
+    private void loadDramaSection(final String keyword, final int generation) {
+        if (runtime.getDramaService().registry().enabledProviders().isEmpty()) return;
+        io.execute(new Runnable() {
+            @Override public void run() {
+                final DramaSearchResult result = runtime.getDramaService().search("", keyword);
+                if (!result.ok || result.items.isEmpty()) return;
+                final List<SearchItem> entries = new ArrayList<SearchItem>();
+                for (DramaItem item : result.items) entries.add(item.toSearchItem());
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (generation != searchGeneration || !PAGE_SEARCH.equals(currentPage)) return;
+                        dramaItems.clear();
+                        dramaItems.addAll(entries);
+                        String heading = "短剧目录 · " + entries.size()
+                                + (result.warning.isEmpty() ? "" : "（" + result.warning + "）");
+                        searchResults.addView(sectionTitle(heading));
+                        appendGrid(searchResults, entries, Math.max(2, gridColumns() - 2));
+                    }
+                });
+            }
+        });
+    }
+
+    /** Loads a catalog entry, matches playback lines, then reuses the normal detail/play flow. */
+    private void openDrama(final SearchItem entry) {
+        final String providerId = entry.siteKey;
+        final String dramaId = entry.vodId;
+        Toast.makeText(this, "正在加载短剧“" + entry.name + "”", Toast.LENGTH_SHORT).show();
+        io.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final DramaDetail detail = runtime.getDramaService().detail(providerId, dramaId);
+                    final DramaLineResult lines = runtime.getDramaService().lines(
+                            providerId, dramaId, "");
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showDramaDetail(entry, detail, lines); }
+                    });
+                } catch (final Exception error) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showError("短剧加载失败", error); }
+                    });
+                }
+            }
+        });
+    }
+
+    private void showDramaDetail(final SearchItem entry, final DramaDetail detail,
+                                final DramaLineResult lines) {
+        final DramaItem drama = detail == null ? null : detail.item;
+        final SearchItem catalog = drama == null || drama.title.isEmpty()
+                ? entry : drama.toSearchItem();
+        if (lines == null || lines.lines.isEmpty()) {
+            MediaDetail readOnly = new MediaDetail();
+            readOnly.sourceId = catalog.sourceId;
+            readOnly.siteKey = catalog.siteKey;
+            readOnly.vodId = catalog.vodId;
+            readOnly.name = catalog.name;
+            readOnly.poster = catalog.poster;
+            readOnly.plot = catalog.plot;
+            readOnly.remarks = catalog.remarks;
+            readOnly.typeName = catalog.typeName;
+            showDetail(readOnly);
+            String reason = lines == null ? "" : lines.error;
+            if (!reason.isEmpty()) {
+                Toast.makeText(this, reason, Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        DramaLine exact = null;
+        for (DramaLine line : lines.lines) {
+            if (line.isExact()) { exact = line; break; }
+        }
+        if (exact != null) {
+            openDramaLine(drama, exact);
+            return;
+        }
+        final DramaItem selected = drama;
+        CharSequence[] labels = new CharSequence[lines.lines.size()];
+        for (int i = 0; i < lines.lines.size(); i++) {
+            DramaLine line = lines.lines.get(i);
+            labels[i] = joinMeta(line.siteName, line.name, line.remarks);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("选择播放线路（未找到完全同名条目）")
+                .setItems(labels, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        openDramaLine(selected, lines.lines.get(which));
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void openDramaLine(final DramaItem drama, final DramaLine line) {
+        Toast.makeText(this, "正在读取“" + line.siteName + "”的剧集", Toast.LENGTH_SHORT).show();
+        io.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final MediaDetail media = runtime.getContentService()
+                            .detail(line.sourceId, line.siteKey, line.vodId);
+                    if (drama != null) {
+                        if (!drama.title.isEmpty()) media.name = drama.title;
+                        if (!drama.cover.isEmpty()) media.poster = drama.cover;
+                        if (!drama.intro.isEmpty()) media.plot = drama.intro;
+                        if (!drama.remark.isEmpty()) media.remarks = drama.remark;
+                        media.typeName = joinMeta(drama.category, media.typeName);
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showDetail(media); }
+                    });
+                } catch (final Exception error) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showError("剧集加载失败", error); }
                     });
                 }
             }
@@ -929,6 +1068,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void resume(final LibraryItem item) {
+        if (item.sourceId != null && item.sourceId.startsWith("drama:")) {
+            openDrama(item.toSearchItem());
+            return;
+        }
         Toast.makeText(this, "继续播放“" + item.name + "”", Toast.LENGTH_SHORT).show();
         io.execute(new Runnable() {
             @Override public void run() {

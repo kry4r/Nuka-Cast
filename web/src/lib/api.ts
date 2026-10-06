@@ -31,6 +31,7 @@ export type Status = {
     decoderFormatChanges: number
     decoderName: string
     decoderSoftwareFallback: boolean
+    identity: string
   }
 }
 
@@ -70,6 +71,7 @@ export type Diagnostics = {
   player: Player
   sources: Source[]
   homeErrors: { sourceId: string; siteKey: string; siteName: string; error: string; updatedAt: number }[]
+  httpStack: { degraded: boolean; initError: string }
 }
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR"
@@ -122,6 +124,85 @@ export type PlaybackInfo = {
   sniffUrl: string
   error: string
   headers: Record<string, string>
+}
+
+export type DramaItem = {
+  providerId: string
+  dramaId: string
+  title: string
+  cover: string
+  intro: string
+  remark: string
+  category: string
+  tags: string[]
+  episodeCount: number
+  heat: string
+  status: string
+  contentKind: string
+}
+
+export type DramaSearchResult = {
+  providerId: string
+  providerName: string
+  keyword: string
+  ok: boolean
+  error: string
+  errorCode: string
+  rootCauseClass: string
+  total: number
+  warning: string
+  elapsedMs: number
+  partial: boolean
+  items: DramaItem[]
+}
+
+export type DramaDetail = {
+  item: DramaItem
+  related: DramaItem[]
+  relatedTotal: number
+  relatedPartial: boolean
+}
+
+export type DramaLine = {
+  sourceId: string
+  sourceName: string
+  siteKey: string
+  siteName: string
+  vodId: string
+  name: string
+  remarks: string
+  poster: string
+  year: string
+  typeName: string
+  matchScore: number
+  matchKind: "exact" | "prefix" | "contains" | string
+  episodeHint: string
+}
+
+export type DramaLineResult = {
+  lines: DramaLine[]
+  searchedSites: number
+  failedSites: number
+  searched: boolean
+  error: string
+  elapsedMs: number
+}
+
+export type DramaProvider = {
+  id: string
+  name: string
+  baseUrl: string
+  kind: string
+  builtin: boolean
+  enabled: boolean
+  error: string
+  updatedAt: number
+}
+
+export type DramaProviders = {
+  providers: DramaProvider[]
+  suggestedName: string
+  suggestedUrl: string
 }
 
 export type LiveSource = {
@@ -267,4 +348,21 @@ export const api = {
   disconnectAirPlay: () => request<{ disconnected: boolean }>("/api/airplay/disconnect", {
     method: "POST",
   }),
+  dramaProviders: () => request<DramaProviders>("/api/drama/providers"),
+  addDramaProvider: (payload: { name?: string; url?: string; suggested?: boolean }) =>
+    request<DramaProvider>("/api/drama/providers", { method: "POST", body: JSON.stringify(payload) }),
+  removeDramaProvider: (id: string) => request<{ removed: boolean }>(`/api/drama/providers/${id}`, {
+    method: "DELETE",
+  }),
+  setDramaProviderEnabled: (id: string, enabled: boolean) =>
+    request<{ enabled: boolean }>(`/api/drama/providers/${id}/enabled`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
+  dramaSearch: (payload: { providerId?: string; keyword: string }) =>
+    request<DramaSearchResult>("/api/drama/search", { method: "POST", body: JSON.stringify(payload) }),
+  dramaDetail: (payload: { providerId: string; dramaId: string }) =>
+    request<DramaDetail>("/api/drama/detail", { method: "POST", body: JSON.stringify(payload) }),
+  dramaLines: (payload: { providerId: string; dramaId: string; sourceId?: string }) =>
+    request<DramaLineResult>("/api/drama/lines", { method: "POST", body: JSON.stringify(payload) }),
 }
