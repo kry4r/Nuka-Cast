@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <atomic>
 #include <cstring>
+#include <string>
 
 extern "C" {
 #include "legacy-airplay/lib/raop.h"
@@ -107,6 +108,15 @@ void log_callback(void *, int level, const char *message) {
             : level == LOGGER_INFO ? ANDROID_LOG_INFO : ANDROID_LOG_DEBUG;
     __android_log_write(priority, "NukaCast-AirPlay", message ? message : "");
 }
+
+std::string jstring_value(JNIEnv *env, jstring value) {
+    if (!value) return std::string();
+    const char *chars = env->GetStringUTFChars(value, nullptr);
+    if (!chars) return std::string();
+    std::string result(chars);
+    env->ReleaseStringUTFChars(value, chars);
+    return result;
+}
 }
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
@@ -115,7 +125,8 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativeStart(JNIEnv *env, jobject bridge) {
+Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativeStart(
+        JNIEnv *env, jobject bridge, jstring deviceId, jstring name, jstring model, jstring pairId) {
     Server *server = new Server();
     server->bridge = env->NewGlobalRef(bridge);
     raop_callbacks_t callbacks;
@@ -131,6 +142,12 @@ Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativeStart(JNIEnv *env, jobje
         delete server;
         return 0;
     }
+    std::string device = jstring_value(env, deviceId);
+    std::string deviceName = jstring_value(env, name);
+    std::string deviceModel = jstring_value(env, model);
+    std::string pair = jstring_value(env, pairId);
+    raop_set_identity(server->raop, device.c_str(), deviceName.c_str(),
+                      deviceModel.c_str(), pair.c_str());
     raop_set_log_callback(server->raop, log_callback, nullptr);
     raop_set_log_level(server->raop, LOGGER_INFO);
     unsigned short port = 0;
@@ -165,6 +182,16 @@ Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativePublicKey(JNIEnv *env, j
     Server *server = reinterpret_cast<Server *>(handle);
     char output[65] = {0};
     if (!server || !server->raop || raop_get_public_key_hex(server->raop, output, sizeof(output)) < 0) {
+        return env->NewStringUTF("");
+    }
+    return env->NewStringUTF(output);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_nukacast_app_airplay_NativeAirPlayBridge_nativeIdentity(JNIEnv *env, jobject, jlong handle) {
+    Server *server = reinterpret_cast<Server *>(handle);
+    char output[512] = {0};
+    if (!server || !server->raop || raop_get_identity_summary(server->raop, output, sizeof(output)) < 0) {
         return env->NewStringUTF("");
     }
     return env->NewStringUTF(output);

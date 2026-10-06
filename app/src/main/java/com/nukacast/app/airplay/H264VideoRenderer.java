@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 final class H264VideoRenderer {
     private static final int QUEUE_CAPACITY = 8;
+    private static final int MAX_DECODER_RESTARTS = 3;
+    private static final long SOFTWARE_NO_OUTPUT_MS = 4000L;
     private final ArrayBlockingQueue<Frame> queue = new ArrayBlockingQueue<Frame>(QUEUE_CAPACITY);
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong dropped = new AtomicLong();
@@ -28,7 +30,7 @@ final class H264VideoRenderer {
     private final AtomicLong decoderInputs = new AtomicLong();
     private final AtomicLong decoderOutputs = new AtomicLong();
     private final AtomicLong decoderFormatChanges = new AtomicLong();
-    private final DecoderFallbackPolicy fallbackPolicy = new DecoderFallbackPolicy(24, 1500L);
+    private final DecoderFallbackPolicy fallbackPolicy = new DecoderFallbackPolicy(24, 1500L, 3000L);
     private final Thread thread;
     private volatile boolean running = true;
     private volatile Surface surface;
@@ -39,6 +41,9 @@ final class H264VideoRenderer {
     private volatile String error = "";
     private volatile String decoderName = "";
     private volatile boolean softwareFallback;
+    private volatile boolean decoderBlocked;
+    private int decoderRestarts;
+    private boolean softwareTimedOut;
     private volatile int videoWidth;
     private volatile int videoHeight;
     private MediaCodec decoder;
@@ -81,6 +86,9 @@ final class H264VideoRenderer {
                 pendingKeyFrame = null;
                 retainedKeyFrame = null;
                 softwareFallback = false;
+                decoderBlocked = false;
+                decoderRestarts = 0;
+                softwareTimedOut = false;
                 queue.clear();
                 decoderResetRequested = true;
             }
@@ -109,6 +117,9 @@ final class H264VideoRenderer {
         lastPtsUs = 0;
         waitingForKeyFrame = true;
         softwareFallback = false;
+        decoderBlocked = false;
+        decoderRestarts = 0;
+        softwareTimedOut = false;
         decoderName = "";
         error = "";
         videoWidth = 0;
@@ -145,6 +156,7 @@ final class H264VideoRenderer {
                         decoderResetRequested = false;
                         releaseDecoder();
                         waitingForKeyFrame = true;
+                        decoderBlocked = false;
                     }
                     Frame frame = queue.poll(10, TimeUnit.MILLISECONDS);
                     if (frame == null) {
@@ -153,7 +165,7 @@ final class H264VideoRenderer {
                         continue;
                     }
                     if (frame.type == 0) continue;
-                    if (decoder == null && !createDecoder(softwareFallback)) {
+                    if (decoder == null && !decoderBlocked && !createDecoder(softwareFallback)) {
                         if (containsNalType(frame.data, 5)) pendingKeyFrame = frame;
                         dropped.incrementAndGet();
                         continue;
@@ -172,11 +184,20 @@ final class H264VideoRenderer {
                     if (!running) return;
                 } catch (RuntimeException failure) {
                     dropped.incrementAndGet();
-                    this.error = failure.getMessage() == null
+                    String reason = failure.getMessage() == null
                             ? failure.getClass().getSimpleName() : failure.getMessage();
-                    AppLog.e("AirPlay 视频", "解码循环异常：" + this.error, failure);
+                    AppLog.e("AirPlay 视频", "解码循环异常：" + reason, failure);
                     releaseDecoder();
                     waitingForKeyFrame = true;
+                    decoderRestarts++;
+                    if (decoderRestarts > MAX_DECODER_RESTARTS) {
+                        this.error = "解码器持续异常，已停止重建（" + reason + "）";
+                        decoderBlocked = true;
+                        queue.clear();
+                        AppLog.w("AirPlay 视频", this.error);
+                        continue;
+                    }
+                    this.error = reason;
                     Frame recovery = retainedKeyFrame;
                     if (recovery != null) {
                         queue.clear();
@@ -296,10 +317,14 @@ final class H264VideoRenderer {
     }
 
     private void maybeFallback() {
-        if (decoder == null || softwareFallback) return;
+        if (decoder == null) return;
         long elapsed = Math.max(0L, System.currentTimeMillis() - decoderStartedAtMs);
         long inputs = decoderInputs.get() - decoderInputsAtStart;
         long outputs = decoderOutputs.get() - decoderOutputsAtStart;
+        if (softwareFallback) {
+            maybeReportSoftwareTimeout(inputs, outputs, elapsed);
+            return;
+        }
         if (!fallbackPolicy.shouldFallback(decoderName, inputs, outputs, elapsed)) return;
 
         Frame recovery = retainedKeyFrame;
@@ -318,6 +343,18 @@ final class H264VideoRenderer {
         waitingForKeyFrame = false;
         queueInput(recovery);
         drain();
+    }
+
+    /**
+     * A software decoder that never produces output means the stream itself is unsupported; report
+     * it once instead of leaving the user on an endless black screen.
+     */
+    private void maybeReportSoftwareTimeout(long inputs, long outputs, long elapsed) {
+        if (softwareTimedOut || outputs > 0 || inputs < 1) return;
+        if (elapsed < SOFTWARE_NO_OUTPUT_MS) return;
+        softwareTimedOut = true;
+        error = "软件解码器无输出，当前镜像格式可能不受支持";
+        AppLog.w("AirPlay 视频", error);
     }
 
     private long timestamp(long candidate) {

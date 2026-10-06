@@ -85,6 +85,15 @@ raop_handler_info(raop_conn_t *conn,
 			,0x00,0x00,0x02,0xa8
 	};
 	size_t len = sizeof(info);
+	char *identity_data = NULL;
+	int identity_len = 0;
+	if (raop_build_identity_info(conn->raop, info, (unsigned int) len,
+	                             &identity_data, &identity_len)) {
+		http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
+		*response_data = identity_data;
+		*response_datalen = identity_len;
+		return;
+	}
 	*response_data = malloc(len);
 	memcpy(*response_data, info, len);
 	if (*response_data) {

@@ -32,12 +32,15 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         public long decoderFormatChanges;
         public String decoderName;
         public boolean decoderSoftwareFallback;
+        /** Native identity actually served from {@code /info}, for mDNS consistency checks. */
+        public String identity;
     }
 
     private final AppState appState;
     private final Runnable onSessionStart;
     private final NativeAirPlayBridge bridge;
     private final AirPlayPublisher publisher;
+    private final AirPlayIdentity identity;
     private final H264VideoRenderer video = new H264VideoRenderer();
     private final PcmAudioRenderer audio = new PcmAudioRenderer();
     private final AirPlaySessionState session = new AirPlaySessionState();
@@ -51,8 +54,9 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     public AirPlayReceiver(Context context, AppState appState, Runnable onSessionStart) {
         this.appState = appState;
         this.onSessionStart = onSessionStart;
+        this.identity = AirPlayIdentity.load(context);
         this.bridge = new NativeAirPlayBridge(this);
-        this.publisher = new AirPlayPublisher(context);
+        this.publisher = new AirPlayPublisher(context, identity);
         watchdog.scheduleWithFixedDelay(new Runnable() {
             @Override public void run() { checkIdle(); }
         }, 2, 2, TimeUnit.SECONDS);
@@ -65,7 +69,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         error = "";
         AppLog.i("AirPlay", "正在启动接收器");
         try {
-            bridge.start();
+            bridge.start(identity);
             session.receiverStarted();
             publishOrWait();
             appState.updateActiveMedia("");
@@ -123,6 +127,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         snapshot.decoderFormatChanges = video.decoderFormatChanges();
         snapshot.decoderName = video.decoderName();
         snapshot.decoderSoftwareFallback = video.softwareFallback();
+        snapshot.identity = bridge.identity();
         return snapshot;
     }
 
@@ -197,7 +202,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         bridge.stop();
         if (stopped) return;
         try {
-            bridge.start();
+            bridge.start(identity);
             session.receiverStarted();
             publishOrWait();
         } catch (Exception failure) {

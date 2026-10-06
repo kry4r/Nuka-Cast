@@ -53,6 +53,13 @@ RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
 RAOP_API unsigned short raop_get_port(raop_t *raop);
 RAOP_API void *raop_get_callback_cls(raop_t *raop);
 RAOP_API int raop_get_public_key_hex(raop_t *raop, char *output, int output_len);
+
+/* Identity served from the native /info response. Empty values keep the built-in plist defaults.
+ * Callers should pass the same snapshot that mDNS advertises. */
+RAOP_API void raop_set_identity(raop_t *raop, const char *device_id, const char *name,
+                                const char *model, const char *pair_id);
+/* Writes "deviceId=...;name=...;model=...;pi=...;pk=..." for diagnostics. */
+RAOP_API int raop_get_identity_summary(raop_t *raop, char *output, int output_len);
 RAOP_API int raop_start(raop_t *raop, unsigned short *port);
 RAOP_API int raop_is_running(raop_t *raop);
 RAOP_API void raop_stop(raop_t *raop);

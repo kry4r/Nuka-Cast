@@ -1,32 +1,27 @@
 package com.nukacast.app.airplay;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.net.wifi.WifiManager;
 
 import com.nukacast.app.core.NetworkAddress;
 
 import java.net.InetAddress;
-import java.nio.charset.Charset;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 
 import javax.jmdns.JmDNS;
 import javax.jmdns.ServiceInfo;
 
 final class AirPlayPublisher {
-    private static final Charset UTF_8 = Charset.forName("UTF-8");
-    private static final String IDENTITY_PREFS = "airplay_identity";
-    private static final String DEVICE_ID = "device_id";
     private final Context context;
+    private final AirPlayIdentity identity;
     private JmDNS jmdns;
     private WifiManager.MulticastLock multicastLock;
     private String publishedAddress = "";
 
-    AirPlayPublisher(Context context) {
+    AirPlayPublisher(Context context, AirPlayIdentity identity) {
         this.context = context.getApplicationContext();
+        this.identity = identity;
     }
 
     synchronized void start(int port, String publicKey) throws Exception {
@@ -45,21 +40,18 @@ final class AirPlayPublisher {
                 multicastLock.acquire();
             }
             InetAddress address = InetAddress.getByName(addressText);
-            String mac = deviceId();
-            String compactMac = mac.replace(":", "").toUpperCase(Locale.ROOT);
-            String pairId = UUID.nameUUIDFromBytes(("NukaCast|" + mac).getBytes(UTF_8)).toString();
-            jmdns = JmDNS.create(address, "NukaCast");
+            jmdns = JmDNS.create(address, identity.name);
 
             Map<String, String> airplay = new LinkedHashMap<String, String>();
-            airplay.put("deviceid", mac);
+            airplay.put("deviceid", identity.deviceId);
             airplay.put("features", "0x5A7FFFF7,0x1E");
             airplay.put("srcvers", "220.68");
             airplay.put("flags", "0x4");
             airplay.put("vv", "2");
-            airplay.put("model", "AppleTV3,2");
+            airplay.put("model", identity.model);
             airplay.put("pw", "false");
             airplay.put("pk", publicKey);
-            airplay.put("pi", pairId);
+            airplay.put("pi", identity.pairId);
 
             Map<String, String> raop = new LinkedHashMap<String, String>();
             raop.put("ch", "2");
@@ -68,7 +60,7 @@ final class AirPlayPublisher {
             raop.put("et", "0,3,5");
             raop.put("vv", "2");
             raop.put("ft", "0x5A7FFFF7,0x1E");
-            raop.put("am", "AppleTV3,2");
+            raop.put("am", identity.model);
             raop.put("md", "0,1,2");
             raop.put("pw", "false");
             raop.put("sr", "44100");
@@ -82,9 +74,10 @@ final class AirPlayPublisher {
             raop.put("pk", publicKey);
 
             jmdns.registerService(ServiceInfo.create(
-                    "_airplay._tcp.local.", "NukaCast", port, 0, 0, airplay));
+                    "_airplay._tcp.local.", identity.name, port, 0, 0, airplay));
             jmdns.registerService(ServiceInfo.create(
-                    "_raop._tcp.local.", compactMac + "@NukaCast", port, 0, 0, raop));
+                    "_raop._tcp.local.", identity.compactMac + "@" + identity.name,
+                    port, 0, 0, raop));
             publishedAddress = addressText;
         } catch (Exception failure) {
             stop();
@@ -112,21 +105,5 @@ final class AirPlayPublisher {
 
     static boolean isUsableAddress(String address) {
         return address != null && !address.isEmpty() && !"0.0.0.0".equals(address);
-    }
-
-    private String deviceId() {
-        SharedPreferences preferences = context.getSharedPreferences(
-                IDENTITY_PREFS, Context.MODE_PRIVATE);
-        String saved = preferences.getString(DEVICE_ID, "");
-        if (saved.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) {
-            return saved.toUpperCase(Locale.ROOT);
-        }
-        UUID value = UUID.randomUUID();
-        long bits = value.getLeastSignificantBits();
-        String generated = String.format(Locale.US, "02:%02X:%02X:%02X:%02X:%02X",
-                (bits >>> 32) & 0xff, (bits >>> 24) & 0xff, (bits >>> 16) & 0xff,
-                (bits >>> 8) & 0xff, bits & 0xff);
-        preferences.edit().putString(DEVICE_ID, generated).apply();
-        return generated;
     }
 }

@@ -42,6 +42,12 @@ struct raop_s {
 	httpd_t *httpd;
 
     unsigned short port;
+
+	/* Identity shared with mDNS; empty values keep the built-in plist defaults */
+	char identity_device_id[64];
+	char identity_name[64];
+	char identity_model[64];
+	char identity_pair_id[64];
 };
 
 struct raop_conn_s {
@@ -62,6 +68,108 @@ struct raop_conn_s {
 
 };
 typedef struct raop_conn_s raop_conn_t;
+
+#include "plist/plist/plist.h"
+
+static void
+copy_identity_field(char *target, size_t size, const char *value)
+{
+	if (!target || size == 0) return;
+	if (!value) {
+		target[0] = '\0';
+		return;
+	}
+	snprintf(target, size, "%s", value);
+}
+
+void
+raop_set_identity(raop_t *raop, const char *device_id, const char *name,
+                  const char *model, const char *pair_id)
+{
+	if (!raop) return;
+	copy_identity_field(raop->identity_device_id, sizeof(raop->identity_device_id), device_id);
+	copy_identity_field(raop->identity_name, sizeof(raop->identity_name), name);
+	copy_identity_field(raop->identity_model, sizeof(raop->identity_model), model);
+	copy_identity_field(raop->identity_pair_id, sizeof(raop->identity_pair_id), pair_id);
+}
+
+/*
+ * Rebuilds the /info binary plist from the built-in template by replacing the identity fields
+ * that used to be hard-coded (deviceID/macAddress/name/model/pi and the pairing public key).
+ * Returns 0 on any failure so the caller can fall back to the untouched template: pairing must
+ * never break because identity rewriting failed.
+ */
+static int
+raop_build_identity_info(raop_t *raop, const char *template_bytes, unsigned int template_len,
+                         char **output, int *output_len)
+{
+	plist_t root = NULL;
+	char *bin = NULL;
+	uint32_t bin_len = 0;
+	unsigned char public_key[32];
+
+	if (!raop || !template_bytes || template_len == 0 || !output || !output_len) return 0;
+	plist_from_bin(template_bytes, template_len, &root);
+	if (!root || plist_get_node_type(root) != PLIST_DICT) {
+		if (root) plist_free(root);
+		return 0;
+	}
+	if (raop->identity_device_id[0]) {
+		if (plist_dict_get_item(root, "deviceID")) {
+			plist_dict_set_item(root, "deviceID",
+			                    plist_new_string(raop->identity_device_id));
+		}
+		if (plist_dict_get_item(root, "macAddress")) {
+			plist_dict_set_item(root, "macAddress",
+			                    plist_new_string(raop->identity_device_id));
+		}
+	}
+	if (raop->identity_name[0] && plist_dict_get_item(root, "name")) {
+		plist_dict_set_item(root, "name", plist_new_string(raop->identity_name));
+	}
+	if (raop->identity_model[0] && plist_dict_get_item(root, "model")) {
+		plist_dict_set_item(root, "model", plist_new_string(raop->identity_model));
+	}
+	if (raop->identity_pair_id[0] && plist_dict_get_item(root, "pi")) {
+		plist_dict_set_item(root, "pi", plist_new_string(raop->identity_pair_id));
+	}
+	if (raop->pairing && plist_dict_get_item(root, "pk")) {
+		pairing_get_public_key(raop->pairing, public_key);
+		plist_dict_set_item(root, "pk", plist_new_data((const char *) public_key, 32));
+	}
+	plist_to_bin(root, &bin, &bin_len);
+	plist_free(root);
+	if (!bin || bin_len == 0) {
+		if (bin) free(bin);
+		return 0;
+	}
+	*output = bin;
+	*output_len = (int) bin_len;
+	return 1;
+}
+
+int
+raop_get_identity_summary(raop_t *raop, char *output, int output_len)
+{
+	static const char hex[] = "0123456789abcdef";
+	unsigned char public_key[32];
+	char pk_hex[65];
+	int i;
+
+	if (!raop || !output || output_len <= 0) return -1;
+	memset(pk_hex, 0, sizeof(pk_hex));
+	if (raop->pairing) {
+		pairing_get_public_key(raop->pairing, public_key);
+		for (i = 0; i < 32; i++) {
+			pk_hex[i * 2] = hex[(public_key[i] >> 4) & 0x0f];
+			pk_hex[i * 2 + 1] = hex[public_key[i] & 0x0f];
+		}
+	}
+	snprintf(output, (size_t) output_len, "deviceId=%s;name=%s;model=%s;pi=%s;pk=%s",
+	         raop->identity_device_id, raop->identity_name, raop->identity_model,
+	         raop->identity_pair_id, pk_hex);
+	return 0;
+}
 
 #include "raop_handlers.h"
 
