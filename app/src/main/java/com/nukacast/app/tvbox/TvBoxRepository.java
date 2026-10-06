@@ -6,6 +6,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonPrimitive;
 import com.nukacast.app.BuildConfig;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.StageTrace;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.tvbox.model.ConfigSource;
@@ -186,14 +187,18 @@ public final class TvBoxRepository {
 
     public TvBoxConfig refresh(ConfigSource source) throws IOException {
         long startedAt = System.currentTimeMillis();
+        StageTrace.Trace trace = StageTrace.start("source", safe(source.name));
         try {
+            trace.stage("fetch_config");
             ConfigPayloadResolver.Resolved resolved = payloadResolver.resolve(source.url,
                     new ConfigPayloadResolver.Fetcher() {
                 @Override public ConfigPayloadResolver.Payload fetch(String url) throws IOException {
                     return fetchConfig(url);
                 }
             });
+            trace.stage("decode");
             ConfigDecoder.Document document = resolved.document;
+            trace.stage("persist");
             source.resolvedUrl = resolved.url;
             source.contentHash = Digests.sha256(resolved.bytes);
             source.updatedAt = System.currentTimeMillis();
@@ -210,6 +215,7 @@ public final class TvBoxRepository {
                 deleteCache(source.id);
                 pruneConfigsAndCaches();
                 AppLog.i("片源", "仓库刷新成功 [" + safe(source.name) + "]");
+                trace.success();
                 return null;
             }
 
@@ -230,8 +236,10 @@ public final class TvBoxRepository {
             saveCache(source.id, resolved.content);
             AppLog.i("片源", "配置刷新成功 [" + safe(source.name) + "]："
                     + config.sites.size() + " 个站点");
+            trace.success();
             return config;
         } catch (Exception error) {
+            trace.failure(error);
             source.error = message(error);
             source.updatedAt = System.currentTimeMillis();
             source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
@@ -268,6 +276,13 @@ public final class TvBoxRepository {
             refresh(source);
         } catch (Exception ignored) {
             // refresh() persists the source-specific failure for diagnostics.
+        } catch (Throwable failure) {
+            // A LinkageError/VerifyError from a plugin or the TLS stack used to escape the single
+            // refresh thread and kill the process on Android; contain it, keep the record and leave
+            // the rest of the UI alive.
+            StageTrace.componentFailure("source", safe(source.name), "refresh", failure);
+            AppLog.e("片源", "配置刷新抛出 " + failure.getClass().getSimpleName()
+                    + " [" + safe(source.name) + "]", failure);
         }
     }
 

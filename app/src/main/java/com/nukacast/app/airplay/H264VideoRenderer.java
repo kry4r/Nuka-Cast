@@ -9,6 +9,7 @@ import android.os.Build;
 import android.view.Surface;
 
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.StageTrace;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -91,6 +92,7 @@ final class H264VideoRenderer {
                 softwareTimedOut = false;
                 queue.clear();
                 decoderResetRequested = true;
+                StageTrace.component("airplay", "video", "codec_config", true, "");
             }
             return;
         }
@@ -307,7 +309,11 @@ final class H264VideoRenderer {
             int index = active.dequeueOutputBuffer(info, 0);
             if (index >= 0) {
                 active.releaseOutputBuffer(index, true);
-                decoderOutputs.incrementAndGet();
+                long produced = decoderOutputs.incrementAndGet();
+                if (produced - decoderOutputsAtStart == 1L) {
+                    StageTrace.component("airplay", "video", "first_output", true,
+                            decoderLabel() + " " + videoWidth + "x" + videoHeight);
+                }
             } else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 decoderFormatChanges.incrementAndGet();
             } else if (index != MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
@@ -334,6 +340,8 @@ final class H264VideoRenderer {
         waitingForKeyFrame = true;
         AppLog.w("AirPlay 视频", "硬解码器 " + failedDecoder
                 + " 无输出，正在切换软件解码器");
+        StageTrace.component("airplay", "video", "decoder_fallback", true,
+                "硬解无输出，切换软件解码器：" + failedDecoder);
         if (!createDecoder(true)) return;
         if (recovery == null) {
             error = "硬解码器无输出，软件解码器正在等待 IDR";
@@ -355,6 +363,12 @@ final class H264VideoRenderer {
         softwareTimedOut = true;
         error = "软件解码器无输出，当前镜像格式可能不受支持";
         AppLog.w("AirPlay 视频", error);
+        StageTrace.componentFailure("airplay", "video", "software_no_output",
+                new IllegalStateException(error));
+    }
+
+    private String decoderLabel() {
+        return decoderName == null || decoderName.isEmpty() ? "decoder" : decoderName;
     }
 
     private long timestamp(long candidate) {

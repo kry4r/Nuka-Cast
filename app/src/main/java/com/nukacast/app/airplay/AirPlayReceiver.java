@@ -7,6 +7,7 @@ import android.view.SurfaceHolder;
 
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.StageTrace;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -70,10 +71,13 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
         AppLog.i("AirPlay", "正在启动接收器");
         try {
             bridge.start(identity);
+            StageTrace.component("airplay", "receiver", "native_listen", true,
+                    "port=" + bridge.port());
             session.receiverStarted();
             publishOrWait();
             appState.updateActiveMedia("");
         } catch (Exception failure) {
+            StageTrace.componentFailure("airplay", "receiver", "native_listen", failure);
             publisher.stop();
             bridge.stop();
             state = "error";
@@ -225,6 +229,8 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
             error = "";
             if (!"ready".equals(previousState)) {
                 AppLog.i("AirPlay", "接收器已发布，可被 iOS 发现，端口 " + bridge.port());
+                StageTrace.component("airplay", "receiver", "mdns_publish", true,
+                        "port=" + bridge.port());
             }
         } catch (Exception failure) {
             state = "waiting_network";
@@ -232,6 +238,7 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
                     ? failure.getClass().getSimpleName() : failure.getMessage();
             if (!"waiting_network".equals(previousState) || !error.equals(previousError)) {
                 AppLog.w("AirPlay", "等待可用局域网后重新发布：" + error, failure);
+                StageTrace.componentFailure("airplay", "receiver", "mdns_publish", failure);
             }
         }
     }

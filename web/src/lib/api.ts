@@ -62,6 +62,20 @@ export type Site = {
   sourceName: string
 }
 
+export type StageRecord = {
+  scope: string
+  subject: string
+  stage: string
+  result: "running" | "ok" | "failed" | string
+  startedAt: number
+  updatedAt: number
+  elapsedMs: number
+  detail: string
+  errorCode: string
+  rootCauseClass: string
+  generation: number
+}
+
 export type Diagnostics = {
   javaCrash: string
   serviceState: string
@@ -72,6 +86,7 @@ export type Diagnostics = {
   sources: Source[]
   homeErrors: { sourceId: string; siteKey: string; siteName: string; error: string; updatedAt: number }[]
   httpStack: { degraded: boolean; initError: string }
+  stages: StageRecord[]
 }
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR"

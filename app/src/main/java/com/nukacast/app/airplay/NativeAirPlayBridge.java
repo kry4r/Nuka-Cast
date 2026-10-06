@@ -1,5 +1,7 @@
 package com.nukacast.app.airplay;
 
+import com.nukacast.app.diagnostics.StageTrace;
+
 final class NativeAirPlayBridge {
     interface Listener {
         void onVideo(byte[] data, int type, long presentationTimeUs);
@@ -15,8 +17,10 @@ final class NativeAirPlayBridge {
             loaded = true;
         } catch (Throwable error) {
             loaded = false;
+            StageTrace.componentFailure("airplay", "native", "native_load", error);
         }
         AVAILABLE = loaded;
+        if (loaded) StageTrace.component("airplay", "native", "native_load", true, "");
     }
 
     private final Listener listener;

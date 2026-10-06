@@ -889,6 +889,26 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
         </div>
         {diagnostics?.javaCrash ? <details className="mt-4 rounded-md border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">上次 Java 闪退记录</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t p-4 text-xs leading-5 text-destructive">{diagnostics.javaCrash}</pre></details> : <div className="mt-4 text-sm text-muted-foreground">没有保存的 Java 闪退记录。</div>}
       </section>
+      <section className="mt-7 border-t pt-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="section-title">阶段诊断</h2>
+          <Badge variant={diagnostics?.stages?.some((stage) => stage.result === "failed") ? "destructive" : "outline"}>{diagnostics?.stages?.length ?? 0} 条</Badge>
+        </div>
+        <div className="space-y-2">
+          {diagnostics?.stages?.slice(0, 12).map((stage) => (
+            <div key={`${stage.generation}-${stage.scope}-${stage.subject}`} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[160px_1fr_auto]">
+              <span className="truncate font-medium">{stage.scope} · {stage.subject}</span>
+              <span className="break-words">
+                <span className="font-mono text-xs">{stage.stage}</span>
+                {stage.detail && <span className="ml-2 text-muted-foreground">{stage.detail}</span>}
+                {stage.rootCauseClass && <span className="ml-2 text-xs text-muted-foreground">{stage.rootCauseClass}</span>}
+              </span>
+              <span className={`text-xs ${stage.result === "failed" ? "text-destructive" : "text-muted-foreground"}`}>{stage.result === "failed" ? `失败${stage.errorCode ? ` · ${stage.errorCode}` : ""}` : stage.result === "ok" ? `${stage.elapsedMs} ms` : "进行中"}</span>
+            </div>
+          ))}
+          {(!diagnostics?.stages || diagnostics.stages.length === 0) && <div className="text-sm text-muted-foreground">还没有阶段记录；刷新片源、搜索或投屏后会记录 fetch_config / plugin_init / native_listen 等阶段。</div>}
+        </div>
+      </section>
     </>
   )
 }

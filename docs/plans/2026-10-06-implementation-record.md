@@ -41,6 +41,9 @@
 ### 1.3 源稳定性（T1 的 F01 部分）
 
 - `HttpStack`：静态初始化整体包在 `try/catch(Throwable)` 中。Conscrypt 加载失败或 legacy TLS 构造失败时不再抛 `ExceptionInInitializerError`，而是退回平台 TLS 客户端，并通过 `degraded()`/`initError()` 暴露；`/api/diagnostics.httpStack` 与网页设备页显示“已回退平台 TLS：原因”。证书校验没有被放宽。
+- `StageTrace` + `ErrorCodes`：有界（48 条）阶段记录，覆盖 `fetch_config -> decode -> persist`（片源）、`native_load -> native_listen -> mdns_publish -> codec_config -> first_output`（AirPlay）与 `js_session/jar_session -> plugin_init`（Spider）；失败记录 `errorCode`、最深层 `rootCauseClass`、原始消息与耗时。`ErrorCodes` 能区分 DNS/超时/TLS/网络、Dalvik verifier/linker、native SO、OOM 与取消。记录是线索不是结论，需与 logcat/native/ANR 一起判读。
+- 刷新执行边界：`TvBoxRepository.refreshSafely()` 现在捕获 `Throwable`（原来只捕 `Exception`），插件的 `LinkageError`/`VerifyError` 不再从刷新线程逃出导致进程退出，而是记录阶段并保留其余 UI。
+- Spider 会话身份与上限（F04 部分）：session key 加入 `sourceId|siteKey`，`siteSpiders` 改用同一身份键；代理请求优先使用最近 pin 的同 siteKey spider，避免跨仓串用。会话达到上限时按“最久未用”LRU 释放并重建，不再直接报“会话数已达上限”。
 
 ### 1.4 测试与 CI（T4 部分）
 
@@ -53,7 +56,7 @@
 ```text
 JDK 18.0.2.1（CI 仍为 17），ANDROID_HOME 指向 SDK 35，NDK 20.1.5948944 / CMake 3.22.1
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug
-  -> 37 suites / 132 tests / 0 failures / 0 errors / 0 skipped
+  -> 39 suites / 142 tests / 0 failures / 0 errors / 0 skipped
   -> lint: 0 error / 8 warning（与基线一致）
 .\gradlew.bat :app:assembleDebug
   -> BUILD SUCCESSFUL，arm64-v8a + armeabi-v7a 原生库含新的 raop.c / raop_handlers.h
@@ -77,6 +80,8 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 | AirPlay /info 与 mDNS 身份一致 | 代码完成，真机 pending（A01） | 需在重启 native 后比对 TXT 与 `/info` |
 | 软件解码无输出明确报错 | 代码完成，真机 pending（A05） | 需海思类设备验证 |
 | HttpStack 初始化失败不再带走 UI | pass（JVM 测试覆盖边界与回退客户端） | API19 真机 TLS provider 加载由 CI + 真机确认 |
+| 阶段诊断（source/spider/airplay/http） | pass（JVM 测试 + `/api/diagnostics.stages` + 网页展示） | 真机采集仍需结合 logcat/native |
+| Spider 会话身份与 LRU | pass（代码 + 编译） | 需在真实多仓配置下观察会话命中/释放 |
 | API19 x86 类加载/布局/TLS | 代码 + CI job 完成，流水线 pending | 本轮未运行模拟器 |
 | 插件独立进程 / 不可中断执行（T2/F02/F03） | **未实施** | 需要单独设计 IPC 契约，见 spec 3.2 |
 | 24 帧门槛之外的真机首帧耗时 | **pending** | 需要 SHARP/iPhone |
@@ -91,6 +96,6 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 
 ## 5. 建议下一步
 
-1. 在 SHARP 电视安装本次 debug APK，按 plan 的 T0 采集流程抓取首次崩溃的 earliest cause，并导出 `/api/diagnostics`（现在包含 `httpStack`/`drama`/`airPlay.identity`）。
+1. 在 SHARP 电视安装本次 debug APK，按 plan 的 T0 采集流程抓取首次崩溃的 earliest cause，并导出 `/api/diagnostics`（现在包含 `httpStack`/`drama`/`airPlay.identity`/`stages`）。网页“设备”页的阶段诊断可直接看到最后一个 running/failed 阶段。
 2. 提供至少一个可用短剧片源或 CMS 地址，完成 D03 的完整真实播放链路。
 3. 按 F02/F03 评估 `:spider` 独立进程与 QuickJS 中断/内存限制；这是防止插件带走 UI 的架构项，不能在当前证据下假定已解决。

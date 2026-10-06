@@ -9,6 +9,7 @@ import com.nukacast.app.CrashReporter;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.StageTrace;
 import com.nukacast.app.drama.DramaService;
 import com.nukacast.app.drama.model.DramaLineResult;
 import com.nukacast.app.drama.model.DramaProviderConfig;
@@ -324,6 +325,7 @@ public final class ControlServer extends NanoHTTPD {
         result.put("sources", runtime.getSourceStore().getSources());
         result.put("homeErrors", runtime.getContentService().homeFailures());
         result.put("drama", runtime.getDramaService().diagnostics());
+        result.put("stages", StageTrace.snapshot());
         Map<String, Object> httpStack = new HashMap<String, Object>();
         httpStack.put("degraded", HttpStack.degraded());
         httpStack.put("initError", HttpStack.initError());

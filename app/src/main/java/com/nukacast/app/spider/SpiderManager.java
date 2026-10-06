@@ -7,6 +7,7 @@ import com.github.catvod.crawler.SpiderApi;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.StageTrace;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
 
@@ -41,6 +42,7 @@ public final class SpiderManager {
     private final Context context;
     private final JarTrustStore trustStore;
     private final Map<String, SpiderSession> sessions = new HashMap<String, SpiderSession>();
+    private final Map<String, Long> sessionUsedAt = new HashMap<String, Long>();
     private final Map<String, LoadedJar> loadedJars = new HashMap<String, LoadedJar>();
     private final Map<String, Spider> siteSpiders = new HashMap<String, Spider>();
     private final Map<String, LoadedJar> siteJars = new HashMap<String, LoadedJar>();
@@ -112,6 +114,7 @@ public final class SpiderManager {
             } catch (RuntimeException ignored) {}
         }
         sessions.clear();
+        sessionUsedAt.clear();
         siteSpiders.clear();
         siteJars.clear();
         loadedJars.clear();
@@ -154,6 +157,7 @@ public final class SpiderManager {
                 removeSpider((JavaSpiderSession) entry.getValue());
             }
             try { entry.getValue().destroy(); } catch (RuntimeException ignored) {}
+            sessionUsedAt.remove(entry.getKey());
             iterator.remove();
         }
         LoadedJar removed = loadedJars.remove(spec);
@@ -163,53 +167,107 @@ public final class SpiderManager {
     }
 
     private synchronized SpiderSession session(TvBoxConfig.Site site) throws Exception {
-        if (QuickJsSpiderSession.supports(site)) {
-            String sessionKey = "js|" + safe(site.api) + "|" + site.extension();
+        StageTrace.Trace trace = StageTrace.start("spider", siteIdentity(site));
+        try {
+            if (QuickJsSpiderSession.supports(site)) {
+                trace.stage("js_session");
+                String sessionKey = "js|" + siteIdentity(site) + "|" + safe(site.api)
+                        + "|" + site.extension();
+                SpiderSession existing = sessions.get(sessionKey);
+                if (existing != null) {
+                    touch(sessionKey);
+                    trace.success();
+                    return existing;
+                }
+                ensureSessionSlot();
+                SpiderSession created = new QuickJsSpiderSession(site);
+                rememberSession(sessionKey, created);
+                trace.success();
+                return created;
+            }
+            trace.stage("jar_session");
+            String jarSpec = firstNonEmpty(site.jar, site.globalSpider);
+            if (jarSpec.isEmpty()) {
+                throw new IllegalStateException("站点未配置 Spider JAR");
+            }
+            String className = spiderClassName(site.api);
+            LoadedJar loaded = loadedJar(jarSpec);
+            String sessionKey = jarSpec + "|" + siteIdentity(site) + "|" + className
+                    + "|" + site.extension();
             SpiderSession existing = sessions.get(sessionKey);
-            if (existing != null) return existing;
-            if (sessions.size() >= MAX_SESSIONS) throw new IllegalStateException("Spider 会话数已达上限");
-            SpiderSession created = new QuickJsSpiderSession(site);
-            sessions.put(sessionKey, created);
+            if (existing != null) {
+                touch(sessionKey);
+                trace.success();
+                return existing;
+            }
+            ensureSessionSlot();
+            trace.stage("plugin_init");
+            Class<?> type = loaded.loader.loadClass(className);
+            Object instance = type.newInstance();
+            if (!(instance instanceof Spider)) {
+                throw new IllegalStateException(className + " 未继承 CatVod Spider");
+            }
+            Spider spider = (Spider) instance;
+            spider.siteKey = safe(site.key);
+            spider.initApi(new SpiderApi(context));
+            spider.init(context, site.extension());
+            SpiderSession created = new JavaSpiderSession(spider);
+            rememberSession(sessionKey, created);
+            siteSpiders.put(siteIdentity(site), spider);
+            siteJars.put(siteIdentity(site), loaded);
+            trace.success();
             return created;
+        } catch (Throwable error) {
+            trace.failure(error);
+            throw error;
         }
-        String jarSpec = firstNonEmpty(site.jar, site.globalSpider);
-        if (jarSpec.isEmpty()) {
-            throw new IllegalStateException("站点未配置 Spider JAR");
-        }
-        String className = spiderClassName(site.api);
-        LoadedJar loaded = loadedJar(jarSpec);
-        String sessionKey = jarSpec + "|" + safe(site.key) + "|" + className
-                + "|" + site.extension();
-        SpiderSession existing = sessions.get(sessionKey);
-        if (existing != null) return existing;
-        if (sessions.size() >= MAX_SESSIONS) throw new IllegalStateException("Spider 会话数已达上限");
+    }
 
-        Class<?> type = loaded.loader.loadClass(className);
-        Object instance = type.newInstance();
-        if (!(instance instanceof Spider)) {
-            throw new IllegalStateException(className + " 未继承 CatVod Spider");
+    private void rememberSession(String key, SpiderSession session) {
+        sessions.put(key, session);
+        touch(key);
+    }
+
+    private void touch(String key) {
+        sessionUsedAt.put(key, System.currentTimeMillis());
+    }
+
+    /**
+     * Evicts the least recently used session when the cache is full instead of failing every
+     * later request, which keeps the API 19 resource budget bounded without a hard error wall.
+     */
+    private void ensureSessionSlot() {
+        while (sessions.size() >= MAX_SESSIONS && !sessions.isEmpty()) {
+            String oldestKey = null;
+            long oldest = Long.MAX_VALUE;
+            for (String key : sessions.keySet()) {
+                Long used = sessionUsedAt.get(key);
+                long value = used == null ? 0L : used;
+                if (value < oldest) {
+                    oldest = value;
+                    oldestKey = key;
+                }
+            }
+            if (oldestKey == null) return;
+            SpiderSession victim = sessions.remove(oldestKey);
+            sessionUsedAt.remove(oldestKey);
+            if (victim instanceof JavaSpiderSession) removeSpider((JavaSpiderSession) victim);
+            try {
+                victim.destroy();
+            } catch (RuntimeException ignored) {}
+            AppLog.d("Spider", "会话缓存已满，释放最久未用的会话");
         }
-        Spider spider = (Spider) instance;
-        spider.siteKey = safe(site.key);
-        spider.initApi(new SpiderApi(context));
-        spider.init(context, site.extension());
-        SpiderSession created = new JavaSpiderSession(spider);
-        sessions.put(sessionKey, created);
-        siteSpiders.put(safe(site.key), spider);
-        siteJars.put(siteIdentity(site), loaded);
-        return created;
     }
 
     private synchronized void pinProxy(TvBoxConfig.Site site) {
         recentJar = siteJars.get(siteIdentity(site));
-        recentSpider = siteSpiders.get(safe(site.key));
+        recentSpider = siteSpiders.get(siteIdentity(site));
     }
 
     public synchronized Object[] proxy(Map<String, String> params) throws Exception {
         if (params == null) return null;
         if (params.containsKey("do")) {
-            Spider spider = siteSpiders.get(safe(params.get("siteKey")));
-            if (spider == null) spider = recentSpider;
+            Spider spider = findSiteSpider(safe(params.get("siteKey")));
             return spider == null ? null : spider.proxyLocal(params);
         }
         if (params.containsKey("go") && recentJar != null && recentJar.proxy != null) {
@@ -260,6 +318,21 @@ public final class SpiderManager {
         } catch (InvocationTargetException error) {
             throw cause(error);
         }
+    }
+
+    /**
+     * Proxy requests only carry a site key, and keys can repeat across sources. Prefer the spider
+     * most recently pinned for an active request, then any spider whose site key matches, so a
+     * different source's instance is never mixed into the request when a collision exists.
+     */
+    private Spider findSiteSpider(String siteKey) {
+        if (recentSpider != null && siteKey.equals(safe(recentSpider.siteKey))) {
+            return recentSpider;
+        }
+        for (Spider candidate : siteSpiders.values()) {
+            if (siteKey.equals(safe(candidate.siteKey))) return candidate;
+        }
+        return recentSpider;
     }
 
     private void removeSpider(JavaSpiderSession session) {

@@ -3,6 +3,7 @@ package com.nukacast.app.drama;
 import android.content.Context;
 
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.ErrorCodes;
 import com.nukacast.app.drama.model.DramaDetail;
 import com.nukacast.app.drama.model.DramaItem;
 import com.nukacast.app.drama.model.DramaLine;
@@ -243,13 +244,7 @@ public final class DramaService {
 
     static String codeOf(Throwable error) {
         if (error instanceof DramaException) return ((DramaException) error).code;
-        String name = error.getClass().getName();
-        if (name.endsWith("UnknownHostException")) return "dns_error";
-        if (name.endsWith("SocketTimeoutException")
-                || name.endsWith("InterruptedIOException")) return "timeout";
-        if (name.contains("SSL") || name.contains("Certificate")) return "tls_error";
-        if (error instanceof java.io.IOException) return "network_error";
-        return "internal_error";
+        return ErrorCodes.of(error);
     }
 
     private synchronized <T> T read(Map<String, CacheEntry<T>> cache, String key) {

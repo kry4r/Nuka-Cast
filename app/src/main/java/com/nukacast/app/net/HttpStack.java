@@ -2,6 +2,8 @@ package com.nukacast.app.net;
 
 import android.os.Build;
 
+import com.nukacast.app.diagnostics.StageTrace;
+
 import org.conscrypt.Conscrypt;
 
 import java.io.IOException;
@@ -53,6 +55,8 @@ public final class HttpStack {
         if (client == null) client = fallbackClient();
         CLIENT = client;
         INIT_ERROR = error;
+        StageTrace.component("http", "tls", INIT_ERROR.isEmpty() ? "legacy_tls" : "platform_tls",
+                INIT_ERROR.isEmpty(), INIT_ERROR);
     }
 
     private HttpStack() {}
