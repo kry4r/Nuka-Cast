@@ -355,6 +355,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
+            // While something is playing the menu key opens the player menu, which is what a viewer
+            // expects; otherwise it goes to the settings page.
+            if (isFullScreenMedia() && playerHud != null) {
+                togglePlayerMenu();
+                return true;
+            }
             stopActivePlayback();
             showPage(PAGE_SETTINGS);
             findViewById(R.id.navSettings).requestFocus();
@@ -519,6 +525,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     public void openDetailForDebug(final MediaDetail detail) {
         if (detail == null) return;
         showDetail(detail);
+    }
+
+    /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
+    public String playerMenuActionForDebug(String action) {
+        if (action == null) return "no-action";
+        onPlayerMenuAction(action);
+        return action;
+    }
+
+    /** Current aspect mode index (0 适应, 1 填充, 2 原始). */
+    public int aspectModeForDebug() {
+        return aspectMode;
     }
 
     /** Scrolls the page currently on screen; positive values scroll down. */
@@ -1263,6 +1281,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      */
     public void onPlaybackTick(int positionMs, int durationMs) {
         reportPlaybackFailure();
+        advanceEpisodeWhenFinished();
         if (livePlayingIndex < 0 && activeDetail != null) tryNextLine();
         if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
         if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
@@ -1279,6 +1298,56 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveAutoSwitch++;
         AppLog.i("直播", "频道播放失败，自动换到下一个（第 " + liveAutoSwitch + " 次）");
         switchLiveChannel(1);
+    }
+
+    /** Set once the end of a series was reached, so the notice is shown only once. */
+    private boolean seriesFinished;
+
+    /**
+     * Plays the next episode when one finishes.
+     *
+     * <p>Watching a series episode by episode is the main use of a TV box; stopping at every episode
+     * end (and dropping back to the list, as this used to) is the difference between usable and not.
+     */
+    private void advanceEpisodeWhenFinished() {
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        if (!"ended".equals(playback.state)) {
+            if (!"error".equals(playback.state)) seriesFinished = false;
+            return;
+        }
+        if (seriesFinished) return;
+        MediaDetail detail = activeDetail;
+        if (detail == null || detail.playSources == null) return;
+        MediaDetail.PlaySource line =
+                com.nukacast.app.player.LinePicker.lineOf(detail, activeLineName);
+        MediaDetail.Episode next =
+                com.nukacast.app.player.LinePicker.nextEpisode(line, activeEpisodeId);
+        if (next == null) {
+            seriesFinished = true;
+            if (playerHud != null) {
+                playerHud.show("已播完最后一集", detail.name, "按返回键退出", false);
+            }
+            return;
+        }
+        AppLog.i("播放器", "本集播完，自动播放下一集：" + next.name);
+        if (playerHud != null) {
+            playerHud.show(detail.name + " · " + next.name, "自动播放下一集", "按返回键退出", true);
+        }
+        playEpisode(detail, line, next, 0);
+    }
+
+    /** Steps to the previous or next episode of the current line. */
+    private void stepEpisode(int delta) {
+        MediaDetail detail = activeDetail;
+        if (detail == null) return;
+        MediaDetail.PlaySource line =
+                com.nukacast.app.player.LinePicker.lineOf(detail, activeLineName);
+        MediaDetail.Episode episode =
+                com.nukacast.app.player.LinePicker.stepEpisode(line, activeEpisodeId, delta);
+        if (episode == null) return;
+        if (playerHud != null) playerHud.hideActions();
+        playEpisode(detail, line, episode, 0);
     }
 
     /** When the current failure was first seen, so the message stays up long enough to read. */
@@ -2359,6 +2428,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void stopActivePlayback() {
         activeDetail = null;
+        seriesFinished = false;
+        if (playerHud != null) playerHud.hideActions();
         if (runtime.getAirPlayReceiver().snapshot().sessionActive
                 || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
             runtime.getAirPlayReceiver().disconnectSession();
@@ -2481,6 +2552,108 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 playerHud.setProgress(playback.positionMs, playback.durationMs);
             }
         }
+    }
+
+    /** Speeds offered by the player menu. */
+    private static final float[] PLAY_SPEEDS = {0.5f, 1f, 1.25f, 1.5f, 2f};
+    /** Aspect modes: fit inside the screen, stretch, or show at the stream's own size. */
+    private static final String[] ASPECT_MODES = {"适应", "填充", "原始"};
+    private int aspectMode;
+
+    private void togglePlayerMenu() {
+        if (playerHud.actionsVisible()) {
+            playerHud.hideActions();
+            return;
+        }
+        final float speed = runtime.getPlayerController().speed();
+        String speedLabel = "倍速 " + trimSpeed(speed) + "x";
+        String aspectLabel = "画面 " + ASPECT_MODES[Math.max(0, Math.min(aspectMode, ASPECT_MODES.length - 1))];
+        playerHud.showActions(new String[]{
+                "上一集", "下一集", speedLabel, aspectLabel, "退出"}, new String[]{
+                "prev", "next", "speed", "aspect", "exit"},
+                runtime.getPlayerController().snapshot().playing ? "播放中" : "已暂停",
+                new com.nukacast.app.ui.PlayerHudView.ActionListener() {
+                    @Override public void onAction(String action) {
+                        onPlayerMenuAction(action);
+                    }
+                });
+    }
+
+    private void onPlayerMenuAction(String action) {
+        if ("prev".equals(action)) {
+            stepEpisode(-1);
+            return;
+        }
+        if ("next".equals(action)) {
+            stepEpisode(1);
+            return;
+        }
+        if ("speed".equals(action)) {
+            float current = runtime.getPlayerController().speed();
+            int index = 0;
+            for (int i = 0; i < PLAY_SPEEDS.length; i++) {
+                if (Math.abs(PLAY_SPEEDS[i] - current) < 0.01f) index = i;
+            }
+            float next = PLAY_SPEEDS[(index + 1) % PLAY_SPEEDS.length];
+            runtime.getPlayerController().setSpeed(next);
+            AppLog.i("播放器", "倍速切换为 " + trimSpeed(next) + "x");
+            togglePlayerMenu();
+            togglePlayerMenu();
+            return;
+        }
+        if ("aspect".equals(action)) {
+            aspectMode = (aspectMode + 1) % ASPECT_MODES.length;
+            applyAspectMode();
+            togglePlayerMenu();
+            togglePlayerMenu();
+            return;
+        }
+        if ("exit".equals(action)) {
+            playerHud.hideActions();
+            stopActivePlayback();
+        }
+    }
+
+    private static String trimSpeed(float speed) {
+        String text = String.valueOf(speed);
+        return text.endsWith(".0") ? text.substring(0, text.length() - 2) : text;
+    }
+
+    /**
+     * Resizes the video surface.
+     *
+     * <p>Decoder output is stretched to the surface, so the surface is what decides whether the
+     * picture is letterboxed, stretched or shown at its own size.
+     */
+    private void applyAspectMode() {
+        if (videoSurface == null) return;
+        android.view.ViewGroup.LayoutParams raw = videoSurface.getLayoutParams();
+        if (!(raw instanceof android.widget.FrameLayout.LayoutParams)) return;
+        android.widget.FrameLayout.LayoutParams params =
+                (android.widget.FrameLayout.LayoutParams) raw;
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        if (aspectMode == 1 || playback.videoWidth <= 0 || playback.videoHeight <= 0) {
+            params.width = android.widget.FrameLayout.LayoutParams.MATCH_PARENT;
+            params.height = android.widget.FrameLayout.LayoutParams.MATCH_PARENT;
+        } else {
+            float scale;
+            if (aspectMode == 2) {
+                scale = 1f;
+            } else {
+                float byWidth = (float) screenWidth / playback.videoWidth;
+                float byHeight = (float) screenHeight / playback.videoHeight;
+                scale = Math.min(byWidth, byHeight);
+            }
+            params.width = Math.min(screenWidth, Math.round(playback.videoWidth * scale));
+            params.height = Math.min(screenHeight, Math.round(playback.videoHeight * scale));
+        }
+        params.gravity = android.view.Gravity.CENTER;
+        videoSurface.setLayoutParams(params);
+        AppLog.i("播放器", "画面比例：" + ASPECT_MODES[aspectMode]
+                + "（" + params.width + "x" + params.height + "）");
     }
 
     /** True while the app is showing full-screen video or receiving a mirror. */

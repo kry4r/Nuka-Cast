@@ -4,7 +4,10 @@
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <corners android:radius="6dp" />
-            <solid android:color="@color/accent" />
+            <!-- A dark fill with a bright border, not a white fill: with a white fill the label came
+                 out white-on-white and a focused chip looked like an empty box. -->
+            <solid android:color="@color/surface_raised" />
+            <stroke android:width="2dp" android:color="@color/accent" />
         </shape>
     </item>
     <item android:state_selected="true">

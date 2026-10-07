@@ -47,6 +47,37 @@ public class LinePickerTest {
         assertNull(LinePicker.episodeOf(null, "x"));
     }
 
+    @Test
+    public void advancesToTheNextEpisodeAndStopsAtTheEnd() {
+        MediaDetail.PlaySource line = line("gsm3u8", "第1集-a", "第2集-b");
+        assertEquals("第2集", LinePicker.nextEpisode(line, "第1集-a").name);
+        // The last episode must not wrap around: the series is over.
+        assertNull(LinePicker.nextEpisode(line, "第2集-b"));
+        assertNull(LinePicker.nextEpisode(null, "x"));
+        // An unknown id (after a line switch) resumes at the second episode rather than restarting.
+        assertEquals("第2集", LinePicker.nextEpisode(line, "unknown").name);
+    }
+
+    @Test
+    public void stepsEpisodesWithinBounds() {
+        MediaDetail.PlaySource line = line("gsm3u8", "第1集-a", "第2集-b", "第3集-c");
+        assertEquals("第2集", LinePicker.stepEpisode(line, "第1集-a", 1).name);
+        assertEquals("第3集", LinePicker.stepEpisode(line, "第2集-b", 2).name);
+        // Past either end there is nothing to do: the menu must not wrap to the other side.
+        assertNull(LinePicker.stepEpisode(line, "第1集-a", -1));
+        assertNull(LinePicker.stepEpisode(line, "第3集-c", 1));
+        assertNull(LinePicker.stepEpisode(line, "第3集-c", 0));
+        assertNull(LinePicker.stepEpisode(null, "x", 1));
+    }
+
+    @Test
+    public void fallsBackToTheFirstLine() {
+        MediaDetail detail = detail("gsm3u8", "gsyun");
+        assertEquals("gsyun", LinePicker.lineOf(detail, "gsyun").name);
+        assertEquals("gsm3u8", LinePicker.lineOf(detail, "gone").name);
+        assertNull(LinePicker.lineOf(null, "x"));
+    }
+
     private static MediaDetail detail(String... lineNames) {
         MediaDetail detail = new MediaDetail();
         for (String name : lineNames) {

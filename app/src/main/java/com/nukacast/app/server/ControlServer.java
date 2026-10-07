@@ -231,6 +231,27 @@ public final class ControlServer extends NanoHTTPD {
                 return json(Response.Status.OK, errorPayload(message(error)));
             }
         }
+        if ("/api/debug/player/action".equals(path)) {
+            // Drives the same code path as the player menu (speed, aspect, episode stepping), so the
+            // menu can be exercised without a remote control in hand.
+            String name = session.getParms().get("name");
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            String outcome = activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                @Override public String call() {
+                    return activity.playerMenuActionForDebug(name);
+                }
+            });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("action", name);
+            payload.put("result", outcome);
+            com.nukacast.app.player.PlayerController.Snapshot playback =
+                    runtime.getPlayerController().snapshot();
+            payload.put("speed", playback.speed);
+            payload.put("state", playback.state);
+            payload.put("aspect", activity.aspectModeForDebug());
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/layout".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getLayoutReport());
         }

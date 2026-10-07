@@ -11,6 +11,7 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
+import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
@@ -47,6 +48,7 @@ public final class PlayerController {
         public int videoBitrate;
         public String videoMime = "";
         public String decoder = "";
+        public float speed = 1f;
         public boolean softwareDecoderPreferred;
         /** Selector parameters and the variants on offer, so a soft picture can be explained. */
         public String selectorParameters = "";
@@ -82,6 +84,8 @@ public final class PlayerController {
     private String currentTitle = "";
     private Map<String, String> currentHeaders = Collections.emptyMap();
     private int retriedWithSoftware;
+    /** Current playback speed; 1.0 is normal. */
+    private float speedValue = 1f;
     /** The URL whose play request may force the best variant; null disables forcing entirely. */
     private String forceQualityForUrl;
     /** Set when both decoders refused the stream: the smallest variant is tried before giving up. */
@@ -167,6 +171,9 @@ public final class PlayerController {
                 forceQualityForUrl = mediaUrl;
                 restartsForUrl = 0;
                 preferLowestVariant = false;
+                synchronized (lock) {
+                    speedValue = 1f;
+                }
                 startPlayer(context.getApplicationContext(), mediaUrl, mediaTitle,
                         headers == null ? Collections.<String, String>emptyMap() : headers,
                         Math.max(0, startPositionMs));
@@ -205,6 +212,30 @@ public final class PlayerController {
         });
     }
 
+    /** Changes playback speed; 1.0 is normal. Values outside 0.25…4 are ignored. */
+    public void setSpeed(final float speed) {
+        if (speed < 0.25f || speed > 4f) return;
+        // Mirrored first: the HTTP debug API answers before the posted call runs, and reporting the
+        // old speed made "倍速" look like it did nothing.
+        synchronized (lock) {
+            speedValue = speed;
+        }
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (player == null) return;
+                    player.setPlaybackParameters(new PlaybackParameters(speed));
+                }
+            }
+        });
+    }
+
+    public float speed() {
+        synchronized (lock) {
+            return speedValue;
+        }
+    }
+
     public void stop() {
         mainHandler.post(new Runnable() {
             @Override public void run() { releasePlayer("idle"); }
@@ -234,6 +265,7 @@ public final class PlayerController {
             snapshot.videoBitrate = videoBitrate;
             snapshot.videoMime = videoMime;
             snapshot.decoder = decoderName;
+            snapshot.speed = speedValue;
             DefaultTrackSelector selector = trackSelector;
             if (selector != null) {
                 snapshot.selectorParameters = "best=" + bestQualityForced
@@ -348,9 +380,11 @@ public final class PlayerController {
                         if (playbackState == Player.STATE_BUFFERING) state = "buffering";
                         else if (playbackState == Player.STATE_READY) state = created.isPlaying() ? "playing" : "paused";
                         else if (playbackState == Player.STATE_ENDED) {
+                            // Reported like the error state: whoever started playback decides what
+                            // happens next (auto-advance to the next episode, or leave). Clearing the
+                            // media here dropped the user back to the list mid-series.
                             state = "ended";
                             reportProgress();
-                            appState.updateActiveMedia("");
                         }
                     }
                 }

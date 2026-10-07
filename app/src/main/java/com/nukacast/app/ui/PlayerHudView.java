@@ -8,6 +8,7 @@ import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -45,6 +46,7 @@ public final class PlayerHudView extends FrameLayout {
     private final TextView durationView;
     private final ProgressBar progress;
     private final TextView errorView;
+    private final LinearLayout actionRow;
     private final Runnable hide = new Runnable() {
         @Override public void run() {
             animate().alpha(0f).setDuration(220L).withEndAction(new Runnable() {
@@ -70,6 +72,16 @@ public final class PlayerHudView extends FrameLayout {
         topBar.addView(subtitleView, subtitleParams);
         addView(topBar, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT,
                 Gravity.TOP));
+
+        actionRow = new LinearLayout(context);
+        actionRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionRow.setGravity(Gravity.CENTER);
+        actionRow.setVisibility(GONE);
+        LayoutParams actionParams = new LayoutParams(
+                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        actionParams.bottomMargin = dp(56);
+        addView(actionRow, actionParams);
 
         errorView = text(14, false, 0.95f);
         errorView.setTextColor(Color.parseColor("#FFB4B4"));
@@ -115,6 +127,59 @@ public final class PlayerHudView extends FrameLayout {
         setFocusableInTouchMode(false);
         setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);
         setVisibility(GONE);
+    }
+
+    /** One entry of the player menu. */
+    public interface ActionListener {
+        void onAction(String action);
+    }
+
+    /**
+     * Shows the player menu.
+     *
+     * <p>Focus is given to the row (and only then), so the D-pad operates the menu; while it is hidden
+     * the HUD never takes focus and thereby never steals keys from the activity.
+     */
+    public void showActions(String[] labels, String[] actions, String selectedLabel,
+                            ActionListener listener) {
+        actionRow.removeAllViews();
+        for (int i = 0; i < labels.length; i++) {
+            final String action = actions[i];
+            boolean selected = labels[i].equals(selectedLabel);
+            Button button = new Button(getContext());
+            button.setText(selected ? "● " + labels[i] : labels[i]);
+            button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            button.setAllCaps(false);
+            button.setMinWidth(0);
+            button.setMinHeight(0);
+            button.setPadding(dp(14), 0, dp(14), 0);
+            button.setBackgroundResource(com.nukacast.app.R.drawable.bg_chip);
+            button.setTextColor(getContext().getResources().getColorStateList(
+                    com.nukacast.app.R.color.text_chip));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LayoutParams.WRAP_CONTENT, dp(34));
+            params.setMargins(dp(4), 0, dp(4), 0);
+            button.setLayoutParams(params);
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { listener.onAction(action); }
+            });
+            actionRow.addView(button);
+        }
+        actionRow.setVisibility(VISIBLE);
+        setDescendantFocusability(FOCUS_AFTER_DESCENDANTS);
+        if (actionRow.getChildCount() > 0) actionRow.getChildAt(0).requestFocus();
+        reveal();
+        handler.removeCallbacks(hide);
+    }
+
+    public void hideActions() {
+        actionRow.setVisibility(GONE);
+        actionRow.removeAllViews();
+        setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);
+    }
+
+    public boolean actionsVisible() {
+        return actionRow.getVisibility() == VISIBLE;
     }
 
     /** Shows the HUD for a playback session and hides it again after a few seconds. */

@@ -39,6 +39,48 @@ public final class LinePicker {
         return null;
     }
 
+    /**
+     * The episode that follows {@code episodeId} in the same line, or null at the end.
+     *
+     * <p>Auto-advance is the behaviour that makes watching a series possible; this is its rule set.
+     */
+    public static MediaDetail.Episode nextEpisode(MediaDetail.PlaySource line, String episodeId) {
+        if (line == null || line.episodes == null || line.episodes.isEmpty()) return null;
+        for (int i = 0; i < line.episodes.size(); i++) {
+            if (line.episodes.get(i).id.equals(episodeId)) {
+                return i + 1 < line.episodes.size() ? line.episodes.get(i + 1) : null;
+            }
+        }
+        // Position unknown (for example right after a line switch): resume at the second episode.
+        return line.episodes.size() > 1 ? line.episodes.get(1) : null;
+    }
+
+    /** The episode at {@code index + delta}, clamped to the list. Null when there is nothing to do. */
+    public static MediaDetail.Episode stepEpisode(MediaDetail.PlaySource line, String episodeId,
+                                                  int delta) {
+        if (line == null || line.episodes == null || line.episodes.isEmpty()) return null;
+        if (delta == 0) return null;
+        int index = -1;
+        for (int i = 0; i < line.episodes.size(); i++) {
+            if (line.episodes.get(i).id.equals(episodeId)) index = i;
+        }
+        if (index < 0) index = 0;
+        int target = index + delta;
+        if (target < 0) target = 0;
+        if (target >= line.episodes.size()) target = line.episodes.size() - 1;
+        if (target == index) return null;
+        return line.episodes.get(target);
+    }
+
+    /** The line of a detail that matches {@code name}, or the first line when nothing matches. */
+    public static MediaDetail.PlaySource lineOf(MediaDetail detail, String name) {
+        if (detail == null || detail.playSources == null || detail.playSources.isEmpty()) return null;
+        for (MediaDetail.PlaySource candidate : detail.playSources) {
+            if (candidate.name != null && candidate.name.equals(name)) return candidate;
+        }
+        return detail.playSources.get(0);
+    }
+
     /** The same episode in another line, or the first episode when the line numbers differ. */
     public static MediaDetail.Episode episodeOf(MediaDetail.PlaySource line, String episodeId) {
         if (line == null || line.episodes == null || line.episodes.isEmpty()) return null;

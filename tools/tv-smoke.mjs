@@ -128,6 +128,17 @@ async function main() {
     `state=${sd.state} pos=${sd.positionMs}ms track=${sd.videoWidth}x${sd.videoHeight} duration=${sd.durationMs}ms`);
   await call("GET", "/api/debug/navigate?page=home");
 
+  // Player menu: speed and aspect must actually change the player.
+  const beforeSpeed = (await call("GET", "/api/debug/player/action?name=aspect")).data.aspect;
+  const speedAction = (await call("GET", "/api/debug/player/action?name=speed")).data;
+  const aspectAction = (await call("GET", "/api/debug/player/action?name=aspect")).data;
+  const afterSpeed = (await call("GET", "/api/debug/player/action?name=speed")).data;
+  check("player menu changes speed", Number(afterSpeed.speed) !== Number(speedAction.speed),
+    `${speedAction.speed} → ${afterSpeed.speed}`);
+  check("player menu cycles aspect", Number(aspectAction.aspect) !== Number(beforeSpeed),
+    `aspect ${beforeSpeed} → ${aspectAction.aspect}`);
+  await call("GET", "/api/debug/player/action?name=exit");
+
   // Live television.
   const liveSources = (await call("GET", "/api/live/sources")).data;
   const live = Array.isArray(liveSources) ? liveSources : liveSources.sources || [];
