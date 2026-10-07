@@ -33,7 +33,17 @@ public final class Api19UiLoadTest {
 
     @Test
     public void inflatesMainLayoutWithAllNavigationTargets() {
-        View root = LayoutInflater.from(context()).inflate(R.layout.activity_main, null);
+        final Context context = context();
+        final View[] holder = new View[1];
+        // API 19 constructs a Handler inside SurfaceView, so the real layout can only be inflated
+        // on a Looper thread; the instrumentation thread has none.
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(new Runnable() {
+            @Override public void run() {
+                holder[0] = LayoutInflater.from(context).inflate(R.layout.activity_main, null);
+            }
+        });
+        View root = holder[0];
+        assertNotNull(root);
         assertNotNull(root.findViewById(R.id.navHome));
         assertNotNull(root.findViewById(R.id.navMovies));
         assertNotNull(root.findViewById(R.id.navCast));
