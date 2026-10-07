@@ -79,14 +79,23 @@ python tools/preview-server.mjs 9978 + Chrome headless 截图 -> 各页渲染确
 
 新增单测：`CmsDramaCatalogTest`（7）、`DramaPlayResultTest`（6）、`RecommendedSourcesTest`（8）；覆盖多播放线取最长、解析页链接被拒、19 位 id 当字符串、直连目录/资料目录的区分、目录搜索 URL 生成。
 
-## 5. 仍未完成
+## 5. 发布
+
+| 版本 | 内容 | 产物复核 |
+| --- | --- | --- |
+| v0.3.6 | 推荐源一键添加、直播源管理、短剧直连播放、网页改版 | `NukaCast-v0.3.6.apk` 10.26 MB，`Android CI` 三个 job 全绿 |
+| v0.3.7 | 短剧详情弹层改为按内容自适应高度；随包带上预览工具与 pid 文件 | `NukaCast-v0.3.7.apk` 10.26 MB，`versionCode 15`、`versionName 0.3.7`、签名与 v0.3.4/0.3.5 相同（可直接覆盖安装）、仅 `arm64-v8a`+`armeabi-v7a` |
+
+v0.3.7 下载后复核：APK 内 `assets/sources/recommended.json` 与仓库文件 sha256 完全一致；内置网页 bundle 含“推荐短剧源 / 直播源管理 / 阶段诊断”等界面文案。
+
+## 6. 仍未完成
 
 1. **真机验收**：短剧直连播放（D03）、AirPlay 首帧（A01/A05）、API19 类加载以外的真实闪退根因。
 2. **插件独立进程（T2）**：`RefreshSafely` 已能兜住 `LinkageError`，但插件仍与应用同进程，内存/中断隔离未做。
 3. **`web.drama` 网页解析目录**：已接通接口与 UI，但尚无可用站点实测，因此没有内置任何 `web.drama` 条目。
 4. 推荐源里的“网页解析”类站点（如基于 `player_aaaa` 的短剧站）在本机能访问，但同类站点经常改版且部分地区被墙，所以只保留 CMS 直连源作为默认，避免把易碎解析写进发布包。
 
-## 6. 本地预览工具
+## 7. 本地预览工具
 
 ```bash
 node tools/preview-server.mjs 9978     # 用示例数据提供全部 /api，无需电视
