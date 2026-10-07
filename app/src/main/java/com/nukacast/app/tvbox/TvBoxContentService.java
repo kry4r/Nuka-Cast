@@ -75,6 +75,190 @@ public final class TvBoxContentService {
         this.storageLibrary = storageLibrary;
     }
 
+    /**
+     * Categories declared by a site's configuration.
+     *
+     * <p>Both TVBox shapes are accepted — {@code {"type_id":1,"type_name":"电影"}} and plain
+     * strings — because configs in the wild use both.
+     */
+    public List<com.nukacast.app.tvbox.model.Category> categories(String sourceId, String siteKey) {
+        List<com.nukacast.app.tvbox.model.Category> result =
+                new ArrayList<com.nukacast.app.tvbox.model.Category>();
+        TvBoxConfig.Site site;
+        try {
+            site = requireSite(sourceId, siteKey);
+        } catch (Exception missing) {
+            return result;
+        }
+        com.google.gson.JsonElement declared = site.categories;
+        if (declared == null || declared.isJsonNull() || (declared.isJsonArray()
+                && declared.getAsJsonArray().size() == 0)) {
+            // Most CMS configs do not declare categories; the API itself reports them in
+            // ?ac=list under "class", which is what TVBox uses for its category bar.
+            return fetchCategories(site);
+        }
+        try {
+            if (declared.isJsonArray()) {
+                for (com.google.gson.JsonElement element : declared.getAsJsonArray()) {
+                    com.nukacast.app.tvbox.model.Category category = categoryOf(element);
+                    if (category != null && category.isValid()) result.add(decorate(category, site));
+                }
+            } else if (declared.isJsonObject()) {
+                // Spider configs nest categories per type: {"电影":[{...},{...}]}
+                for (Map.Entry<String, com.google.gson.JsonElement> entry
+                        : declared.getAsJsonObject().entrySet()) {
+                    if (!entry.getValue().isJsonArray()) continue;
+                    for (com.google.gson.JsonElement element : entry.getValue().getAsJsonArray()) {
+                        com.nukacast.app.tvbox.model.Category category = categoryOf(element);
+                        if (category == null) {
+                            // Some configs list category names directly under a type.
+                            if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
+                                String name = element.getAsString();
+                                if (!name.isEmpty() && !"全部".equals(name)) {
+                                    result.add(decorate(
+                                            new com.nukacast.app.tvbox.model.Category(entry.getKey(), name),
+                                            site));
+                                }
+                            }
+                            continue;
+                        }
+                        if (!category.isValid()) continue;
+                        if (category.id.isEmpty()) category.id = entry.getKey();
+                        result.add(decorate(category, site));
+                    }
+                }
+            } else if (declared.isJsonPrimitive()) {
+                // A comma separated list of ids, e.g. "1,2,3" or "电影,电视剧".
+                for (String token : declared.getAsString().split(",")) {
+                    String name = token.trim();
+                    if (name.isEmpty()) continue;
+                    result.add(decorate(new com.nukacast.app.tvbox.model.Category(name, name), site));
+                }
+            }
+        } catch (Exception broken) {
+            AppLog.d("片源", "读取分类失败：" + message(broken));
+        }
+        return result;
+    }
+
+    /** Category lists are stable, so they are cached briefly per site. */
+    private final java.util.Map<String, CachedCategories> categoryCache =
+            new java.util.concurrent.ConcurrentHashMap<String, CachedCategories>();
+
+    private static final class CachedCategories {
+        List<com.nukacast.app.tvbox.model.Category> categories;
+        long at;
+    }
+
+    /**
+     * Asks a CMS site for its categories ({@code ?ac=list} → {@code class[]}).
+     *
+     * <p>Declared categories are often missing from hand-written configs, and without them the movies
+     * page has nothing to browse — which is why it looked empty.
+     */
+    private List<com.nukacast.app.tvbox.model.Category> fetchCategories(TvBoxConfig.Site site) {
+        String cacheKey = site.sourceId + "|" + site.key;
+        CachedCategories cached = categoryCache.get(cacheKey);
+        long now = System.currentTimeMillis();
+        if (cached != null && now - cached.at < CATEGORY_TTL_MS) return cached.categories;
+
+        List<com.nukacast.app.tvbox.model.Category> result =
+                new ArrayList<com.nukacast.app.tvbox.model.Category>();
+        String base = site.api == null ? "" : site.api.trim();
+        if (!base.isEmpty() && site.type != 3) {
+            String url = base + (base.contains("?") ? "&" : "?") + "ac=list";
+            try {
+                okhttp3.Request request = new okhttp3.Request.Builder().url(url)
+                        .header("User-Agent", "okhttp/3.12.13").build();
+                try (okhttp3.Response response = HttpStack.client().newCall(request).execute()) {
+                    if (response.isSuccessful() && response.body() != null) {
+                        String body = ResponseBodies.string(response.body(), MAX_CMS_BYTES, UTF_8);
+                        com.google.gson.JsonElement parsed =
+                                com.google.gson.JsonParser.parseString(body.replace("", ""));
+                        if (parsed.isJsonObject()) {
+                            com.google.gson.JsonElement classes =
+                                    parsed.getAsJsonObject().get("class");
+                            if (classes != null && classes.isJsonArray()) {
+                                for (com.google.gson.JsonElement element : classes.getAsJsonArray()) {
+                                    com.nukacast.app.tvbox.model.Category category =
+                                            categoryOf(element);
+                                    if (category != null && category.isValid()) {
+                                        result.add(decorate(category, site));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception error) {
+                AppLog.d("片源", "读取分类失败 [" + safe(site.name) + "]：" + message(error));
+            }
+        }
+        CachedCategories entry = new CachedCategories();
+        entry.categories = result;
+        entry.at = now;
+        categoryCache.put(cacheKey, entry);
+        return result;
+    }
+
+    private static com.nukacast.app.tvbox.model.Category categoryOf(
+            com.google.gson.JsonElement element) {
+        if (element == null || !element.isJsonObject()) return null;
+        com.google.gson.JsonObject object = element.getAsJsonObject();
+        com.nukacast.app.tvbox.model.Category category =
+                new com.nukacast.app.tvbox.model.Category();
+        category.id = textOf(object.get("type_id"));
+        if (category.id.isEmpty()) category.id = textOf(object.get("id"));
+        category.name = textOf(object.get("type_name"));
+        if (category.name.isEmpty()) category.name = textOf(object.get("name"));
+        return category;
+    }
+
+    private static String textOf(com.google.gson.JsonElement element) {
+        if (element == null || element.isJsonNull()) return "";
+        try {
+            return element.getAsString();
+        } catch (Exception error) {
+            return "";
+        }
+    }
+
+    private static com.nukacast.app.tvbox.model.Category decorate(
+            com.nukacast.app.tvbox.model.Category category, TvBoxConfig.Site site) {
+        category.siteKey = site.key;
+        category.siteName = site.name;
+        category.sourceId = site.sourceId;
+        return category;
+    }
+
+    /**
+     * Browses one category of one CMS site.
+     *
+     * @param page 1-based page number.
+     */
+    public List<SearchItem> browse(String sourceId, String siteKey, String categoryId, int page)
+            throws Exception {
+        TvBoxConfig.Site site = requireSite(sourceId, siteKey);
+        if (site.type == 3) throw new IllegalArgumentException("插件站点暂不支持分类浏览");
+        String base = site.api == null ? "" : site.api.trim();
+        if (base.isEmpty()) throw new IllegalArgumentException("站点没有配置接口地址");
+        StringBuilder url = new StringBuilder(base);
+        url.append(base.contains("?") ? "&" : "?").append("ac=detail");
+        if (categoryId != null && !categoryId.isEmpty()) {
+            url.append("&t=").append(java.net.URLEncoder.encode(categoryId, "UTF-8"));
+        }
+        url.append("&pg=").append(Math.max(1, page));
+        okhttp3.Request.Builder request = new okhttp3.Request.Builder().url(url.toString())
+                .header("User-Agent", "okhttp/3.12.13");
+        try (okhttp3.Response response = HttpStack.client().newCall(request.build()).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IllegalStateException("HTTP " + response.code());
+            }
+            String body = ResponseBodies.string(response.body(), MAX_CMS_BYTES, UTF_8);
+            return HomeCatalogParser.parse(body, site.sourceId, site.key, site.name);
+        }
+    }
+
     public MediaDetail detail(String sourceId, String siteKey, String vodId) throws Exception {
         if (isStorage(sourceId)) return requireStorage().detail(vodId);
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);
@@ -356,6 +540,8 @@ public final class TvBoxContentService {
     }
 
     private static final int MAX_PARSER_ATTEMPTS = 3;
+    /** Category lists change rarely; a quarter of an hour is plenty. */
+    private static final long CATEGORY_TTL_MS = 15 * 60 * 1000L;
     /** How many other lines are tried before giving up on an episode. */
     private static final int MAX_LINE_ATTEMPTS = 3;
 

@@ -69,6 +69,36 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements AppState.Listener, SurfaceHolder.Callback {
+    /**
+     * The activity currently on screen, for the layout inspector.
+     *
+     * <p>Finding out that a row was cut off used to require photographing the TV; the debug endpoint
+     * now reports the bounds of every visible view instead.
+     */
+    private static java.lang.ref.WeakReference<MainActivity> onScreen;
+
+    /** The activity currently on screen, or null. Held weakly: a static Activity field is a leak. */
+    public static MainActivity onScreen() {
+        return onScreen == null ? null : onScreen.get();
+    }
+
+    /** Runs {@code body} on the UI thread and waits, so a debug request sees a settled layout. */
+    public <T> T onUiThreadNow(final java.util.concurrent.Callable<T> body) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            try {
+                return body.call();
+            } catch (Exception error) {
+                throw new RuntimeException(error);
+            }
+        }
+        final java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<T>(body);
+        runOnUiThread(task);
+        try {
+            return task.get(4, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception error) {
+            throw new RuntimeException(error);
+        }
+    }
     private static final int REQUEST_STORAGE_PERMISSION = 4101;
     private static final int REQUEST_MANAGE_STORAGE = 4102;
     private static final int REQUEST_NOTIFICATIONS = 4103;
@@ -94,8 +124,21 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private View settingsPage;
     private LinearLayout homeContent;
     private LinearLayout moviesContent;
+    private LinearLayout movieFilters;
+    /** Category browsing state: which site and category the movies page is showing. */
+    private final java.util.List<com.nukacast.app.tvbox.model.Category> browseCategories =
+            new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
+    private String browseSiteKey = "";
+    private String browseCategoryId = "";
+    private int browsePage;
+    private boolean browseLoading;
+    private boolean browseMode;
+    private final java.util.concurrent.ExecutorService browseIo =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.List<com.nukacast.app.tvbox.model.Category> browseSites =
+            new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
     private LinearLayout searchResults;
-    private GridLayout searchKeyboard;
+    private LinearLayout searchKeyboard;
     private EditText searchKeyword;
     private TextView searchStatus;
     private TextView homeLoading;
@@ -135,6 +178,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(TvTheme.isLight(this) ? R.style.AppThemeLight : R.style.AppTheme);
         super.onCreate(savedInstanceState);
+        onScreen = new java.lang.ref.WeakReference<MainActivity>(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -208,6 +252,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         runtime.getState().removeListener(this);
         io.shutdownNow();
         images.shutdown();
+        if (onScreen != null && onScreen.get() == this) onScreen = null;
         super.onDestroy();
     }
 
@@ -321,8 +366,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         settingsPage = findViewById(R.id.settingsPage);
         homeContent = (LinearLayout) findViewById(R.id.homeContent);
         moviesContent = (LinearLayout) findViewById(R.id.moviesContent);
+        movieFilters = (LinearLayout) findViewById(R.id.movieFilters);
+        if (movieFilters != null) movieFilters.setClipChildren(false);
         searchResults = (LinearLayout) findViewById(R.id.searchResults);
-        searchKeyboard = (GridLayout) findViewById(R.id.searchKeyboard);
+        searchKeyboard = (LinearLayout) findViewById(R.id.searchKeyboard);
         searchKeyword = (EditText) findViewById(R.id.searchKeyword);
         searchStatus = (TextView) findViewById(R.id.searchStatus);
         homeLoading = (TextView) findViewById(R.id.homeLoading);
@@ -364,12 +411,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
         buildSearchKeyboard();
 
-        bindFilter(R.id.filterAll, "");
-        bindFilter(R.id.filterMovie, "电影");
-        bindFilter(R.id.filterSeries, "电视剧");
-        bindFilter(R.id.filterVariety, "综艺");
-        bindFilter(R.id.filterAnime, "动漫");
-        bindFilter(R.id.filterDrama, "短剧");
+        buildMovieFilterRow();
 
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
@@ -389,10 +431,75 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     }
 
-    private void bindFilter(int id, final String filter) {
-        findViewById(id).setOnClickListener(new View.OnClickListener() {
+    private String movieFilterSelected = "";
+
+    /** The movies page: category browsing first, then the home feed, then short dramas. */
+    private void buildMovieFilterRow() {
+        if (movieFilters == null) return;
+        movieFilters.removeAllViews();
+        addMovieFilter("分类浏览", "");
+        addMovieFilter("最近更新", "首页");
+        addMovieFilter("短剧", "短剧");
+        setFilterSelection("");
+    }
+
+    private void addMovieFilter(String label, final String filter) {
+        Button button = actionButton(label, 0);
+        button.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { showMovies(filter); }
         });
+        movieFilters.addView(button);
+    }
+
+    /** Current page name, so the inspector can say which screen was dumped. */
+    public String currentPageName() {
+        return currentPage;
+    }
+
+    /** Page identifiers the debug endpoint accepts, mapped to the internal names. */
+    public static java.util.List<String> pageNames() {
+        return java.util.Arrays.asList("home", "movies", "search", "cast", "settings");
+    }
+
+    /** Switches page by name; used by the debug API so a screen can be inspected on demand. */
+    public void showPageByName(String name) {
+        if (name == null) return;
+        if ("movies".equals(name)) showPage(PAGE_MOVIES);
+        else if ("search".equals(name)) showPage(PAGE_SEARCH);
+        else if ("cast".equals(name)) showPage(PAGE_CAST);
+        else if ("settings".equals(name)) showPage(PAGE_SETTINGS);
+        else showPage(PAGE_HOME);
+    }
+
+    /** Scrolls the page currently on screen; positive values scroll down. */
+    public boolean scrollCurrentPage(int delta) {
+        android.view.View focused = getCurrentFocus();
+        android.view.ViewGroup parent = focused instanceof android.view.ViewGroup
+                ? (android.view.ViewGroup) focused : null;
+        android.view.View node = focused;
+        android.view.View scrollable = null;
+        while (node != null && scrollable == null) {
+            if (node instanceof ScrollView) scrollable = node;
+            else if (node.getParent() instanceof android.view.View) {
+                node = (android.view.View) node.getParent();
+            } else {
+                node = null;
+            }
+        }
+        if (scrollable == null) {
+            for (String id : new String[]{"homeScroll", "moviesScroll", "settingsScroll"}) {
+                int resource = getResources().getIdentifier(id, "id", getPackageName());
+                android.view.View candidate = resource == 0 ? null : findViewById(resource);
+                if (candidate instanceof ScrollView && candidate.getVisibility() == View.VISIBLE) {
+                    scrollable = candidate;
+                    break;
+                }
+            }
+        }
+        if (!(scrollable instanceof ScrollView)) return false;
+        if (parent != null && parent != scrollable) parent.requestChildFocus(focused, focused);
+        ((ScrollView) scrollable).smoothScrollBy(0, delta);
+        return true;
     }
 
     private void showPage(String page) {
@@ -418,11 +525,340 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         showPage(PAGE_MOVIES);
         setFilterSelection(filter);
         if ("短剧".equals(filter)) {
+            browseMode = false;
             renderDramaMovies();
             return;
         }
-        List<SearchItem> filtered = filter(homeItems, filter);
-        renderMovieGrid(filter.isEmpty() ? "最近更新" : filter, filtered);
+        if ("首页".equals(filter)) {
+            browseMode = false;
+            if (homeItems.isEmpty() && !homeRequestRunning) loadHome(false);
+            renderMovieGrid("最近更新", homeItems);
+            return;
+        }
+        // Default: the category browser.
+        browseMode = true;
+        loadCategoryBar();
+    }
+
+    /**
+     * Loads the category list of every enabled CMS site and shows the browser.
+     *
+     * <p>This is what TVBox is used for most of the time: pick a site, pick a category, page through
+     * it. Without it the movies page could only mirror the home feed, so an empty home feed made the
+     * whole page look broken.
+     */
+    private void loadCategoryBar() {
+        if (browseSites.isEmpty()) {
+            moviesContent.removeAllViews();
+            moviesContent.addView(sectionTitle("正在读取分类…"));
+            browseIo.execute(new Runnable() {
+                @Override public void run() {
+                    final List<com.nukacast.app.tvbox.model.Category> sites =
+                            new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
+                    for (com.nukacast.app.tvbox.model.Category category : browseCategories()) {
+                        sites.add(category);
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            browseSites.clear();
+                            browseSites.addAll(sites);
+                            if (browseSites.isEmpty()) {
+                                moviesContent.removeAllViews();
+                                moviesContent.addView(sectionTitle("可用分类"));
+                                moviesContent.addView(bodyText(
+                                        "当前片源没有提供分类。请在网页的“源管理”里体检片源，"
+                                                + "或添加一个带分类的接口站点。"));
+                                return;
+                            }
+                            if (browseSiteKey.isEmpty()) {
+                                browseSiteKey = preferredSiteKey();
+                            }
+                            if (browseCategoryId.isEmpty()) {
+                                for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+                                    if (category.siteKey.equals(browseSiteKey)) {
+                                        browseCategoryId = category.id;
+                                        break;
+                                    }
+                                }
+                                if (browseCategoryId.isEmpty()) {
+                                    browseCategoryId = browseSites.get(0).id;
+                                    browseSiteKey = browseSites.get(0).siteKey;
+                                }
+                            }
+                            renderCategoryBar();
+                        }
+                    });
+                }
+            });
+            return;
+        }
+        renderCategoryBar();
+    }
+
+    /**
+     * Every category of every enabled CMS site.
+     *
+     * <p>The first version built this from the site chips it had already rendered, which were empty
+     * on the first call, so the page always claimed "no categories". The sites come from the
+     * repository directly instead.
+     */
+    private List<com.nukacast.app.tvbox.model.Category> browseCategories() {
+        List<com.nukacast.app.tvbox.model.Category> all =
+                new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        for (com.nukacast.app.tvbox.model.Category site : enabledCmsSites()) {
+            List<com.nukacast.app.tvbox.model.Category> categories =
+                    runtime.getContentService().categories(site.sourceId, site.siteKey);
+            for (com.nukacast.app.tvbox.model.Category category : categories) {
+                if (seen.add(site.siteKey + "|" + category.id)) all.add(category);
+            }
+        }
+        return all;
+    }
+
+    /** Enabled plain-API sites, as chips carrying their key and source. */
+    private List<com.nukacast.app.tvbox.model.Category> enabledCmsSites() {
+        List<com.nukacast.app.tvbox.model.Category> chips =
+                new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
+        for (com.nukacast.app.tvbox.model.TvBoxConfig.Site site
+                : runtime.getTvBoxRepository().getEnabledSites()) {
+            // Plugin sites cannot be browsed on this device, and live-only entries have no categories.
+            if (site.type == 3) continue;
+            com.nukacast.app.tvbox.model.Category chip =
+                    new com.nukacast.app.tvbox.model.Category(site.key, site.name);
+            chip.siteKey = site.key;
+            chip.sourceId = site.sourceId;
+            chips.add(chip);
+        }
+        return chips;
+    }
+
+    /** One chip per enabled CMS site, carrying the site key in {@code id}. */
+    private List<com.nukacast.app.tvbox.model.Category> siteChips() {
+        List<com.nukacast.app.tvbox.model.Category> chips =
+                new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
+        for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+            boolean known = false;
+            for (com.nukacast.app.tvbox.model.Category chip : chips) {
+                if (chip.id.equals(category.siteKey)) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) continue;
+            com.nukacast.app.tvbox.model.Category chip =
+                    new com.nukacast.app.tvbox.model.Category(
+                            category.siteKey, category.siteName);
+            chip.siteKey = category.siteKey;
+            chip.sourceId = category.sourceId;
+            chips.add(chip);
+        }
+        return chips;
+    }
+
+    /** The first site the health sweep found working, so the browser opens on something usable. */
+    private String preferredSiteKey() {
+        for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+            if (runtime.getSiteHealthStore() != null) {
+                for (com.nukacast.app.tvbox.SiteHealthStore.Verdict verdict
+                        : runtime.getSiteHealthStore().snapshot()) {
+                    if (verdict.ok && verdict.siteKey.equals(category.siteKey)) {
+                        return category.siteKey;
+                    }
+                }
+            }
+        }
+        return browseSites.isEmpty() ? "" : browseSites.get(0).siteKey;
+    }
+
+    /** Site row + category row, then the first page of the selected category. */
+    private void renderCategoryBar() {
+        moviesContent.removeAllViews();
+        moviesContent.addView(sectionTitle("片源"));
+        LinearLayout siteRow = new LinearLayout(this);
+        siteRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (final com.nukacast.app.tvbox.model.Category chip : siteChips()) {
+            Button button = actionButton(chip.name, 0);
+            button.setSelected(chip.id.equals(browseSiteKey));
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    browseSiteKey = chip.id;
+                    browseCategoryId = "";
+                    loadCategoryBar();
+                }
+            });
+            siteRow.addView(button);
+        }
+        moviesContent.addView(siteRow);
+
+        moviesContent.addView(sectionTitle("分类"));
+        android.widget.HorizontalScrollView bar = new android.widget.HorizontalScrollView(this);
+        bar.setHorizontalScrollBarEnabled(false);
+        LinearLayout categoryRow = new LinearLayout(this);
+        categoryRow.setOrientation(LinearLayout.HORIZONTAL);
+        for (final com.nukacast.app.tvbox.model.Category category : browseSites) {
+            if (!category.siteKey.equals(browseSiteKey)) continue;
+            Button button = actionButton(category.name, 0);
+            button.setSelected(category.id.equals(browseCategoryId));
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    browseCategoryId = category.id;
+                    browsePage = 0;
+                    loadCategoryPage(1);
+                }
+            });
+            categoryRow.addView(button);
+        }
+        bar.addView(categoryRow, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        android.widget.LinearLayout.LayoutParams barParams =
+                new android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(40));
+        barParams.bottomMargin = dp(6);
+        bar.setBackgroundDrawable(null);
+        moviesContent.addView(bar, barParams);
+
+        if (!browseCategoryId.isEmpty()) {
+            for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+                if (category.siteKey.equals(browseSiteKey) && category.id.equals(browseCategoryId)) {
+                    loadCategoryPage(Math.max(1, browsePage + 1));
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Fetches one page of the selected category and shows it.
+     *
+     * <p>The category probing happens entirely on the background thread: an earlier version retried
+     * from the UI callback, which repainted the grid several times per load and left half-drawn rows
+     * on screen (a screenshot showed a row of empty cards above the real ones).
+     */
+    private void loadCategoryPage(final int page) {
+        if (browseLoading) return;
+        browseLoading = true;
+        final String siteKey = browseSiteKey;
+        final String sourceId = sourceIdOf(siteKey);
+        if (page <= 1) {
+            moviesContent.removeAllViews();
+            moviesContent.addView(sectionTitle("加载中…"));
+        }
+        browseIo.execute(new Runnable() {
+            @Override public void run() {
+                List<SearchItem> items = new java.util.ArrayList<SearchItem>();
+                String failure = "";
+                String categoryId = browseCategoryId;
+                int attempts = 0;
+                while (true) {
+                    try {
+                        List<SearchItem> fetched = runtime.getContentService()
+                                .browse(sourceId, siteKey, categoryId, page);
+                        items = fetched == null ? new java.util.ArrayList<SearchItem>() : fetched;
+                    } catch (Exception error) {
+                        failure = error.getMessage() == null ? "加载失败" : error.getMessage();
+                        break;
+                    }
+                    // Measured on real configs: some declared categories return one or two records
+                    // while their neighbours return thousands, so a thin first page moves on.
+                    if (page > 1 || items.size() >= 3 || attempts >= 8) break;
+                    String next = nextCategoryAfter(siteKey, categoryId);
+                    if (next == null || next.equals(categoryId)) break;
+                    categoryId = next;
+                    attempts++;
+                }
+                final List<SearchItem> result = items;
+                final String reason = failure;
+                final String chosen = categoryId;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        browseLoading = false;
+                        moviesContent.removeAllViews();
+                        if (!reason.isEmpty()) {
+                            moviesContent.addView(sectionTitle("分类加载失败"));
+                            moviesContent.addView(bodyText(reason));
+                            return;
+                        }
+                        browseCategoryId = chosen;
+                        browsePage = page;
+                        for (SearchItem item : result) {
+                            if (!homeItemsContains(item)) homeItems.add(item);
+                        }
+                        renderCategoryGrid(siteKey, chosen, page, result);
+                    }
+                });
+            }
+        });
+    }
+
+    /** The category after {@code currentId} on the same site, or null when there is none. */
+    private String nextCategoryAfter(String siteKey, String currentId) {
+        boolean afterCurrent = false;
+        for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+            if (!category.siteKey.equals(siteKey)) continue;
+            if (afterCurrent) return category.id;
+            if (category.id.equals(currentId)) afterCurrent = true;
+        }
+        return null;
+    }
+
+    private boolean homeItemsContains(SearchItem item) {
+        for (SearchItem existing : homeItems) {
+            if (existing.vodId.equals(item.vodId) && existing.siteKey.equals(item.siteKey)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Renders the category header plus the accumulated grid and a “下一页” button. */
+    private void renderCategoryGrid(String siteKey, String categoryId, int page,
+                                    List<SearchItem> items) {
+        String siteName = siteKey;
+        String categoryName = browseCategoryId.isEmpty() ? categoryId : browseCategoryId;
+        for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+            if (category.siteKey.equals(siteKey)) siteName = category.siteName;
+            if (category.siteKey.equals(siteKey) && category.id.equals(categoryName)) {
+                categoryName = category.name;
+            }
+        }
+        if (page <= 1) {
+            moviesContent.removeAllViews();
+            moviesContent.addView(sectionTitle(siteName + " · " + categoryName));
+        } else {
+            // Remove the previous “下一页” button before appending.
+            if (loadMoreRow != null) {
+                moviesContent.removeView(loadMoreRow);
+                loadMoreRow = null;
+            }
+        }
+        if (items.isEmpty() && page <= 1) {
+            moviesContent.addView(bodyText("该分类没有返回内容，可换一个分类或站点。"));
+            return;
+        }
+        appendGrid(moviesContent, items, gridColumns());
+        if (!items.isEmpty()) {
+            LinearLayout row = new LinearLayout(this);
+            loadMoreRow = row;
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            Button more = actionButton("下一页（第 " + (page + 1) + " 页）", 0);
+            more.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { loadCategoryPage(browsePage + 1); }
+            });
+            row.addView(more);
+            moviesContent.addView(row);
+            if (page == 1) more.requestFocus();
+        }
+    }
+
+    /** The “下一页” row currently shown, so it can be replaced instead of stacking up. */
+    private LinearLayout loadMoreRow;
+    private String sourceIdOf(String siteKey) {
+        for (com.nukacast.app.tvbox.model.Category category : browseSites) {
+            if (category.siteKey.equals(siteKey)) return category.sourceId;
+        }
+        return "";
     }
 
     private void renderDramaMovies() {
@@ -440,12 +876,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void setFilterSelection(String filter) {
-        findViewById(R.id.filterAll).setSelected(filter.isEmpty());
-        findViewById(R.id.filterMovie).setSelected("电影".equals(filter));
-        findViewById(R.id.filterSeries).setSelected("电视剧".equals(filter));
-        findViewById(R.id.filterVariety).setSelected("综艺".equals(filter));
-        findViewById(R.id.filterAnime).setSelected("动漫".equals(filter));
-        findViewById(R.id.filterDrama).setSelected("短剧".equals(filter));
+        movieFilterSelected = filter == null ? "" : filter;
+        if (movieFilters == null) return;
+        String wanted = movieFilterSelected.isEmpty() ? "分类浏览"
+                : ("首页".equals(movieFilterSelected) ? "最近更新" : movieFilterSelected);
+        for (int i = 0; i < movieFilters.getChildCount(); i++) {
+            View child = movieFilters.getChildAt(i);
+            if (!(child instanceof Button)) continue;
+            child.setSelected(wanted.contentEquals(((Button) child).getText()));
+        }
     }
 
     private void loadHome(boolean force) {
@@ -515,12 +954,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setGravity(Gravity.CENTER_VERTICAL);
 
-        featuredEyebrow = featuredText(11, TvTheme.secondary(this), true);
-        featuredTitle = featuredText(19, TvTheme.primary(this), true);
+        featuredEyebrow = featuredText(10, TvTheme.secondary(this), true);
+        featuredTitle = featuredText(16, TvTheme.primary(this), true);
         featuredTitle.setSingleLine(true);
         featuredTitle.setEllipsize(TextUtils.TruncateAt.END);
-        featuredMeta = featuredText(12, TvTheme.secondary(this), false);
-        featuredPlot = featuredText(12, TvTheme.secondary(this), false);
+        featuredMeta = featuredText(11, TvTheme.secondary(this), false);
+        featuredPlot = featuredText(11, TvTheme.secondary(this), false);
         featuredPlot.setMaxLines(2);
         featuredPlot.setEllipsize(TextUtils.TruncateAt.END);
         featuredPlot.setLineSpacing(0, 1.15f);
@@ -551,8 +990,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         // 150dp instead of 218dp: the hero used to eat the top 40% of a 1080p screen and pushed
         // every row below the fold.
         LinearLayout.LayoutParams panelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(132));
-        panelParams.bottomMargin = dp(14);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(104));
+        panelParams.bottomMargin = dp(10);
         homeContent.addView(panel, panelParams);
         updateFeatured(item);
     }
@@ -598,15 +1037,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         String[] filters = {"电影", "电视剧", "综艺", "动漫", ""};
         for (int i = 0; i < labels.length; i++) {
             final String filter = filters[i];
-            Button button = actionButton(labels[i], 96);
+            Button button = actionButton(labels[i], 84);
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) { showMovies(filter); }
             });
             row.addView(button);
         }
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(36));
-        params.bottomMargin = dp(12);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(32));
+        params.bottomMargin = dp(8);
         homeContent.addView(row, params);
     }
 
@@ -653,8 +1092,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void addTrack(HorizontalScrollView scroll) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(226));
-        params.bottomMargin = dp(14);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(172));
+        params.bottomMargin = dp(6);
         homeContent.addView(scroll, params);
     }
 
@@ -704,8 +1143,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 row.setOrientation(LinearLayout.HORIZONTAL);
                 row.setClipChildren(false);
                 LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, dp(302));
-                rowParams.bottomMargin = dp(14);
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(172));
+                rowParams.bottomMargin = dp(6);
                 target.addView(row, rowParams);
             }
             final SearchItem item = items.get(i);
@@ -721,7 +1160,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private int gridColumns() {
         float widthDp = getResources().getDisplayMetrics().widthPixels
                 / getResources().getDisplayMetrics().density;
-        return Math.max(3, (int) ((widthDp - 250f) / 180f));
+        // Column count follows the real card width, so the grid never wastes a whole column.
+        return Math.max(3, (int) ((widthDp - 190f) / 104f));
     }
 
     private List<SearchItem> filter(List<SearchItem> source, String filter) {
@@ -746,31 +1186,58 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         else searchKeyword.requestFocus();
     }
 
+    /** Rows of the search keyboard; every row is weighted so it always fits the panel width. */
+    private static final String[][] KEYBOARD_ROWS = {
+            {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"},
+            {"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
+            {"A", "S", "D", "F", "G", "H", "J", "K", "L"},
+            {"Z", "X", "C", "V", "B", "N", "M", "退格"},
+            {"清空", "搜索"},
+    };
+
+    /**
+     * Builds the on-screen keyboard as weighted rows.
+     *
+     * <p>The previous version placed fixed-size buttons into a {@code GridLayout}: measured through
+     * {@code /api/debug/layout}, the last keys of every row ended up 6 pixels wide and invisible
+     * because the row did not fit its container ("很多都有遮挡看不到"). Weighted rows cannot overflow.
+     */
     private void buildSearchKeyboard() {
         searchKeyboard.removeAllViews();
-        String[] keys = {"清空", "退格", "A", "B", "C", "D", "E", "F", "G", "H",
-                "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
-                "W", "X", "Y", "Z", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "搜索"};
-        for (final String key : keys) {
-            Button button = new Button(this);
-            button.setText(key);
-            button.setTextSize(key.length() > 1 ? 13 : 16);
-            button.setTextColor(TvTheme.primary(this));
-            button.setAllCaps(false);
-            button.setFocusable(true);
-            button.setBackgroundDrawable(TvTheme.focusable(this));
-            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
-            params.width = key.length() > 1 ? dp(98) : dp(44);
-            params.height = dp(42);
-            params.setMargins(dp(3), dp(3), dp(3), dp(3));
-            if ("清空".equals(key) || "退格".equals(key) || "搜索".equals(key)) {
-                params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 2);
+        for (int rowIndex = 0; rowIndex < KEYBOARD_ROWS.length; rowIndex++) {
+            String[] row = KEYBOARD_ROWS[rowIndex];
+            LinearLayout rowView = new LinearLayout(this);
+            rowView.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+            rowParams.topMargin = dp(6);
+            rowView.setLayoutParams(rowParams);
+            for (String key : row) {
+                Button button = new Button(this);
+                button.setText(key);
+                button.setTextSize(key.length() > 1 ? 13 : 15);
+                button.setTextColor(TvTheme.primary(this));
+                button.setAllCaps(false);
+                // Default button padding/clipping cut the tops of the letters off.
+                button.setPadding(0, 0, 0, 0);
+                button.setMinWidth(0);
+                button.setMinHeight(0);
+                button.setIncludeFontPadding(false);
+                button.setGravity(android.view.Gravity.CENTER);
+                button.setFocusable(true);
+                button.setBackgroundDrawable(TvTheme.focusable(this));
+                // Wide keys (清空/退格/搜索) take two slots so the row still adds up to its width.
+                int slots = key.length() > 1 ? 2 : 1;
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.MATCH_PARENT, slots);
+                params.setMargins(dp(3), 0, dp(3), 0);
+                button.setLayoutParams(params);
+                button.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View view) { pressSearchKey(key); }
+                });
+                rowView.addView(button);
             }
-            button.setLayoutParams(params);
-            button.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { pressSearchKey(key); }
-            });
-            searchKeyboard.addView(button);
+            searchKeyboard.addView(rowView);
         }
     }
 
@@ -1516,8 +1983,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private LinearLayout.LayoutParams cardParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(132), dp(210));
-        params.setMargins(dp(3), dp(4), dp(10), dp(4));
+        // The screen is 1920x1080 at density 2.0, i.e. 960x540 dp: cards of 132x210 dp left room for
+        // barely two rows, which is why rows below the fold were reported as missing. 92x150 dp fits
+        // seven columns and three rows in the same area.
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(96), dp(158));
+        params.setMargins(dp(2), dp(3), dp(8), dp(3));
         return params;
     }
 
@@ -1525,12 +1995,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         TextView title = new TextView(this);
         title.setText(value);
         title.setTextColor(TvTheme.primary(this));
-        title.setTextSize(15);
+        title.setTextSize(13);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, 0, 0, dp(4));
+        title.setPadding(0, 0, 0, dp(2));
         title.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(28)));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(24)));
         return title;
     }
 
@@ -1547,16 +2017,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(TvTheme.primary(this));
-        button.setTextSize(13);
+        button.setTextSize(12);
         button.setAllCaps(false);
         button.setSingleLine(true);
         button.setEllipsize(TextUtils.TruncateAt.END);
         button.setGravity(Gravity.CENTER);
         button.setFocusable(true);
         button.setBackgroundDrawable(TvTheme.focusable(this));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(34));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                widthDp > 0 ? dp(widthDp) : LinearLayout.LayoutParams.WRAP_CONTENT, dp(30));
         params.setMargins(0, 0, dp(8), dp(4));
         button.setLayoutParams(params);
+        if (widthDp <= 0) button.setPadding(dp(16), 0, dp(16), 0);
         return button;
     }
 

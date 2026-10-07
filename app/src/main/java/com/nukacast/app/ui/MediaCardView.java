@@ -38,7 +38,7 @@ public final class MediaCardView extends LinearLayout {
 
         FrameLayout artwork = new FrameLayout(context);
         artwork.setBackgroundColor(TvTheme.soft(context));
-        addView(artwork, new LayoutParams(LayoutParams.MATCH_PARENT, dp(224)));
+        addView(artwork, new LayoutParams(LayoutParams.MATCH_PARENT, dp(108)));
 
         ImageView poster = new ImageView(context);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -65,9 +65,9 @@ public final class MediaCardView extends LinearLayout {
             badge.setSingleLine(true);
             badge.setEllipsize(TextUtils.TruncateAt.END);
             badge.setGravity(Gravity.CENTER);
-            badge.setPadding(dp(6), dp(2), dp(6), dp(2));
+            badge.setPadding(dp(4), dp(1), dp(4), dp(1));
             badge.setBackgroundResource(R.drawable.bg_badge);
-            FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(dp(84), dp(24),
+            FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(dp(62), dp(18),
                     Gravity.END | Gravity.TOP);
             badgeParams.setMargins(0, dp(6), dp(6), 0);
             artwork.addView(badge, badgeParams);
@@ -84,20 +84,20 @@ public final class MediaCardView extends LinearLayout {
             artwork.addView(progress, progressParams);
         }
 
-        TextView title = text(14, TvTheme.primary(context));
+        TextView title = text(12, TvTheme.primary(context));
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setText(safe(item.name));
-        LayoutParams titleParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(24));
-        titleParams.topMargin = dp(7);
+        LayoutParams titleParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(18));
+        titleParams.topMargin = dp(4);
         addView(title, titleParams);
 
         TextView meta = text(11, TvTheme.secondary(context));
         meta.setSingleLine(true);
         meta.setEllipsize(TextUtils.TruncateAt.END);
         meta.setText(meta(item));
-        addView(meta, new LayoutParams(LayoutParams.MATCH_PARENT, dp(18)));
+        addView(meta, new LayoutParams(LayoutParams.MATCH_PARENT, dp(15)));
 
         setOnFocusChangeListener(new OnFocusChangeListener() {
             @Override public void onFocusChange(View view, boolean focused) {

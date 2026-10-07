@@ -118,6 +118,53 @@ public final class NukaRuntime {
     public StorageLibrary getStorageLibrary() { return storageLibrary; }
     public LiveService getLiveService() { return liveService; }
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }
+    /**
+     * Bounds of everything currently visible, for diagnosing "something is cut off".
+     *
+     * <p>Runs on the UI thread so the numbers match what the user sees.
+     */
+    public java.util.Map<String, Object> getLayoutReport() {
+        final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity == null) {
+            java.util.Map<String, Object> empty = new java.util.LinkedHashMap<String, Object>();
+            empty.put("error", "界面未在前台（可能正在播放或已退出）");
+            return empty;
+        }
+        return activity.onUiThreadNow(new java.util.concurrent.Callable<java.util.Map<String, Object>>() {
+            @Override public java.util.Map<String, Object> call() {
+                android.view.View decor = activity.getWindow().getDecorView();
+                android.util.DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
+                java.util.Map<String, Object> report = com.nukacast.app.diagnostics.LayoutInspector
+                        .report(decor, metrics.widthPixels, metrics.heightPixels);
+                report.put("page", activity.currentPageName());
+                return report;
+            }
+        });
+    }
+
+    /** Shows a page by name (debug API) and reports which one ended up on screen. */
+    public String navigateTo(final String page) {
+        final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity == null) return "界面未在前台";
+        return activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+            @Override public String call() {
+                activity.showPageByName(page);
+                return activity.currentPageName();
+            }
+        });
+    }
+
+    /** Scrolls the visible page by {@code delta} pixels (debug API). */
+    public boolean scrollBy(final int delta) {
+        final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity == null) return false;
+        return activity.onUiThreadNow(new java.util.concurrent.Callable<Boolean>() {
+            @Override public Boolean call() {
+                return activity.scrollCurrentPage(delta);
+            }
+        });
+    }
+
     public PlayerController getPlayerController() { return playerController; }
     public AirPlayReceiver getAirPlayReceiver() { return airPlayReceiver; }
 

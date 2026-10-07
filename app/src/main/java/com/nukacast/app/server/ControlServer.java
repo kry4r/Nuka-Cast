@@ -159,6 +159,54 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/debug/player".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getPlayerController().snapshot());
         }
+        if ("/api/debug/categories".equals(path)) {
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            List<Map<String, Object>> sites = new ArrayList<Map<String, Object>>();
+            for (TvBoxConfig.Site site : runtime.getTvBoxRepository().getEnabledSites()) {
+                if (site.type == 3) continue;
+                List<com.nukacast.app.tvbox.model.Category> categories =
+                        runtime.getContentService().categories(site.sourceId, site.key);
+                if (categories.isEmpty()) continue;
+                Map<String, Object> entry = new LinkedHashMap<String, Object>();
+                entry.put("siteKey", site.key);
+                entry.put("siteName", site.name);
+                entry.put("categories", categories);
+                sites.add(entry);
+            }
+            payload.put("sites", sites);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/browse".equals(path)) {
+            String siteKey = session.getParms().get("siteKey");
+            String sourceId = session.getParms().get("sourceId");
+            String categoryId = session.getParms().get("categoryId");
+            int page = debugIntParam(session, "page", 1);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            try {
+                List<com.nukacast.app.tvbox.model.SearchItem> items =
+                        runtime.getContentService().browse(sourceId, siteKey, categoryId, page);
+                payload.put("items", items);
+                payload.put("count", items.size());
+            } catch (Exception error) {
+                payload.put("error", error.getMessage());
+            }
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/navigate".equals(path)) {
+            String page = session.getParms().get("page");
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("page", runtime.navigateTo(page));
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/scroll".equals(path)) {
+            int delta = debugIntParam(session, "delta", 600);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("scrolled", runtime.scrollBy(delta));
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/layout".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, runtime.getLayoutReport());
+        }
         if ("/api/debug/logs".equals(path) && Method.GET.equals(session.getMethod())) {
             String level = session.getParms().get("level");
             int limit = debugIntParam(session, "limit", 80);
