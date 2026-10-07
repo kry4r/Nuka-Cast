@@ -567,6 +567,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
   const [providerBusy, setProviderBusy] = useState(false)
   const gate = useMemo(() => createLatestRequestGate(), [])
 
+
   const load = useCallback(() => api.dramaProviders().then((data) => {
     setProviders(data.providers)
     setProviderId((current) => {
@@ -869,7 +870,7 @@ function DramaDialog({ detail, onSwitch, onClose, setError }: {
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
-      <div className="mx-auto min-h-full max-w-5xl overflow-hidden rounded-2xl border bg-background shadow-2xl">
+      <div className="mx-auto max-w-5xl overflow-hidden rounded-2xl border bg-background shadow-2xl">
         <header className="sticky top-0 z-10 flex min-h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-semibold">{item.title}</h2>

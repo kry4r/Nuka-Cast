@@ -8,12 +8,16 @@
  *   node tools/preview-server.mjs [port]
  */
 import { createServer } from "node:http"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
-import { extname, join, normalize } from "node:path"
+import { dirname, extname, join, normalize } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const root = new URL("../app/src/main/assets/web/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")
 const port = Number(process.argv[2] || 9978)
 const now = Date.now()
+const previewDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".preview")
+const pidFile = join(previewDir, "preview-server.pid")
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -267,6 +271,13 @@ createServer(async (request, response) => {
   await serveStatic(url.pathname, response)
 }).listen(port, () => {
   console.log(`preview server: http://localhost:${port}/  (root: ${root})`)
+  // Record our pid so tools/preview-restart.mjs can stop exactly this process (never all node.exe).
+  try {
+    mkdirSync(previewDir, { recursive: true })
+    writeFileSync(pidFile, `${process.pid}\n`)
+  } catch {
+    /* the pid file is optional */
+  }
 })
 
 function readBody(request) {
