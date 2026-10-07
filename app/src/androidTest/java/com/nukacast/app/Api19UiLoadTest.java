@@ -74,10 +74,16 @@ public final class Api19UiLoadTest {
         }
     }
 
+    /**
+     * On API 19 the bundled Conscrypt stack must load: Android 4.4's platform TLS is the exact
+     * fallback this app refuses to rely on. A degradation here is a product bug, not a test detail,
+     * so the assertion stays strict.
+     */
     @Test
     public void legacyTlsStackLoadsInsteadOfDegradingToPlatformTls() {
         String reason = HttpStack.initError();
         assertFalse("旧版 TLS 初始化失败，已回退平台 TLS：" + reason, HttpStack.degraded());
         assertNotNull(HttpStack.client());
+        assertNotNull(HttpStack.client().sslSocketFactory());
     }
 }

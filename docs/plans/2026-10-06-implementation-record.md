@@ -82,7 +82,7 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 | HttpStack 初始化失败不再带走 UI | pass（JVM 测试覆盖边界与回退客户端） | API19 真机 TLS provider 加载由 CI + 真机确认 |
 | 阶段诊断（source/spider/airplay/http） | pass（JVM 测试 + `/api/diagnostics.stages` + 网页展示） | 真机采集仍需结合 logcat/native |
 | Spider 会话身份与 LRU | pass（代码 + 编译） | 需在真实多仓配置下观察会话命中/释放 |
-| API19 x86 类加载/布局/TLS | 代码 + CI job 完成，流水线 pending | 本轮未运行模拟器 |
+| API19 x86 类加载/布局/TLS | 代码 + CI job 完成，流水线 pending | API19 job 严格断言 Conscrypt 未降级；若 CI 失败，修代码而不是放宽断言 |
 | 插件独立进程 / 不可中断执行（T2/F02/F03） | **未实施** | 需要单独设计 IPC 契约，见 spec 3.2 |
 | 24 帧门槛之外的真机首帧耗时 | **pending** | 需要 SHARP/iPhone |
 
@@ -94,7 +94,12 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 - 真实设备的根因（Dalvik verifier、SO、海思解码器）仍未知；本轮没有声称修复了用户报告的闪退，只是补上诊断与错误边界。
 - 未改动 minSdk、依赖版本、播放器与已有 TLS 校验策略。
 
-## 5. 建议下一步
+## 5. 版本与发布
+
+- 本轮默认版本号提升为 `0.3.5`（`versionCode` 11），正式包由 `v0.3.5` 标签触发 `release.yml` 构建（标签版本号会覆盖默认值，`versionCode` 取 run number）。
+- 发布门禁：`testDebugUnitTest + lintRelease + assembleRelease`，签名校验、双 ABI 原生库存在性、无 x86_64、内置网页资源未过期。
+
+## 6. 建议下一步
 
 1. 在 SHARP 电视安装本次 debug APK，按 plan 的 T0 采集流程抓取首次崩溃的 earliest cause，并导出 `/api/diagnostics`（现在包含 `httpStack`/`drama`/`airPlay.identity`/`stages`）。网页“设备”页的阶段诊断可直接看到最后一个 running/failed 阶段。
 2. 提供至少一个可用短剧片源或 CMS 地址，完成 D03 的完整真实播放链路。
