@@ -126,6 +126,36 @@ async function main() {
   check("category browsing returns a list", browsed >= 6,
     `${browsedWhere} → ${browsed} items`);
 
+  // Browsing with a device-side filter (the sites themselves ignore year/area parameters).
+  // The first category of a site is often a stub (measured: 电影 returns one record), and the scan
+  // only walks the pages of one category, so the check sweeps categories like the TV page does.
+  const filterSite = (categories.sites || []).find((s) => (s.categories || []).length > 3);
+  let filterEvidence = "no site with enough categories";
+  let filterOk = false;
+  if (filterSite) {
+    const probes = (filterSite.categories || []).slice(0, 6);
+    for (const category of probes) {
+      const first = (await call("GET", `/api/debug/browse?siteKey=${encodeURIComponent(filterSite.siteKey)}` +
+        `&categoryId=${encodeURIComponent(category.id)}&page=1`)).data;
+      if ((first.items || []).length < 3) continue;
+      const filtered = (await call("GET", `/api/debug/browse?siteKey=${encodeURIComponent(filterSite.siteKey)}` +
+        `&categoryId=${encodeURIComponent(category.id)}&page=1&year=2024`)).data;
+      const items = filtered.items || [];
+      const years = [...new Set(items.map((i) => i.year))];
+      filterEvidence = `${filterSite.siteName} · ${category.name} · ${filtered.filter || "2024"} → ` +
+        `${filtered.count} of ${filtered.matched} matched, years ${years.join(",") || "none"}`;
+      filterOk = items.length > 0 && items.every((i) => (i.year || "").startsWith("2024"));
+      break;
+    }
+  }
+  check("browse filter narrows by year", filterOk, filterEvidence);
+
+  // The TV's own filter chips.
+  const applied = (await call("GET", "/api/debug/browseFilter?year=2024")).data;
+  check("the TV applies the browse filter", (applied.filter || "").includes("2024"),
+    `filter = ${applied.filter}`);
+  await call("GET", "/api/debug/browseFilter?year=");
+
   // Search by title.
   const search = (await call("POST", "/api/search", { keyword: "流浪地球" })).data;
   const items = search.items || [];

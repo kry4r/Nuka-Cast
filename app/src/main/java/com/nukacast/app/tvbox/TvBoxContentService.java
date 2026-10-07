@@ -259,6 +259,90 @@ public final class TvBoxContentService {
         }
     }
 
+    /** Records a CMS site returns per page; used to decide whether a scan reached the end. */
+    private static final int BROWSE_PAGE_SIZE = 20;
+    /** How many site pages a filtered browse may scan before giving up. */
+    /** Pages scanned per filtered call; the UI offers 继续扫描 for the rest.
+     *
+     * <p>Fifteen pages took long enough that the page looked stuck, and each page is a network request.
+     */
+    private static final int MAX_FILTER_SCAN_PAGES = 5;
+    /** Matched records kept per filter combination, held in memory only. */
+    private static final int MAX_FILTER_CACHE = 400;
+
+    private static final class FilterCache {
+        final List<SearchItem> items = new ArrayList<SearchItem>();
+        int scannedPages;
+        boolean exhausted;
+        long at;
+    }
+
+    private final java.util.Map<String, FilterCache> filterCache =
+            new java.util.concurrent.ConcurrentHashMap<String, FilterCache>();
+
+    /**
+     * Browses a category with a 年份/地区/语言 filter applied on the device.
+     *
+     * <p>Ctrl-F on the wire: a live MacCMS site returned the identical 5330 records for
+     * {@code &year=2024}, {@code &area=大陆} and no parameters at all, so the API cannot do this. Pages
+     * are therefore fetched and filtered here, and the matches are cached per filter combination so
+     * paging does not rescan from the first page.
+     *
+     * @return the requested page of matches (possibly shorter than a full page while scanning goes on)
+     */
+    public List<SearchItem> browseFiltered(String sourceId, String siteKey, String categoryId,
+                                           int page, BrowseFilter filter) throws Exception {
+        if (filter == null || filter.isEmpty()) return browse(sourceId, siteKey, categoryId, page);
+        String key = sourceId + "|" + siteKey + "|" + categoryId + "|" + filter.key();
+        FilterCache cache = filterCache.get(key);
+        if (cache == null) {
+            cache = new FilterCache();
+            filterCache.put(key, cache);
+        }
+        int wanted = Math.max(1, page) * BROWSE_PAGE_SIZE;
+        while (cache.items.size() < wanted && !cache.exhausted
+                && cache.scannedPages < MAX_FILTER_SCAN_PAGES) {
+            List<SearchItem> batch = browse(sourceId, siteKey, categoryId, cache.scannedPages + 1);
+            cache.scannedPages++;
+            if (batch.isEmpty()) {
+                cache.exhausted = true;
+                break;
+            }
+            for (SearchItem item : batch) {
+                if (filter.matches(item)) cache.items.add(item);
+            }
+            if (batch.size() < BROWSE_PAGE_SIZE) cache.exhausted = true;
+        }
+        cache.at = System.currentTimeMillis();
+        int from = Math.max(0, (Math.max(1, page) - 1) * BROWSE_PAGE_SIZE);
+        if (from >= cache.items.size()) return new ArrayList<SearchItem>();
+        int to = Math.min(cache.items.size(), from + BROWSE_PAGE_SIZE);
+        return new ArrayList<SearchItem>(cache.items.subList(from, to));
+    }
+
+    /** True when a filtered browse has finished scanning everything the site had. */
+    public boolean filterScanComplete(String sourceId, String siteKey, String categoryId,
+                                      BrowseFilter filter) {
+        if (filter == null || filter.isEmpty()) return false;
+        FilterCache cache = filterCache.get(sourceId + "|" + siteKey + "|" + categoryId + "|"
+                + filter.key());
+        return cache != null && (cache.exhausted || cache.scannedPages >= MAX_FILTER_SCAN_PAGES);
+    }
+
+    /** How many records a filtered browse has matched so far. */
+    public int filterMatchCount(String sourceId, String siteKey, String categoryId,
+                                BrowseFilter filter) {
+        if (filter == null || filter.isEmpty()) return 0;
+        FilterCache cache = filterCache.get(sourceId + "|" + siteKey + "|" + categoryId + "|"
+                + filter.key());
+        return cache == null ? 0 : cache.items.size();
+    }
+
+    /** Drops cached filter scans; called when sources change so stale lists do not linger. */
+    public void clearFilterCache() {
+        filterCache.clear();
+    }
+
     public MediaDetail detail(String sourceId, String siteKey, String vodId) throws Exception {
         if (isStorage(sourceId)) return requireStorage().detail(vodId);
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);

@@ -174,6 +174,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
     private String browseSiteKey = "";
     private String browseCategoryId = "";
+    /** 年份/地区/语言 selection of the browse page (matched on the device, not by the site). */
+    private com.nukacast.app.tvbox.BrowseFilter browseFilter = new com.nukacast.app.tvbox.BrowseFilter();
     private int browsePage;
     private boolean browseLoading;
     private boolean browseMode;
@@ -748,6 +750,29 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return new java.util.ArrayList<String>(recentSearches);
     }
 
+    /**
+     * Applies a browse filter from the debug API, through the same path the chips use.
+     *
+     * @return the filter label that is now in effect
+     */
+    public String applyBrowseFilterForDebug(final String year, final String area, final String lang) {
+        browseFilter = new com.nukacast.app.tvbox.BrowseFilter(year, area, lang);
+        if (browseSites.isEmpty() || browseSiteKey.isEmpty()) {
+            // The category bar has not been loaded yet (the page was never opened): load it, and the
+            // first page it fetches will already carry this filter.
+            showMovies("");
+        } else {
+            if (!PAGE_MOVIES.equals(currentPage)) showMovies("");
+            loadCategoryPage(1);
+        }
+        return browseFilter.isEmpty() ? "全部" : browseFilter.label();
+    }
+
+    /** The browse filter currently in effect (debug API). */
+    public String browseFilterForDebug() {
+        return browseFilter.isEmpty() ? "" : browseFilter.label();
+    }
+
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
     public String playerMenuActionForDebug(String action) {
         if (action == null) return "no-action";
@@ -999,6 +1024,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             button.setSelected(category.id.equals(browseCategoryId));
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
+                    if (!category.id.equals(browseCategoryId)) resetBrowseFilter();
                     browseCategoryId = category.id;
                     browsePage = 0;
                     loadCategoryPage(1);
@@ -1047,23 +1073,49 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 List<SearchItem> items = new java.util.ArrayList<SearchItem>();
                 String failure = "";
                 String categoryId = browseCategoryId;
+                final com.nukacast.app.tvbox.BrowseFilter filter = browseFilter;
+                final com.nukacast.app.tvbox.TvBoxContentService service =
+                        runtime.getContentService();
                 int attempts = 0;
-                while (true) {
-                    try {
-                        List<SearchItem> fetched = runtime.getContentService()
-                                .browse(sourceId, siteKey, categoryId, page);
-                        items = fetched == null ? new java.util.ArrayList<SearchItem>() : fetched;
-                    } catch (Exception error) {
-                        failure = error.getMessage() == null ? "加载失败" : error.getMessage();
-                        break;
+                try {
+                    if (filter.isEmpty()) {
+                        while (true) {
+                            items = service.browse(sourceId, siteKey, categoryId, page);
+                            if (items == null) items = new java.util.ArrayList<SearchItem>();
+                            // Measured on real configs: some declared categories return one or two
+                            // records while their neighbours return thousands, so a thin first page
+                            // moves on to the next category.
+                            if (page > 1 || items.size() >= 3 || attempts >= 8) break;
+                            String next = nextCategoryAfter(siteKey, categoryId);
+                            if (next == null || next.equals(categoryId)) break;
+                            categoryId = next;
+                            attempts++;
+                        }
+                    } else {
+                        // Filtered: pick a category that actually has records first (one cheap request),
+                        // then let the service scan it. Scanning every candidate category would mean
+                        // fifteen page fetches per candidate.
+                        while (true) {
+                            List<SearchItem> firstPage = service.browse(sourceId, siteKey, categoryId, 1);
+                            boolean thin = firstPage == null || firstPage.size() < 3;
+                            if (!thin) {
+                                items = service.browseFiltered(sourceId, siteKey, categoryId, page,
+                                        filter);
+                                if (items == null) items = new java.util.ArrayList<SearchItem>();
+                                break;
+                            }
+                            String next = attempts >= 8 ? null : nextCategoryAfter(siteKey, categoryId);
+                            if (next == null || next.equals(categoryId)) break;
+                            categoryId = next;
+                            attempts++;
+                        }
+                        if (items.isEmpty() && !service.filterScanComplete(
+                                sourceId, siteKey, categoryId, filter)) {
+                            failure = "扫描中";
+                        }
                     }
-                    // Measured on real configs: some declared categories return one or two records
-                    // while their neighbours return thousands, so a thin first page moves on.
-                    if (page > 1 || items.size() >= 3 || attempts >= 8) break;
-                    String next = nextCategoryAfter(siteKey, categoryId);
-                    if (next == null || next.equals(categoryId)) break;
-                    categoryId = next;
-                    attempts++;
+                } catch (Exception error) {
+                    failure = error.getMessage() == null ? "加载失败" : error.getMessage();
                 }
                 final List<SearchItem> result = items;
                 final String reason = failure;
@@ -1072,6 +1124,23 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     @Override public void run() {
                         browseLoading = false;
                         moviesContent.removeAllViews();
+                        if ("扫描中".equals(reason)) {
+                            moviesContent.addView(sectionTitle(browseFilter.label() + " · 已匹配 "
+                                    + runtime.getContentService().filterMatchCount(
+                                            sourceId, siteKey, chosen, browseFilter) + " 条"));
+                            moviesContent.addView(bodyText(
+                                    "站点不支持按年份/地区筛选，正在已抓取的记录里继续匹配：稍后再点一次即可看到更多。"));
+                            LinearLayout again = new LinearLayout(MainActivity.this);
+                            again.setOrientation(LinearLayout.HORIZONTAL);
+                            Button scan = actionButton("继续扫描", 0);
+                            scan.setOnClickListener(new View.OnClickListener() {
+                                @Override public void onClick(View view) { loadCategoryPage(1); }
+                            });
+                            again.addView(scan);
+                            moviesContent.addView(again);
+                            scan.requestFocus();
+                            return;
+                        }
                         if (!reason.isEmpty()) {
                             moviesContent.addView(sectionTitle("分类加载失败"));
                             moviesContent.addView(bodyText(reason));
@@ -1109,6 +1178,71 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return false;
     }
 
+    /** Resets the filter, which belongs to one category on one site. */
+    private void resetBrowseFilter() {
+        if (browseFilter.isEmpty()) return;
+        browseFilter = new com.nukacast.app.tvbox.BrowseFilter();
+    }
+
+    /**
+     * The 年份/地区/语言 bar.
+     *
+     * <p>The sites ignore these parameters (a live MacCMS site returned identical results for
+     * {@code &year=2024}, {@code &area=大陆} and nothing at all), so the values select records by
+     * matching what the site already returned.
+     */
+    private void renderBrowseFilterBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.VERTICAL);
+        rulesRow(bar, "年份", com.nukacast.app.tvbox.BrowseFilter.YEARS, browseFilter.year, "year");
+        rulesRow(bar, "地区", com.nukacast.app.tvbox.BrowseFilter.AREAS, browseFilter.area, "area");
+        rulesRow(bar, "语言", com.nukacast.app.tvbox.BrowseFilter.LANGS, browseFilter.lang, "lang");
+        moviesContent.addView(bar);
+    }
+
+    private void rulesRow(LinearLayout bar, String label, List<String> values,
+                          String selected, final String kind) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = bodyText(label);
+        title.setTextSize(12);
+        title.setLayoutParams(new LinearLayout.LayoutParams(dp(46), dp(30)));
+        row.addView(title);
+        Button all = actionButton("全部", 0);
+        all.setSelected(selected.isEmpty());
+        all.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { applyBrowseFilter(kind, ""); }
+        });
+        row.addView(all);
+        for (final String value : values) {
+            Button chip = actionButton(value, 0);
+            chip.setSelected(value.equals(selected));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { applyBrowseFilter(kind, value); }
+            });
+            row.addView(chip);
+        }
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.addView(row, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(34));
+        params.bottomMargin = dp(2);
+        bar.addView(scroll, params);
+    }
+
+    /** Applies one filter value and reloads the first page. */
+    private void applyBrowseFilter(String kind, String value) {
+        if ("year".equals(kind)) browseFilter = browseFilter.withYear(value);
+        else if ("area".equals(kind)) browseFilter = browseFilter.withArea(value);
+        else browseFilter = browseFilter.withLang(value);
+        AppLog.i("影视", "分类筛选：" + (browseFilter.isEmpty() ? "全部" : browseFilter.label()));
+        loadCategoryPage(1);
+    }
+
     /** Renders the category header plus the accumulated grid and a “下一页” button. */
     private void renderCategoryGrid(String siteKey, String categoryId, int page,
                                     List<SearchItem> items) {
@@ -1122,7 +1256,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         }
         if (page <= 1) {
             moviesContent.removeAllViews();
-            moviesContent.addView(sectionTitle(siteName + " · " + categoryName));
+            moviesContent.addView(sectionTitle(siteName + " · " + categoryName
+                    + (browseFilter.isEmpty() ? "" : " · " + browseFilter.label())));
+            renderBrowseFilterBar();
         } else {
             // Remove the previous “下一页” button before appending.
             if (loadMoreRow != null) {
@@ -1131,7 +1267,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
         }
         if (items.isEmpty() && page <= 1) {
-            moviesContent.addView(bodyText("该分类没有返回内容，可换一个分类或站点。"));
+            moviesContent.addView(bodyText(browseFilter.isEmpty()
+                    ? "该分类没有返回内容，可换一个分类或站点。"
+                    : "这个筛选条件在已抓取的记录里没有匹配，取消筛选或换一个分类试试。"));
             return;
         }
         appendGrid(moviesContent, items, gridColumns());

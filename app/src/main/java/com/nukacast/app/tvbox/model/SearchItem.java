@@ -12,6 +12,8 @@ public final class SearchItem {
     public String remarks = "";
     public String year = "";
     public String area = "";
+    /** Language as declared by the site ({@code vod_lang}); used by the browse filter. */
+    public String lang = "";
     public String typeName = "";
     public String actor = "";
     public String director = "";

@@ -35,6 +35,7 @@ public final class HomeCatalogParser {
             item.remarks = string(value, "vod_remarks", "remarks", "note");
             item.year = string(value, "vod_year", "year");
             item.area = string(value, "vod_area", "area");
+            item.lang = string(value, "vod_lang", "lang");
             item.typeName = string(value, "type_name", "vod_class", "type");
             item.actor = string(value, "vod_actor", "actor");
             item.director = string(value, "vod_director", "director");

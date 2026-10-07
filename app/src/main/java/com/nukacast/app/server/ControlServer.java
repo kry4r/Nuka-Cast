@@ -184,12 +184,24 @@ public final class ControlServer extends NanoHTTPD {
             String sourceId = session.getParms().get("sourceId");
             String categoryId = session.getParms().get("categoryId");
             int page = debugIntParam(session, "page", 1);
+            // year/area/lang apply the same device-side filter the TV's browse page uses, because the
+            // sites themselves ignore these parameters.
+            com.nukacast.app.tvbox.BrowseFilter filter = new com.nukacast.app.tvbox.BrowseFilter(
+                    safe(session.getParms().get("year")), safe(session.getParms().get("area")),
+                    safe(session.getParms().get("lang")));
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
             try {
-                List<com.nukacast.app.tvbox.model.SearchItem> items =
-                        runtime.getContentService().browse(sourceId, siteKey, categoryId, page);
+                List<com.nukacast.app.tvbox.model.SearchItem> items = runtime.getContentService()
+                        .browseFiltered(sourceId, siteKey, categoryId, page, filter);
                 payload.put("items", items);
                 payload.put("count", items.size());
+                if (!filter.isEmpty()) {
+                    payload.put("filter", filter.label());
+                    payload.put("matched", runtime.getContentService().filterMatchCount(
+                            sourceId, siteKey, categoryId, filter));
+                    payload.put("scanComplete", runtime.getContentService().filterScanComplete(
+                            sourceId, siteKey, categoryId, filter));
+                }
             } catch (Exception error) {
                 payload.put("error", error.getMessage());
             }
@@ -253,6 +265,21 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("speed", playback.speed);
             payload.put("state", playback.state);
             payload.put("aspect", activity.aspectModeForDebug());
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/browseFilter".equals(path)) {
+            final String year = safe(session.getParms().get("year"));
+            final String area = safe(session.getParms().get("area"));
+            final String lang = safe(session.getParms().get("lang"));
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            String label = activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                @Override public String call() {
+                    return activity.applyBrowseFilterForDebug(year, area, lang);
+                }
+            });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("filter", label);
             return json(Response.Status.OK, payload);
         }
         if ("/api/debug/type".equals(path)) {
