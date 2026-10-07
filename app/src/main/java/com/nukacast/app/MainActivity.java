@@ -152,6 +152,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Sources that failed this session, so the page can skip them. */
     private final java.util.Set<String> liveFailedSources = new java.util.HashSet<String>();
     private String liveLastError = "";
+    /** Channel search: its own panel, query text and on-screen keyboard. */
+    private LinearLayout liveSearchPanel;
+    private LinearLayout liveSearchKeyboard;
+    private TextView liveSearchQuery;
+    private String liveSearchText = "";
+    private boolean liveSearching;
     private long liveSwitchAt;
     /** When the source list was last read, so re-entering the page does not refetch constantly. */
     private long liveLoadedAt;
@@ -558,6 +564,64 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
         });
         return true;
+    }
+
+    /**
+     * Opens the live channel search with {@code query} typed in, and opens the page if needed.
+     *
+     * <p>Driven by the debug API so the search can be exercised without an on-screen keyboard.
+     */
+    public int liveSearchForDebug(final String query) {
+        if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
+        if (liveSearchPanel == null || liveSearchPanel.getVisibility() != View.VISIBLE) {
+            toggleLiveSearch();
+        }
+        liveSearchText = query == null ? "" : query;
+        // Typing one key at a time exercises the same path the keyboard uses.
+        renderLiveSearchResults();
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> hits =
+                com.nukacast.app.live.ChannelSearch.find(liveCatalog, liveSearchText);
+        return hits.size();
+    }
+
+    /** True once the live page has a catalog to search (or has finished trying). */
+    /** Selects a live source by name fragment (debug API); returns its name or an empty string. */
+    public String selectLiveSourceForDebug(final String fragment) {
+        if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
+        if (liveSources.isEmpty()) {
+            loadLive();
+            return "";
+        }
+        for (com.nukacast.app.live.model.LiveSourceInfo info : liveSources) {
+            if (fragment == null || info.name == null) continue;
+            if (info.name.contains(fragment)) {
+                if (!info.id.equals(liveSourceId)) {
+                    liveSourceId = info.id;
+                    liveCatalog = null;
+                    liveGroupName = "";
+                    renderLiveSourceRow();
+                    loadLiveCatalog(liveSourceId);
+                }
+                return info.name;
+            }
+        }
+        return "";
+    }
+
+    /** Names of the live sources currently known to the page (debug API). */
+    public List<String> liveSourceNamesForDebug() {
+        List<String> names = new java.util.ArrayList<String>();
+        for (com.nukacast.app.live.model.LiveSourceInfo info : liveSources) names.add(info.name);
+        return names;
+    }
+
+    public boolean liveCatalogReadyForDebug() {
+        if (PAGE_LIVE.equals(currentPage) && liveCatalog == null && liveSources.isEmpty()) {
+            loadLive();
+        }
+        return liveCatalog != null
+                || (liveStatus != null && "所有直播源都不可用".contentEquals(
+                        liveStatus.getText() == null ? "" : liveStatus.getText()));
     }
 
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
@@ -1004,6 +1068,25 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveStatus.setPadding(0, 0, 0, dp(6));
         livePage.addView(liveStatus);
 
+        LinearLayout liveTools = chipRow();
+        Button searchToggle = actionButton("搜索频道", 0);
+        searchToggle.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { toggleLiveSearch(); }
+        });
+        liveTools.addView(searchToggle);
+        livePage.addView(chipRowHolder(liveTools));
+
+        liveSearchPanel = new LinearLayout(this);
+        liveSearchPanel.setOrientation(LinearLayout.VERTICAL);
+        liveSearchPanel.setVisibility(View.GONE);
+        liveSearchQuery = bodyText("");
+        liveSearchQuery.setTextSize(15);
+        liveSearchPanel.addView(liveSearchQuery);
+        liveSearchKeyboard = new LinearLayout(this);
+        liveSearchKeyboard.setOrientation(LinearLayout.VERTICAL);
+        liveSearchPanel.addView(liveSearchKeyboard);
+        livePage.addView(liveSearchPanel);
+
         liveSourceRow = chipRow();
         livePage.addView(chipRowHolder(liveSourceRow));
         liveGroupRow = chipRow();
@@ -1021,6 +1104,60 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         pageContainer.addView(livePage, new android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    /** Shows or hides the on-screen keyboard used to find a channel in a large playlist. */
+    private void toggleLiveSearch() {
+        if (liveSearchPanel.getVisibility() == View.VISIBLE) {
+            liveSearchPanel.setVisibility(View.GONE);
+            liveSearchText = "";
+            liveSearching = false;
+            renderLiveChannels();
+            return;
+        }
+        liveSearchPanel.setVisibility(View.VISIBLE);
+        liveSearching = true;
+        liveSearchText = "";
+        buildKeyboard(liveSearchKeyboard, new Runnable() {
+            @Override public void run() {
+                renderLiveSearchResults();
+            }
+        });
+        liveSearchQuery.setText("输入频道名或首字母");
+        if (liveSearchKeyboard.getChildCount() > 0) {
+            liveSearchKeyboard.getChildAt(0).requestFocus();
+        }
+    }
+
+    /** Shows the channels matching the query typed on the on-screen keyboard. */
+    private void renderLiveSearchResults() {
+        liveSearchQuery.setText(liveSearchText.isEmpty()
+                ? "输入频道名或首字母" : "搜索：" + liveSearchText);
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> hits =
+                com.nukacast.app.live.ChannelSearch.find(liveCatalog, liveSearchText);
+        String prefix = liveCatalog == null ? "" : liveCatalog.sourceName + " · ";
+        liveStatus.setText(liveSearchText.isEmpty()
+                ? "输入频道名或首字母，例如“湖南”“hnws”"
+                : prefix + "“" + liveSearchText + "” · " + hits.size() + " 个频道");
+        renderLiveChannelList(hits, true);
+    }
+
+    /** Handles one on-screen keyboard press for the live search box. */
+    private void pressLiveSearchKey(String key) {
+        if ("清空".equals(key)) {
+            liveSearchText = "";
+        } else if ("退格".equals(key)) {
+            if (!liveSearchText.isEmpty()) {
+                liveSearchText = liveSearchText.substring(0, liveSearchText.length() - 1);
+            }
+        } else if ("搜索".equals(key)) {
+            renderLiveSearchResults();
+            return;
+        } else {
+            liveSearchText = liveSearchText + key;
+        }
+        // Results refresh on every key: with 11k channels that is what makes finding one possible.
+        renderLiveSearchResults();
     }
 
     private LinearLayout chipRow() {
@@ -1191,23 +1328,39 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final int LIVE_PAGE_SIZE = 120;
 
     private void renderLiveChannels() {
-        liveChannelGrid.removeAllViews();
+        if (liveSearching) {
+            renderLiveSearchResults();
+            return;
+        }
         com.nukacast.app.live.model.LiveCatalog.Group group = null;
         for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
             if (candidate.name.equals(liveGroupName)) group = candidate;
         }
         if (group == null) return;
-        int total = group.channels.size();
+        liveStatus.setText(liveCatalog.sourceName + " · " + group.name + " · "
+                + group.channels.size() + " 个频道");
+        renderLiveChannelList(group.channels, false);
+    }
+
+    /** Renders a channel list (one group, or the hits of a search), paged. */
+    private void renderLiveChannelList(
+            List<com.nukacast.app.live.model.LiveCatalog.Channel> all, boolean fromSearch) {
+        liveChannelGrid.removeAllViews();
+        int total = all.size();
+        if (total == 0) {
+            liveChannelGrid.addView(bodyText("没有匹配的频道。"));
+            return;
+        }
         int pages = Math.max(1, (total + LIVE_PAGE_SIZE - 1) / LIVE_PAGE_SIZE);
         liveChannelPage = Math.max(0, Math.min(liveChannelPage, pages - 1));
-        int from = liveChannelPage * LIVE_PAGE_SIZE;
+        int from = Math.min(total, liveChannelPage * LIVE_PAGE_SIZE);
         int to = Math.min(total, from + LIVE_PAGE_SIZE);
-        liveStatus.setText(liveCatalog.sourceName + " · " + group.name + " · " + total + " 个频道"
-                + (pages > 1 ? "（第 " + (liveChannelPage + 1) + "/" + pages + " 页）" : ""));
+        if (pages > 1) {
+            liveStatus.setText(liveStatus.getText() + "（第 " + (liveChannelPage + 1) + "/" + pages + " 页）");
+        }
         // A playlist such as iptv-org's carries 11k channels; building every button at once both
-        // stalls the UI thread and exhausts memory on a 1.5GB TV, so a group is paged.
-        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels =
-                group.channels.subList(from, to);
+        // stalls the UI thread and exhausts memory on a 1.5GB TV, so a list is paged.
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels = all.subList(from, to);
         int columns = liveColumns();
         LinearLayout row = null;
         for (int i = 0; i < channels.size(); i++) {
@@ -1220,7 +1373,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 liveChannelGrid.addView(row, rowParams);
             }
             final com.nukacast.app.live.model.LiveCatalog.Channel channel = channels.get(i);
-            Button button = actionButton(channel.name, 0);
+            String label = channel.name;
+            if (fromSearch && channel.group != null && !channel.group.isEmpty()) {
+                label = channel.group + " · " + label;
+            }
+            Button button = actionButton(label, 0);
             button.setSingleLine(true);
             button.setEllipsize(TextUtils.TruncateAt.END);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(30), 1f);
@@ -1235,23 +1392,19 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             LinearLayout pager = new LinearLayout(this);
             pager.setOrientation(LinearLayout.HORIZONTAL);
             Button previous = actionButton("上一页", 0);
-            previous.setEnabled(liveChannelPage > 0);
             previous.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     if (liveChannelPage > 0) {
                         liveChannelPage--;
-                        renderLiveChannels();
+                        refreshLiveList();
                     }
                 }
             });
             Button next = actionButton("下一页", 0);
-            next.setEnabled(liveChannelPage < livePageCount() - 1);
             next.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
-                    if (liveChannelPage < livePageCount() - 1) {
-                        liveChannelPage++;
-                        renderLiveChannels();
-                    }
+                    liveChannelPage++;
+                    refreshLiveList();
                 }
             });
             pager.addView(previous);
@@ -1261,7 +1414,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             pagerParams.topMargin = dp(4);
             liveChannelGrid.addView(pager, pagerParams);
         }
-        if (row != null && row.getChildCount() > 0) row.getChildAt(0).requestFocus();
+        // Focus stays on the keyboard while a search is open, or the viewer would have to walk back
+        // to it after every letter.
+        if (!liveSearching && row != null && row.getChildCount() > 0) row.getChildAt(0).requestFocus();
+    }
+
+    /** Re-renders whichever list the live page is currently showing. */
+    private void refreshLiveList() {
+        if (liveSearching) renderLiveSearchResults();
+        else renderLiveChannels();
     }
 
     private int livePageCount() {
@@ -1282,11 +1443,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Starts a channel and remembers its neighbours so 上/下键 can zap. */
     private void playLiveChannel(com.nukacast.app.live.model.LiveCatalog.Channel channel) {
-        List<com.nukacast.app.live.model.LiveCatalog.Channel> group =
-                new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
-        for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
-            if (candidate.name.equals(liveGroupName)) group.addAll(candidate.channels);
-        }
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> group = visibleChannelList();
         livePlaying.clear();
         livePlaying.addAll(group);
         livePlayingIndex = group.indexOf(channel);
@@ -1295,23 +1452,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
-        liveSwitchAt = System.currentTimeMillis();
-        liveAutoSwitch = 0;
         runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
         render();
         if (playerHud != null) {
             playerHud.show(channel.name, (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播",
-                    "按返回键退出 · 上/下键换台", true);
+                    "按返回键退出 · 上/下键换台 · 菜单键显示控制", true);
         }
     }
 
-    /**
-     * Called once a second while media is playing.
-     *
-     * <p>A live channel that dies has to be replaced: a dead stream otherwise leaves the player in
-     * an error state with no way back except leaving the page. Up to three channels are tried, then
-     * the failure is shown.
-     */
+    /** Channels behind the buttons currently on screen: the zap list for 上/下键. */
+    private List<com.nukacast.app.live.model.LiveCatalog.Channel> visibleChannelList() {
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> result =
+                new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
+        if (liveSearching) {
+            return com.nukacast.app.live.ChannelSearch.find(liveCatalog, liveSearchText);
+        }
+        if (liveCatalog == null) return result;
+        for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
+            if (candidate.name.equals(liveGroupName)) return candidate.channels;
+        }
+        return result;
+    }
+
     public void onPlaybackTick(int positionMs, int durationMs) {
         reportPlaybackFailure();
         advanceEpisodeWhenFinished();
@@ -1833,7 +1995,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * because the row did not fit its container ("很多都有遮挡看不到"). Weighted rows cannot overflow.
      */
     private void buildSearchKeyboard() {
-        searchKeyboard.removeAllViews();
+        buildKeyboard(searchKeyboard, new Runnable() {
+            @Override public void run() { searchFromKeyboard(); }
+        });
+    }
+
+    /** Builds the on-screen keyboard into {@code container}; keys type into the shared query text. */
+    private void buildKeyboard(final LinearLayout container, final Runnable onSubmit) {
+        container.removeAllViews();
         for (int rowIndex = 0; rowIndex < KEYBOARD_ROWS.length; rowIndex++) {
             String[] row = KEYBOARD_ROWS[rowIndex];
             LinearLayout rowView = new LinearLayout(this);
@@ -1863,11 +2032,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 params.setMargins(dp(3), 0, dp(3), 0);
                 button.setLayoutParams(params);
                 button.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View view) { pressSearchKey(key); }
+                    @Override public void onClick(View view) {
+                        if (container == searchKeyboard) pressSearchKey(key);
+                        else pressLiveSearchKey(key);
+                    }
                 });
                 rowView.addView(button);
             }
-            searchKeyboard.addView(rowView);
+            container.addView(rowView);
         }
     }
 

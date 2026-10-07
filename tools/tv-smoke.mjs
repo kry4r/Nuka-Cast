@@ -144,6 +144,14 @@ async function main() {
   const live = Array.isArray(liveSources) ? liveSources : liveSources.sources || [];
   check("live sources present", live.length > 0, `${live.length} sources`);
 
+  // Finding a channel in a playlist of thousands: by name and by pinyin initials.
+  const byName = (await call("GET", "/api/debug/live?query=" + encodeURIComponent("湖南"))).data;
+  const byInitials = (await call("GET", "/api/debug/live?query=hnws")).data;
+  check("live channel search by name", Number(byName.hits) > 0,
+    `“湖南” → ${byName.hits} channels of ${(byName.sources || []).length} sources`);
+  check("live channel search by initials", Number(byInitials.hits) > 0,
+    `“hnws” → ${byInitials.hits} channels`);
+
   finish();
 }
 

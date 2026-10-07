@@ -252,6 +252,54 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("aspect", activity.aspectModeForDebug());
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/live".equals(path)) {
+            // Opens the live page and searches its channels, so the largest playlist can be checked
+            // remotely (11k channels cannot be scrolled through from here).
+            final String query = session.getParms().get("query");
+            final String source = session.getParms().get("source");
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            if (source != null && !source.isEmpty()) {
+                activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                    @Override public String call() {
+                        return activity.selectLiveSourceForDebug(source);
+                    }
+                });
+            }
+            // The catalog arrives asynchronously; wait for it here (this runs on the HTTP thread, so
+            // waiting is free) instead of answering before the page has any channels.
+            for (int attempt = 0; attempt < 100; attempt++) {
+                Boolean ready = activity.onUiThreadNow(
+                        new java.util.concurrent.Callable<Boolean>() {
+                            @Override public Boolean call() {
+                                return activity.liveCatalogReadyForDebug();
+                            }
+                        });
+                if (Boolean.TRUE.equals(ready)) break;
+                try {
+                    Thread.sleep(250L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            Integer hits = activity.onUiThreadNow(new java.util.concurrent.Callable<Integer>() {
+                @Override public Integer call() {
+                    return activity.liveSearchForDebug(query);
+                }
+            });
+            List<String> names = activity.onUiThreadNow(
+                    new java.util.concurrent.Callable<List<String>>() {
+                        @Override public List<String> call() {
+                            return activity.liveSourceNamesForDebug();
+                        }
+                    });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("query", query);
+            payload.put("hits", hits);
+            payload.put("sources", names);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/layout".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getLayoutReport());
         }
