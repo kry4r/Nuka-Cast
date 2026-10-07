@@ -46,6 +46,46 @@ async function status() {
   return (await call("GET", "/api/status")).data;
 }
 
+
+/** Casts a URL the way a DLNA control point does, then reads the state back. */
+async function castAndVerify(controlUrl, url) {
+  if (!url) return { ok: false, evidence: "no stream to cast" };
+  const av = "urn:schemas-upnp-org:service:AVTransport:1";
+  const metadata = `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" ` +
+    `xmlns:dc="http://purl.org/dc/elements/1.1/"><item id="0"><dc:title>smoke-cast</dc:title>` +
+    `<res protocolInfo="http-get:*:application/vnd.apple.mpegurl:*">${url}</res></item></DIDL-Lite>`;
+  const post = async (action, args) => {
+    const body = `<?xml version="1.0" encoding="utf-8"?><s:Envelope ` +
+      `xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:${action} xmlns:u="${av}">` +
+      Object.entries(args).map(([k, v]) => `<${k}>${String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</${k}>`).join("") +
+      `</u:${action}></s:Body></s:Envelope>`;
+    const response = await fetch(controlUrl, {
+      method: "POST",
+      headers: { "content-type": 'text/xml; charset="utf-8"', soapaction: `"${av}#${action}"` },
+      body,
+    });
+    const text = await response.text();
+    const out = {};
+    for (const match of text.matchAll(/<([A-Za-z0-9_]+)>([^<]*)<\/[A-Za-z0-9_]+>/g)) out[match[1]] = match[2];
+    return { status: response.status, out };
+  };
+  await post("SetAVTransportURI", { InstanceID: 0, CurrentURI: url, CurrentURIMetaData: metadata });
+  await post("Play", { InstanceID: 0, Speed: 1 });
+  let state = "";
+  let position = "0:00:00";
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const info = await post("GetPositionInfo", { InstanceID: 0 });
+    const transport = await post("GetTransportInfo", { InstanceID: 0 });
+    state = transport.out.CurrentTransportState || "";
+    position = info.out.RelTime || "0:00:00";
+    if (state === "PLAYING" && position !== "0:00:00") break;
+  }
+  await post("Stop", { InstanceID: 0 });
+  return { ok: state === "PLAYING" && position !== "0:00:00",
+    evidence: `state=${state} position=${position}` };
+}
+
 async function main() {
   console.log(`smoke: ${base}`);
   const statusInfo = await status();
@@ -159,6 +199,18 @@ async function main() {
   check("player menu cycles aspect", Number(aspectAction.aspect) !== Number(beforeSpeed),
     `aspect ${beforeSpeed} → ${aspectAction.aspect}`);
   await call("GET", "/api/debug/player/action?name=exit");
+
+  // DLNA: the TV must advertise itself and accept a cast over SOAP.
+  const dlna = (await call("GET", "/api/debug/dlna?probe=1")).data;
+  check("DLNA renders as a media renderer", Boolean(dlna.running) && Boolean(dlna.ssdpAnswered),
+    `${dlna.friendlyName} @ ${dlna.address}, SSDP reply: ${dlna.ssdpLocation || "none"}`);
+  const description = await (await fetch(`${base}/dlna/description.xml`)).text();
+  check("DLNA description lists the services",
+    description.includes("urn:schemas-upnp-org:service:AVTransport:1") &&
+      description.includes("urn:schemas-upnp-org:service:RenderingControl:1"),
+    `friendlyName=${/<friendlyName>([^<]*)</.exec(description)?.[1]}`);
+  const casted = await castAndVerify(`${base}/dlna/control/AVTransport`, lowBitrate || undefined);
+  check("DLNA cast plays on the TV", casted.ok, casted.evidence);
 
   // Live television.
   const liveSources = (await call("GET", "/api/live/sources")).data;

@@ -80,6 +80,9 @@ public final class ControlServer extends NanoHTTPD {
                     || session.getParms().containsKey("go"))) {
                 return decorate(serveSpiderProxy(session));
             }
+            if (path.startsWith("/dlna/")) {
+                return decorate(serveDlna(session, path));
+            }
             if (path.startsWith("/media/")) {
                 return decorate(serveStorageMedia(session, path.substring("/media/".length())));
             }
@@ -298,6 +301,29 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("query", query);
             payload.put("hits", hits);
             payload.put("sources", names);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/dlna".equals(path)) {
+            // Reports the renderer state and, on demand, runs an SSDP discovery from this device so the
+            // discovery path is verified without a phone in hand.
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("running", runtime.isDlnaRunning());
+            payload.put("friendlyName", runtime.dlnaFriendlyName());
+            payload.put("uuid", runtime.dlnaUuid());
+            payload.put("address", runtime.lanAddress());
+            payload.put("descriptionUrl", "http://" + runtime.lanAddress() + ":"
+                    + com.nukacast.app.core.NukaRuntime.CONTROL_PORT + "/dlna/description.xml");
+            com.nukacast.app.dlna.DlnaRenderer renderer = runtime.getDlnaRenderer();
+            payload.put("transportState", renderer.state());
+            payload.put("currentUri", renderer.currentUri());
+            payload.put("position", com.nukacast.app.dlna.DlnaRenderer.formatTime(renderer.positionMs()));
+            payload.put("duration", com.nukacast.app.dlna.DlnaRenderer.formatTime(renderer.durationMs()));
+            payload.put("volume", renderer.volume());
+            if ("1".equals(session.getParms().get("probe"))) {
+                String location = com.nukacast.app.dlna.DlnaSsdp.probe(3000);
+                payload.put("ssdpLocation", location);
+                payload.put("ssdpAnswered", !location.isEmpty());
+            }
             return json(Response.Status.OK, payload);
         }
         if ("/api/debug/layout".equals(path) && Method.GET.equals(session.getMethod())) {
@@ -607,6 +633,141 @@ public final class ControlServer extends NanoHTTPD {
         int page = 1;
         int pageSize;
         boolean forceSites;
+    }
+
+    /**
+     * DLNA: device and service descriptions, SOAP control, and event subscriptions.
+     *
+     * <p>Control points fetch the description, then POST SOAP actions to the control URLs advertised
+     * inside it. Responding here (rather than on a second socket) keeps one address for the web
+     * console and for casting, which is also the LOCATION announced over SSDP.
+     */
+    private Response serveDlna(IHTTPSession session, String path) throws Exception {
+        if ("/dlna/description.xml".equals(path)) {
+            return xml(dlnaDescription());
+        }
+        if (path.startsWith("/dlna/service/")) {
+            String name = path.substring("/dlna/service/".length());
+            String serviceType = dlnaServiceType(name);
+            if (serviceType.isEmpty()) return notFound("服务不存在");
+            return xml(com.nukacast.app.dlna.DlnaDescription.serviceScpd(serviceType));
+        }
+        if (path.startsWith("/dlna/control/")) {
+            String name = path.substring("/dlna/control/".length());
+            String serviceType = dlnaServiceType(name);
+            if (serviceType.isEmpty()) return notFound("服务不存在");
+            byte[] body = readBody(session);
+            String soapAction = session.getHeaders().get("soapaction");
+            com.nukacast.app.dlna.SoapMessage request =
+                    com.nukacast.app.dlna.SoapMessage.parse(
+                            soapAction, new String(body, UTF_8));
+            if (request != null && (request.serviceType == null || request.serviceType.isEmpty())) {
+                request = com.nukacast.app.dlna.SoapMessage.parse(
+                        "\"" + serviceType + "#" + request.action + "\"",
+                        new String(body, UTF_8));
+            }
+            com.nukacast.app.dlna.DlnaService.Result result =
+                    runtime.getDlnaService().handle(request);
+            onDlnaAction(request == null ? "" : request.action);
+            Response response = newFixedLengthResponse(
+                    result.status == 200 ? Response.Status.OK : Response.Status.INTERNAL_ERROR,
+                    result.contentType, new java.io.ByteArrayInputStream(result.body), result.body.length);
+            response.addHeader("EXT", "");
+            return response;
+        }
+        if (path.startsWith("/dlna/event/")) {
+            String method = session.getMethod() == null ? "" : session.getMethod().name();
+            if ("SUBSCRIBE".equals(method)) {
+                String sid = "uuid:" + java.util.UUID.randomUUID();
+                Response response = newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "");
+                response.addHeader("SID", sid);
+                response.addHeader("TIMEOUT", "Second-1800");
+                return response;
+            }
+            if ("UNSUBSCRIBE".equals(method)) {
+                return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "");
+            }
+            // The initial event message some control points fetch instead of subscribing.
+            return xml(dlnaEventMessage("AVTransport"));
+        }
+        return notFound("接口不存在");
+    }
+
+    private String dlnaDescription() {
+        com.nukacast.app.dlna.DlnaDescription.Device device =
+                new com.nukacast.app.dlna.DlnaDescription.Device();
+        device.friendlyName = runtime.dlnaFriendlyName();
+        device.uuid = runtime.dlnaUuid();
+        device.modelName = runtime.getDeviceProfile().model;
+        device.modelNumber = "Android " + runtime.getDeviceProfile().androidVersion;
+        device.serial = runtime.getDeviceProfile().manufacturer + " "
+                + runtime.getDeviceProfile().model;
+        device.baseUrl = "http://" + runtime.lanAddress() + ":" + com.nukacast.app.core.NukaRuntime.CONTROL_PORT;
+        return com.nukacast.app.dlna.DlnaDescription.device(device);
+    }
+
+    private static String dlnaServiceType(String name) {
+        if (name.startsWith("AVTransport")) {
+            return com.nukacast.app.dlna.DlnaDescription.SERVICE_AV_TRANSPORT;
+        }
+        if (name.startsWith("RenderingControl")) {
+            return com.nukacast.app.dlna.DlnaDescription.SERVICE_RENDERING_CONTROL;
+        }
+        if (name.startsWith("ConnectionManager")) {
+            return com.nukacast.app.dlna.DlnaDescription.SERVICE_CONNECTION_MANAGER;
+        }
+        return "";
+    }
+
+    /** Minimal event message: enough for control points that read the initial state. */
+    private String dlnaEventMessage(String serviceName) {
+        com.nukacast.app.dlna.DlnaRenderer renderer = runtime.getDlnaRenderer();
+        return "<?xml version=\"1.0\"?>\n<e:propertyset xmlns:e=\"urn:schemas-upnp-org:event-1-0\">"
+                + "<e:property><TransportState>" + renderer.state() + "</TransportState></e:property>"
+                + "<e:property><CurrentTrackURI>" + com.nukacast.app.dlna.SoapMessage.escape(
+                        renderer.currentUri()) + "</CurrentTrackURI></e:property>"
+                + "<e:property><Volume>" + renderer.volume() + "</Volume></e:property>"
+                + "</e:propertyset>";
+    }
+
+    /** Called after each control action, so the TV screen can react to a phone. */
+    private void onDlnaAction(String action) {
+        com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity == null) return;
+        activity.onDlnaAction(action);
+    }
+
+    private Response xml(String body) {
+        byte[] bytes = body.getBytes(UTF_8);
+        Response response = newFixedLengthResponse(Response.Status.OK, "text/xml; charset=\"utf-8\"",
+                new java.io.ByteArrayInputStream(bytes), bytes.length);
+        response.addHeader("EXT", "");
+        return response;
+    }
+
+    private Response notFound(String message) {
+        return json(Response.Status.NOT_FOUND, error(message));
+    }
+
+    /** Reads the request body (NanoHTTPD requires parseBody for POST/PUT). */
+    private byte[] readBody(IHTTPSession session) throws Exception {
+        Map<String, String> files = new java.util.HashMap<String, String>();
+        session.parseBody(files);
+        String body = files.get("postData");
+        if (body == null) {
+            body = files.get("content");
+        }
+        if (body == null) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = session.getInputStream().read(buffer)) > 0) {
+                out.write(buffer, 0, read);
+                if (out.size() > MAX_API_BODY_BYTES) break;
+            }
+            return out.toByteArray();
+        }
+        return body.getBytes(UTF_8);
     }
 
     private Response serveApi(IHTTPSession session, String path) throws Exception {

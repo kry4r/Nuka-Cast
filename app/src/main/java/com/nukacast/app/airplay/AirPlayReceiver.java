@@ -41,6 +41,20 @@ public final class AirPlayReceiver implements NativeAirPlayBridge.Listener {
     private final Runnable onSessionStart;
     private final NativeAirPlayBridge bridge;
     private final AirPlayPublisher publisher;
+    /**
+     * Device id and name this app advertises.
+     *
+     * <p>Exposed so the DLNA renderer presents the same identity as AirPlay: two names for one TV in a
+     * phone's cast list is confusing, and a device that changes name per protocol looks like two devices.
+     */
+    public static String sharedDeviceId(android.content.Context context) {
+        return AirPlayIdentity.load(context).deviceId;
+    }
+
+    public static String sharedDeviceName(android.content.Context context) {
+        return AirPlayIdentity.load(context).name;
+    }
+
     private final AirPlayIdentity identity;
     private final H264VideoRenderer video = new H264VideoRenderer();
     private final PcmAudioRenderer audio = new PcmAudioRenderer();

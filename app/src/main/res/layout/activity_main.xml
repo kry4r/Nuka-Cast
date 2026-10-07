@@ -343,6 +343,12 @@
                                 style="@style/PanelValue"
                                 android:text="@string/web_placeholder"
                                 android:textSize="17sp" />
+                            <TextView
+                                android:id="@+id/dlnaState"
+                                style="@style/PanelValue"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/dlna_waiting"
+                                android:textSize="14sp" />
                         </LinearLayout>
                     </LinearLayout>
                 </ScrollView>

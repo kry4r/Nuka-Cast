@@ -21,6 +21,7 @@
     <string name="filter_anime">动漫</string>
     <string name="filter_drama">短剧</string>
     <string name="cast_receiver">AirPlay 接收器</string>
+    <string name="dlna_waiting">DLNA 投屏接收：启动中…</string>
     <string name="cast_waiting">等待连接</string>
     <string name="web_remote_title">局域网遥控器</string>
     <string name="web_placeholder">http://0.0.0.0:9978</string>

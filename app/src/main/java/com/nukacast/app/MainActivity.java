@@ -190,6 +190,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView networkStatus;
     private TextView webAddress;
     private TextView airplayState;
+    private TextView dlnaState;
     private TextView deviceSummary;
     private TextView codecSummary;
     private TextView sourceSummary;
@@ -437,6 +438,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         networkStatus = (TextView) findViewById(R.id.networkStatus);
         webAddress = (TextView) findViewById(R.id.webAddress);
         airplayState = (TextView) findViewById(R.id.airplayState);
+        dlnaState = (TextView) findViewById(R.id.dlnaState);
         deviceSummary = (TextView) findViewById(R.id.deviceSummary);
         codecSummary = (TextView) findViewById(R.id.codecSummary);
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
@@ -628,6 +630,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return false;
         }
         return liveCatalog != null;
+    }
+
+    /**
+     * Called after each DLNA control action.
+     *
+     * <p>A phone casting to the TV is watched, not operated: the screen shows what is playing and the
+     * return key ends the session, exactly as for AirPlay.
+     */
+    public void onDlnaAction(String action) {
+        final com.nukacast.app.dlna.DlnaRenderer renderer = runtime.getDlnaRenderer();
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if ("Stop".equals(action) || renderer.currentUri().isEmpty()) {
+                    if (playerHud != null) playerHud.hideNow();
+                    return;
+                }
+                if (playerHud == null) return;
+                String title = renderer.title();
+                playerHud.show(title.isEmpty() ? "正在投屏" : title, "DLNA 投屏",
+                        "按返回键结束投屏", false);
+            }
+        });
     }
 
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
@@ -2773,6 +2797,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
             runtime.getAirPlayReceiver().disconnectSession();
         } else {
+            // A DLNA session ends with the return key as well, and the renderer has to hear about it:
+            // otherwise the phone keeps showing "playing" for something the TV has stopped.
+            if (!runtime.getDlnaRenderer().currentUri().isEmpty()) {
+                runtime.getDlnaRenderer().stop();
+            }
             runtime.getPlayerController().stop();
         }
     }
@@ -2861,6 +2890,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         AirPlayReceiver.Snapshot airplay = runtime.getAirPlayReceiver().snapshot();
         airplayState.setText(airplay.sessionActive ? "正在接收镜像" : castState(airplay));
+        if (dlnaState != null) {
+            String dlnaAddress = runtime.lanAddress();
+            dlnaState.setText(runtime.isDlnaRunning()
+                    ? "手机/电脑可投屏到此设备（DLNA）：" + (dlnaAddress.isEmpty() ? "" : dlnaAddress)
+                    : "DLNA 投屏未启动（需要连接局域网）");
+        }
         boolean hasMedia = state.getActiveMedia() != null && !state.getActiveMedia().isEmpty();
         boolean airplayMedia = airplay.sessionActive
                 || "AirPlay 镜像".equals(state.getActiveMedia());

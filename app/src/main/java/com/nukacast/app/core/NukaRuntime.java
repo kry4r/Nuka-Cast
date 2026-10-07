@@ -3,6 +3,7 @@ package com.nukacast.app.core;
 import android.content.Context;
 
 import com.nukacast.app.airplay.AirPlayReceiver;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.drama.DramaService;
 import com.nukacast.app.live.LiveService;
 import com.nukacast.app.sources.RecommendedSources;
@@ -41,6 +42,9 @@ public final class NukaRuntime {
     private final MediaLibraryStore mediaLibrary;
     private final PlayerController playerController;
     private final AirPlayReceiver airPlayReceiver;
+    private final com.nukacast.app.dlna.DlnaRenderer dlnaRenderer;
+    private final com.nukacast.app.dlna.DlnaService dlnaService;
+    private com.nukacast.app.dlna.DlnaSsdp dlnaSsdp;
     private ControlServer controlServer;
 
     public NukaRuntime(Context context) {
@@ -71,6 +75,45 @@ public final class NukaRuntime {
                 if (activity != null) activity.onPlaybackTick(positionMs, durationMs);
             }
         });
+        // DLNA playback goes through the same player as everything else, so the TV shows the same
+        // picture, HUD and controls whether the media came from the remote or from a phone.
+        dlnaRenderer = new com.nukacast.app.dlna.DlnaRenderer(new com.nukacast.app.dlna.DlnaRenderer.Sink() {
+            @Override public void play(String url, String title) {
+                // The player itself records the active media, so the TV's HUD and the web console
+                // both show what the phone started.
+                playerController.play(getContext(), url, title,
+                        java.util.Collections.<String, String>emptyMap());
+            }
+
+            @Override public void pause() {
+                playerController.pause();
+            }
+
+            @Override public void resume() {
+                playerController.resume();
+            }
+
+            @Override public void stop() {
+                playerController.stop();
+            }
+
+            @Override public void seekTo(int positionMs) {
+                playerController.seekTo(positionMs);
+            }
+
+            @Override public int positionMs() {
+                return playerController.snapshot().positionMs;
+            }
+
+            @Override public int durationMs() {
+                return playerController.snapshot().durationMs;
+            }
+
+            @Override public void setVolume(int volume0To100) {
+                playerController.setVolume(volume0To100 / 100f);
+            }
+        });
+        dlnaService = new com.nukacast.app.dlna.DlnaService(dlnaRenderer);
         airPlayReceiver = new AirPlayReceiver(this.context, state, new Runnable() {
             @Override public void run() {
                 playerController.stop();
@@ -88,11 +131,13 @@ public final class NukaRuntime {
         try {
             server.start(5000, false);
             airPlayReceiver.start();
+            startDlna();
             controlServer = server;
             state.updateService(AppState.ServiceState.READY, "等待连接");
         } catch (Exception failure) {
             server.stop();
             airPlayReceiver.stop();
+            stopDlna();
             controlServer = null;
             throw failure;
         }
@@ -104,6 +149,7 @@ public final class NukaRuntime {
             controlServer = null;
         }
         airPlayReceiver.stop();
+        stopDlna();
         state.updateService(AppState.ServiceState.STOPPED, "服务已停止");
     }
 
@@ -171,6 +217,78 @@ public final class NukaRuntime {
 
     public PlayerController getPlayerController() { return playerController; }
     public AirPlayReceiver getAirPlayReceiver() { return airPlayReceiver; }
+    public com.nukacast.app.dlna.DlnaService getDlnaService() { return dlnaService; }
+    public com.nukacast.app.dlna.DlnaRenderer getDlnaRenderer() { return dlnaRenderer; }
+
+    /** True once the SSDP announcement is running, i.e. the TV is discoverable as a renderer. */
+    public boolean isDlnaRunning() {
+        return dlnaSsdp != null && dlnaSsdp.isRunning();
+    }
+
+    /**
+     * Starts the DLNA announcement.
+     *
+     * <p>The address comes from the device's own interfaces, so the LOCATION a control point receives
+     * is one it can actually reach (the Wi-Fi address, not localhost).
+     */
+    public synchronized void startDlna() {
+        if (dlnaSsdp != null && dlnaSsdp.isRunning()) return;
+        String address = lanAddress();
+        if (address.isEmpty()) {
+            AppLog.w("投屏", "没有局域网地址，DLNA 未启动");
+            return;
+        }
+        com.nukacast.app.dlna.DlnaDescription.Device device =
+                new com.nukacast.app.dlna.DlnaDescription.Device();
+        device.friendlyName = dlnaFriendlyName();
+        device.uuid = dlnaUuid();
+        device.modelName = deviceProfile.model;
+        device.modelNumber = "Android " + deviceProfile.androidVersion;
+        device.serial = deviceProfile.manufacturer + " " + deviceProfile.model;
+        device.baseUrl = "http://" + address + ":" + CONTROL_PORT;
+        dlnaSsdp = new com.nukacast.app.dlna.DlnaSsdp(device,
+                device.baseUrl + "/dlna/description.xml", device.uuid);
+        dlnaSsdp.start();
+    }
+
+    public synchronized void stopDlna() {
+        if (dlnaSsdp != null) {
+            dlnaSsdp.stop();
+            dlnaSsdp = null;
+        }
+    }
+
+    /** Device name as shown in a phone's cast list; matches the AirPlay name. */
+    public String dlnaFriendlyName() {
+        String name = AirPlayReceiver.sharedDeviceName(context);
+        return name == null || name.isEmpty() ? "NukaCast" : name;
+    }
+
+    /** Stable UDN, derived from the same identity AirPlay uses so both stay consistent. */
+    public String dlnaUuid() {
+        String deviceId = AirPlayReceiver.sharedDeviceId(context);
+        String seed = deviceId == null || deviceId.isEmpty() ? dlnaFriendlyName() : deviceId;
+        return java.util.UUID.nameUUIDFromBytes(("nukacast-dlna:" + seed)
+                .getBytes(java.nio.charset.Charset.forName("UTF-8"))).toString();
+    }
+
+    /** The LAN address of the device, or an empty string when there is none. */
+    public String lanAddress() {
+        try {
+            for (java.net.NetworkInterface network
+                    : java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                if (!network.isUp() || network.isLoopback()) continue;
+                for (java.net.InterfaceAddress address : network.getInterfaceAddresses()) {
+                    java.net.InetAddress inet = address.getAddress();
+                    if (inet == null || inet.isLoopbackAddress()) continue;
+                    if (inet instanceof java.net.Inet4Address) return inet.getHostAddress();
+                }
+            }
+        } catch (Exception error) {
+            AppLog.d("投屏", "读取局域网地址失败：" + error.getClass().getSimpleName());
+        }
+        return "";
+    }
 
     /**
      * Releases everything that can be rebuilt: playlist catalogs, spider sessions and decoded

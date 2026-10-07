@@ -197,6 +197,55 @@ public final class PlayerController {
         });
     }
 
+    /** Pauses without toggling; DLNA control points send explicit Pause/Play pairs. */
+    public void pause() {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (player == null) return;
+                    player.setPlayWhenReady(false);
+                    state = "paused";
+                }
+            }
+        });
+    }
+
+    /** Resumes after {@link #pause()}. */
+    public void resume() {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (player == null) return;
+                    player.setPlayWhenReady(true);
+                }
+            }
+        });
+    }
+
+    /** Absolute seek; used by DLNA Seek. */
+    public void seekTo(final int positionMs) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (player == null) return;
+                    player.seekTo(Math.max(0, positionMs));
+                }
+            }
+        });
+    }
+
+    /** Volume as 0…1, applied to ExoPlayer rather than to the TV's system volume. */
+    public void setVolume(final float volume) {
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                synchronized (lock) {
+                    if (player == null) return;
+                    player.setVolume(Math.max(0f, Math.min(1f, volume)));
+                }
+            }
+        });
+    }
+
     public void toggle() {
         mainHandler.post(new Runnable() {
             @Override public void run() {
