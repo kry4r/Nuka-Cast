@@ -66,19 +66,25 @@ async function main() {
     `${sitesWithCategories.length} sites, e.g. ${sitesWithCategories[0]?.siteName} ${sitesWithCategories[0]?.categories?.length} categories`);
 
   // Browsing a category is what fills the home page rows, so it must return more than a stub list.
-  const firstSite = (categories.sites || []).find((s) => (s.categories || []).length > 0);
+  // Several declared categories are thin (measured: 光速资源's id 1 carries one record while id 6
+  // carries thousands), so the check probes across sites and categories like the home rows do.
   let browsed = 0;
-  if (firstSite) {
-    for (const category of (firstSite.categories || []).slice(0, 4)) {
-      const page = (await call("GET", `/api/debug/browse?siteKey=${encodeURIComponent(firstSite.siteKey)}` +
+  let browsedWhere = "";
+  for (const site of (categories.sites || []).slice(0, 3)) {
+    for (const category of (site.categories || []).slice(0, 8)) {
+      const page = (await call("GET", `/api/debug/browse?siteKey=${encodeURIComponent(site.siteKey)}` +
         `&categoryId=${encodeURIComponent(category.id)}&page=1`)).data;
       const count = (page.items || []).length;
-      if (count > browsed) browsed = count;
-      if (browsed >= 6) break;
+      if (count > browsed) {
+        browsed = count;
+        browsedWhere = `${site.siteName} · ${category.name}`;
+      }
+      if (browsed >= 10) break;
     }
+    if (browsed >= 10) break;
   }
   check("category browsing returns a list", browsed >= 6,
-    `${firstSite?.siteName} best category returned ${browsed} items`);
+    `${browsedWhere} → ${browsed} items`);
 
   // Search by title.
   const search = (await call("POST", "/api/search", { keyword: "流浪地球" })).data;
