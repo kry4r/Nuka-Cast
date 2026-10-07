@@ -95,7 +95,8 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 | 阶段诊断（source/spider/airplay/http） | pass（JVM 测试 + `/api/diagnostics.stages` + 网页展示） | 真机采集仍需结合 logcat/native |
 | Spider 会话身份与 LRU | pass（代码 + 编译） | 需在真实多仓配置下观察会话命中/释放 |
 | API19 x86 类加载/布局/TLS | 首轮 4/5 通过，布局膨胀已修复待重跑 | API19 job 严格断言 Conscrypt 未降级（已实测通过）；修代码而不是放宽断言 |
-| 网页构建链与依赖审计 | pass（`npm ci` + `npm test` + `npm run build` + `npm audit --audit-level=high` = 0） | 由 CI build job 复核“资源未过期” |
+| 网页构建链与依赖审计 | pass（`npm ci` + `npm test` + `npm run build` + `npm audit --audit-level=high` = 0） | CI build job 已复核“内置网页资源未过期” |
+| 发布产物 v0.3.5 | pass（下载后 apksigner/aapt2 复核） | 仍需在你的电视上实测 |
 | 插件独立进程 / 不可中断执行（T2/F02/F03） | **未实施** | 需要单独设计 IPC 契约，见 spec 3.2 |
 | 24 帧门槛之外的真机首帧耗时 | **pending** | 需要 SHARP/iPhone |
 
@@ -109,8 +110,11 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 
 ## 5. 版本与发布
 
-- 本轮默认版本号提升为 `0.3.5`（`versionCode` 11），正式包由 `v0.3.5` 标签触发 `release.yml` 构建（标签版本号会覆盖默认值，`versionCode` 取 run number）。
-- 发布门禁：`testDebugUnitTest + lintRelease + assembleRelease`，签名校验、双 ABI 原生库存在性、无 x86_64、内置网页资源未过期。
+- 已发布 **v0.3.5**：https://github.com/kry4r/Nuka-Cast/releases/tag/v0.3.5
+  - `NukaCast-v0.3.5.apk`（10.24 MB，sha256 `f2e008b3129eea8f018085ac42716772dbdaf33a71cf629be7ca75981a8cbaef`，与发布的 `.sha256` 一致）
+  - 签名证书与 v0.3.4 相同（SHA-256 `96561d5d4f3c177dab6f619416b5c52b7e22a6367bdbb20234904f0a000614bb`），`versionCode` 13 > 12、`versionName` 0.3.5、`minSdk 17`、仅 `arm64-v8a` + `armeabi-v7a`，可直接覆盖安装。
+  - 已下载产物复核：内置网页 JS 含“短剧目录/播放线路/阶段诊断”，即短剧与诊断 UI 确实在主包内。
+- CI 状态：`Android CI` 三个 job（build / API 35 x86_64 / API 19 x86）在当前 main 全绿；API 19 job 含真实布局膨胀、Dalvik 类加载与“Conscrypt 未降级”断言。发布由 `v*` 标签触发 `release.yml`：`testDebugUnitTest + lintRelease + assembleRelease`、签名校验、双 ABI 存在性、无 x86_64、内置网页资源未过期。
 
 ## 6. 建议下一步
 
