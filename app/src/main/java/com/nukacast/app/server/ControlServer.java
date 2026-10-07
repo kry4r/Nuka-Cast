@@ -1147,6 +1147,67 @@ public final class ControlServer extends NanoHTTPD {
             }
             return json(Response.Status.ACCEPTED, info);
         }
+        if ("/api/library".equals(path) && Method.GET.equals(session.getMethod())) {
+            // The web console shows the same list the TV's 收藏 page and 继续观看 row read.
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            List<Map<String, Object>> favorites = new ArrayList<Map<String, Object>>();
+            for (com.nukacast.app.library.LibraryItem item : runtime.getMediaLibrary().favorites()) {
+                favorites.add(libraryEntry(item));
+            }
+            List<Map<String, Object>> history = new ArrayList<Map<String, Object>>();
+            for (com.nukacast.app.library.LibraryItem item : runtime.getMediaLibrary().history()) {
+                history.add(libraryEntry(item));
+            }
+            payload.put("favorites", favorites);
+            payload.put("history", history);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/library/favorite".equals(path) && Method.POST.equals(session.getMethod())) {
+            ContentRequest request = body(session, ContentRequest.class);
+            String name = safe(request.name);
+            String vodId = safe(request.vodId);
+            String action = safe(request.action).isEmpty() ? "toggle" : safe(request.action);
+            if (!"toggle".equals(action)) {
+                // Removal goes through /api/library/remove, which also covers history and clearing.
+                throw new IllegalArgumentException("不支持的 action：" + action);
+            }
+            if ("toggle".equals(action)) {
+                com.nukacast.app.tvbox.model.SearchItem item =
+                        new com.nukacast.app.tvbox.model.SearchItem();
+                item.sourceId = safe(request.sourceId);
+                item.siteKey = safe(request.siteKey);
+                item.siteName = safe(request.siteName);
+                item.vodId = vodId;
+                item.name = name;
+                item.poster = safe(request.poster);
+                item.remarks = safe(request.remarks);
+                if (item.name.isEmpty() || item.vodId.isEmpty()) {
+                    throw new IllegalArgumentException("缺少 name 或 vodId");
+                }
+                boolean added = runtime.getMediaLibrary().toggleFavorite(item);
+                Map<String, Object> payload = new LinkedHashMap<String, Object>();
+                payload.put("favorited", added);
+                payload.put("total", runtime.getMediaLibrary().favorites().size());
+                com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+                if (activity != null) activity.refreshMoviesPage();
+                return json(Response.Status.OK, payload);
+            }
+            throw new IllegalArgumentException("不支持的 action：" + action);
+        }
+        if ("/api/library/remove".equals(path) && Method.POST.equals(session.getMethod())) {
+            // Removing one entry by kind (favorite/history) and key, or clearing a whole list.
+            ContentRequest request = body(session, ContentRequest.class);
+            String kind = safe(request.kind).isEmpty() ? "history" : safe(request.kind);
+            String key = safe(request.vodId).isEmpty() ? safe(request.name) : safe(request.vodId);
+            boolean cleared = "1".equals(safe(request.all)) || "true".equals(safe(request.all));
+            int removed = runtime.getMediaLibrary().remove(kind, key, cleared);
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity != null) activity.refreshMoviesPage();
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("kind", kind);
+            payload.put("removed", removed);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/player".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getPlayerController().snapshot());
         }
@@ -1655,6 +1716,10 @@ public final class ControlServer extends NanoHTTPD {
         String typeName;
         String siteName;
         String episodeName;
+        /** Library requests: which list (favorite/history), what to do, and whether to clear it. */
+        String kind;
+        String action;
+        String all;
     }
     private static final class LivePlayRequest {
         String sourceId;

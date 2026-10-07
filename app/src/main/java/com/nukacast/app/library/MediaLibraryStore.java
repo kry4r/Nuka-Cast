@@ -99,6 +99,40 @@ public final class MediaLibraryStore {
         return false;
     }
 
+    /**
+     * Removes entries from the history or the favourites.
+     *
+     * @param kind    "history" or "favorite"
+     * @param key     a vodId (or a title) to match; ignored when {@code all} is true
+     * @param all     true to clear the whole list
+     * @return how many entries were removed
+     */
+    public synchronized int remove(String kind, String key, boolean all) {
+        String store = "favorite".equals(kind) || "favorites".equals(kind) ? FAVORITES : HISTORY;
+        List<LibraryItem> items = read(store);
+        if (all) {
+            int size = items.size();
+            write(store, new ArrayList<LibraryItem>());
+            if (HISTORY.equals(store)) clearActive();
+            return size;
+        }
+        if (key == null || key.isEmpty()) return 0;
+        List<LibraryItem> kept = new ArrayList<LibraryItem>();
+        int removed = 0;
+        for (LibraryItem item : items) {
+            boolean matches = key.equals(item.vodId) || key.equals(item.name)
+                    || key.equals(item.stableKey());
+            if (matches) {
+                removed++;
+                if (HISTORY.equals(store) && key.equals(activeKey)) clearActive();
+            } else {
+                kept.add(item);
+            }
+        }
+        if (removed > 0) write(store, kept);
+        return removed;
+    }
+
     private boolean toggleFavorite(LibraryItem item) {
         List<LibraryItem> favorites = read(FAVORITES);
         String key = item.stableKey();

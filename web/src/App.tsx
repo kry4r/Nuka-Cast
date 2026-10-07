@@ -9,6 +9,7 @@ import {
   FileWarning,
   Gauge,
   HardDrive,
+  History,
   Library,
   ListFilter,
   LoaderCircle,
@@ -29,7 +30,7 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, type Device, type Diagnostics, type DramaDetail, type DramaEpisode, type DramaItem, type DramaLine, type DramaLineResult, type DramaProvider, type DramaSearchResult, type EpgSchedule, type LiveCatalog, type LiveSource, type LiveSourceRow, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, type LibraryEntry, type Device, type Diagnostics, type DramaDetail, type DramaEpisode, type DramaItem, type DramaLine, type DramaLineResult, type DramaProvider, type DramaSearchResult, type EpgSchedule, type LiveCatalog, type LiveSource, type LiveSourceRow, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { dramaFacts, lineLabel, matchLabel, missingLineHint } from "@/lib/drama"
 import { hostOf, kindTone, probeDotClass, probeState } from "@/lib/kind"
@@ -43,7 +44,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-type View = "overview" | "search" | "drama" | "live" | "sources" | "storage" | "device" | "logs"
+type View = "overview" | "search" | "drama" | "live" | "sources" | "library" | "storage" | "device" | "logs"
 
 const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "overview", label: "总览", icon: Gauge },
@@ -51,6 +52,7 @@ const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "drama", label: "短剧", icon: Clapperboard },
   { id: "live", label: "直播", icon: Radio },
   { id: "sources", label: "源管理", icon: Library },
+  { id: "library", label: "片库", icon: History },
   { id: "storage", label: "存储", icon: HardDrive },
   { id: "device", label: "设备", icon: MonitorCog },
   { id: "logs", label: "日志", icon: FileWarning },
@@ -150,6 +152,7 @@ export default function App() {
             {view === "drama" && <DramaView setError={setError} />}
             {view === "live" && <LiveView contentVersion={status?.contentVersion ?? 0} setError={setError} />}
             {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
+            {view === "library" && <LibraryView setError={setError} />}
             {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
             {view === "device" && <DeviceView setError={setError} />}
             {view === "logs" && <LogView setError={setError} />}
@@ -1428,6 +1431,73 @@ function StorageView({ onChanged, setError }: { onChanged: () => void; setError:
       </section>
     </>
   )
+}
+
+function LibraryView({ setError }: { setError: (value: string) => void }) {
+  const [library, setLibrary] = useState<{ favorites: LibraryEntry[]; history: LibraryEntry[] } | null>(null)
+  const load = useCallback(() => api.library().then(setLibrary).catch((reason) => setError(message(reason))), [setError])
+  useEffect(() => { load() }, [load])
+
+  async function remove(kind: "favorite" | "history", entry: LibraryEntry) {
+    try { await api.removeLibraryEntry({ kind, vodId: entry.vodId }); await load() } catch (reason) { setError(message(reason)) }
+  }
+
+  async function clear(kind: "favorite" | "history") {
+    try { await api.removeLibraryEntry({ kind, all: "1" }); await load() } catch (reason) { setError(message(reason)) }
+  }
+
+  const history = library?.history ?? []
+  const favorites = library?.favorites ?? []
+  return (
+    <>
+      <PageHeader title="片库" action={
+        <Button variant="outline" onClick={() => load()}><RefreshCw />刷新</Button>
+      } />
+      <SectionCard
+        title={`继续观看 · ${history.length}`}
+        action={history.length > 0 ? <Button variant="ghost" size="sm" onClick={() => clear("history")}>清空</Button> : undefined}
+      >
+        <div className="divide-y">
+          {history.map((entry) => (
+            <div key={`${entry.vodId}-${entry.episodeName}`} className="flex items-center gap-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{entry.name}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {[entry.siteName, entry.episodeName, progressLabel(entry)].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              <Button variant="ghost" size="icon" title="从观看历史中移除" onClick={() => remove("history", entry)}><Trash2 /></Button>
+            </div>
+          ))}
+          {history.length === 0 && <Empty icon={History} label="还没有观看记录" compact />}
+        </div>
+      </SectionCard>
+      <SectionCard
+        title={`我的收藏 · ${favorites.length}`}
+        action={favorites.length > 0 ? <Button variant="ghost" size="sm" onClick={() => clear("favorite")}>清空</Button> : undefined}
+      >
+        <div className="divide-y">
+          {favorites.map((entry) => (
+            <div key={entry.vodId} className="flex items-center gap-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{entry.name}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">{entry.siteName || "本机"}</div>
+              </div>
+              <Button variant="ghost" size="icon" title="取消收藏" onClick={() => remove("favorite", entry)}><X /></Button>
+            </div>
+          ))}
+          {favorites.length === 0 && <Empty icon={History} label="还没有收藏" compact />}
+        </div>
+      </SectionCard>
+    </>
+  )
+}
+
+function progressLabel(entry: LibraryEntry) {
+  if (!entry.positionMs || !entry.durationMs) return ""
+  const percent = Math.min(99, Math.round((entry.positionMs / entry.durationMs) * 100))
+  const minutes = Math.round(entry.positionMs / 60000)
+  return `看到 ${percent}%（约 ${minutes} 分钟）`
 }
 
 function DeviceView({ setError }: { setError: (value: string) => void }) {

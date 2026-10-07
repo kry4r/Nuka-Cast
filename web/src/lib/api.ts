@@ -458,6 +458,20 @@ async function requestText(path: string): Promise<string> {
   return text
 }
 
+export interface LibraryEntry {
+  name: string
+  siteName: string
+  vodId: string
+  episodeName: string
+  positionMs: number
+  durationMs: number
+}
+
+export interface Library {
+  favorites: LibraryEntry[]
+  history: LibraryEntry[]
+}
+
 export const api = {
   status: () => request<Status>("/api/status"),
   device: () => request<Device>("/api/device"),
@@ -552,6 +566,12 @@ export const api = {
     request<{ enabled: boolean }>(`/api/live/sources/${id}/enabled`, {
       method: "POST",
       body: JSON.stringify({ enabled }),
+    }),
+  library: () => request<Library>("/api/library"),
+  removeLibraryEntry: (payload: { kind: "favorite" | "history"; vodId?: string; name?: string; all?: string }) =>
+    request<{ kind: string; removed: number }>("/api/library/remove", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   siteHealth: () => request<SiteHealth>("/api/debug/health"),
   runSiteSweep: (options: { limit?: number; keyword?: string; failedOnly?: boolean; pluginsOnly?: boolean } = {}) =>
