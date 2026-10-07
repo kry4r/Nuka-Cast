@@ -467,6 +467,13 @@ export interface LibraryEntry {
   durationMs: number
 }
 
+export interface PlaybackSettings {
+  autoNextEpisode: boolean
+  quality: "auto" | "highest" | "lowest"
+  qualityLabel: string
+  softDecoder: boolean
+}
+
 export interface Library {
   favorites: LibraryEntry[]
   history: LibraryEntry[]
@@ -567,6 +574,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ enabled }),
     }),
+  settings: () => request<PlaybackSettings>("/api/settings"),
+  updateSetting: (name: "autoNextEpisode" | "quality" | "softDecoder", value: string) =>
+    request<PlaybackSettings>("/api/settings", { method: "POST", body: JSON.stringify({ name, value }) }),
   library: () => request<Library>("/api/library"),
   removeLibraryEntry: (payload: { kind: "favorite" | "history"; vodId?: string; name?: string; all?: string }) =>
     request<{ kind: string; removed: number }>("/api/library/remove", {

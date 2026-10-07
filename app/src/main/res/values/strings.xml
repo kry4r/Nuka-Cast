@@ -45,4 +45,15 @@
     <string name="diagnostics_title">错误日志</string>
     <string name="diagnostics_note">查看 AirPlay、播放和片源解析的分级诊断记录。</string>
     <string name="view_logs">查看日志</string>
+    <string name="playback_title">播放设置</string>
+    <string name="playback_auto_next_on">开启：一集播完自动进入下一集</string>
+    <string name="playback_auto_next_off">关闭：播完停在本集</string>
+    <string name="playback_auto_next_button_on">自动连播：开</string>
+    <string name="playback_auto_next_button_off">自动连播：关</string>
+    <string name="playback_quality_title">画质与解码</string>
+    <string name="playback_quality_note">画质 %1$s · 解码 %2$s</string>
+    <string name="playback_quality_button">画质：%1$s</string>
+    <string name="playback_decoder_button">解码：%1$s</string>
+    <string name="decoder_auto">自动</string>
+    <string name="decoder_software">软件</string>
 </resources>

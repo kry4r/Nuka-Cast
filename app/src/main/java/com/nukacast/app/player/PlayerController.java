@@ -183,10 +183,14 @@ public final class PlayerController {
             @Override public void run() {
                 // A request from the user: forcing the best variant is allowed again, as is the
                 // decoder-fallback retry.
-                forceQualityForUrl = mediaUrl;
                 restartsForUrl = 0;
                 setNotice("");
-                preferLowestVariant = false;
+                // The viewer's quality choice decides what is asked for first; the retry chain walks
+                // away from it only if the decoder refuses the stream.
+                String preference = context == null ? PlaybackSettings.DEFAULT_QUALITY
+                        : new PlaybackSettings(context).quality();
+                forceQualityForUrl = "highest".equals(preference) ? mediaUrl : null;
+                preferLowestVariant = "lowest".equals(preference);
                 synchronized (lock) {
                     speedValue = 1f;
                 }

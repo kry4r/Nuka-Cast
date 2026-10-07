@@ -36,6 +36,7 @@ import { dramaFacts, lineLabel, matchLabel, missingLineHint } from "@/lib/drama"
 import { hostOf, kindTone, probeDotClass, probeState } from "@/lib/kind"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
+import { PlaybackSettingsCard } from "@/components/playback-settings"
 import { RecommendedShelf } from "@/components/source-shelf"
 import { SiteHealthCard } from "@/components/site-health"
 import { ViewBoundary } from "@/components/view-boundary"
@@ -1572,7 +1573,8 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
       />
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <SectionCard title="设备信息">
+        <PlaybackSettingsCard onError={setError} />
+      <SectionCard title="设备信息">
           <div className="divide-y">
             {rows.map(([label, value]) => (
               <div key={label} className="grid gap-1 py-2.5 first:pt-0 last:pb-0 sm:grid-cols-[120px_1fr]">

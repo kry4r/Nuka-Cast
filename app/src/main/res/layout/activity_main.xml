@@ -450,6 +450,40 @@
                                 <Button android:id="@+id/viewLogsButton" style="@style/ActionButton" android:text="@string/view_logs" />
                             </LinearLayout>
                         </LinearLayout>
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                style="@style/SettingsBand"
+                                android:layout_width="0dp"
+                                android:layout_marginStart="0dp"
+                                android:layout_marginEnd="7dp"
+                                android:layout_weight="1"
+                                android:minHeight="132dp">
+                                <TextView style="@style/PanelTitle" android:text="@string/playback_title" />
+                                <TextView android:id="@+id/autoNextSummary" style="@style/PanelBody" />
+                                <Button android:id="@+id/autoNextButton" style="@style/ActionButton" />
+                            </LinearLayout>
+                            <LinearLayout
+                                style="@style/SettingsBand"
+                                android:layout_width="0dp"
+                                android:layout_marginStart="7dp"
+                                android:layout_marginEnd="0dp"
+                                android:layout_weight="1"
+                                android:minHeight="132dp">
+                                <TextView style="@style/PanelTitle" android:text="@string/playback_quality_title" />
+                                <TextView android:id="@+id/qualitySummary" style="@style/PanelBody" />
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal">
+                                    <Button android:id="@+id/qualityButton" style="@style/ActionButton" />
+                                    <Button android:id="@+id/decoderButton" style="@style/ActionButton" />
+                                </LinearLayout>
+                            </LinearLayout>
+                        </LinearLayout>
                     </LinearLayout>
                 </ScrollView>
             </FrameLayout>

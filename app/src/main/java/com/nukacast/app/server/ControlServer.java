@@ -503,6 +503,43 @@ public final class ControlServer extends NanoHTTPD {
         return payload;
     }
 
+    /** The playback settings as the TV sees them (readable without the window in front). */
+    private Map<String, Object> playbackSettings() {
+        com.nukacast.app.player.PlaybackSettings settings = playbackSettingsStore();
+        Map<String, Object> values = new LinkedHashMap<String, Object>();
+        values.put("autoNextEpisode", settings.autoNextEpisode());
+        values.put("quality", settings.quality());
+        values.put("qualityLabel", com.nukacast.app.player.PlaybackSettings.qualityLabel(settings.quality()));
+        values.put("softDecoder",
+                com.nukacast.app.player.DecoderPreference.prefersSoftware(runtime.getContext()));
+        return values;
+    }
+
+    private com.nukacast.app.player.PlaybackSettings playbackSettingsStore() {
+        return new com.nukacast.app.player.PlaybackSettings(runtime.getContext());
+    }
+
+    private Map<String, Object> applyPlaybackSetting(String name, String value) {
+        com.nukacast.app.player.PlaybackSettings settings = playbackSettingsStore();
+        if ("autoNextEpisode".equals(name)) {
+            settings.setAutoNextEpisode(!"0".equals(value) && !"false".equals(value));
+        } else if ("quality".equals(name)) {
+            settings.setQuality(value);
+        } else if ("softDecoder".equals(name)) {
+            if ("0".equals(value) || "false".equals(value)) {
+                com.nukacast.app.player.DecoderPreference.clear(runtime.getContext());
+            } else {
+                com.nukacast.app.player.DecoderPreference.preferSoftware(runtime.getContext());
+            }
+        } else {
+            throw new IllegalArgumentException("未知设置：" + name);
+        }
+        // A window in front must show the new value immediately.
+        com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity != null) activity.refreshPlaybackSettings();
+        return playbackSettings();
+    }
+
     /** One library entry, reduced to what a caller needs to check the TV pages. */
     private Map<String, Object> libraryEntry(com.nukacast.app.library.LibraryItem item) {
         Map<String, Object> entry = new LinkedHashMap<String, Object>();
@@ -1179,6 +1216,17 @@ public final class ControlServer extends NanoHTTPD {
             }
             return json(Response.Status.ACCEPTED, info);
         }
+        if ("/api/settings".equals(path) && Method.GET.equals(session.getMethod())) {
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.putAll(playbackSettings());
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/settings".equals(path) && Method.POST.equals(session.getMethod())) {
+            ContentRequest request = body(session, ContentRequest.class);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.putAll(applyPlaybackSetting(safe(request.name), safe(request.value)));
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/library".equals(path) && Method.GET.equals(session.getMethod())) {
             // The web console shows the same list the TV's 收藏 page and 继续观看 row read.
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
@@ -1748,6 +1796,8 @@ public final class ControlServer extends NanoHTTPD {
         String typeName;
         String siteName;
         String episodeName;
+        /** Settings requests: the new value of the named setting. */
+        String value;
         /** Library requests: which list (favorite/history), what to do, and whether to clear it. */
         String kind;
         String action;

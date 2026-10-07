@@ -223,6 +223,24 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private Button refreshSourcesButton;
     private Button scanStorageButton;
     private Button themeToggleButton;
+    private Button autoNextButton;
+    private Button qualityButton;
+    private Button decoderButton;
+    /**
+     * Playback choices (auto-next, quality) shown on the settings page.
+     *
+     * <p>Created on demand: an Activity field initialiser runs before the base context is attached, and
+     * touching it there crashed the app on startup (ContextWrapper.getApplicationContext() on a null
+     * base).
+     */
+    private com.nukacast.app.player.PlaybackSettings playbackSettings;
+
+    private com.nukacast.app.player.PlaybackSettings playbackSettings() {
+        if (playbackSettings == null) {
+            playbackSettings = new com.nukacast.app.player.PlaybackSettings(this);
+        }
+        return playbackSettings;
+    }
     private Button viewLogsButton;
     private String currentPage = PAGE_HOME;
     private String currentMovieFilter = "";
@@ -511,12 +529,111 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         viewLogsButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { showLogViewer(); }
         });
+        autoNextButton = (Button) findViewById(R.id.autoNextButton);
+        autoNextButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                playbackSettings().setAutoNextEpisode(!playbackSettings().autoNextEpisode());
+                renderPlaybackSettings();
+            }
+        });
+        qualityButton = (Button) findViewById(R.id.qualityButton);
+        qualityButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                playbackSettings().nextQuality();
+                renderPlaybackSettings();
+            }
+        });
+        decoderButton = (Button) findViewById(R.id.decoderButton);
+        if (decoderButton != null) {
+            decoderButton.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    // Switching between automatic and forced software decoding: the player reads this
+                    // preference whenever it starts a stream.
+                    if (com.nukacast.app.player.DecoderPreference.prefersSoftware(MainActivity.this)) {
+                        com.nukacast.app.player.DecoderPreference.clear(MainActivity.this);
+                    } else {
+                        com.nukacast.app.player.DecoderPreference.preferSoftware(MainActivity.this);
+                    }
+                    renderPlaybackSettings();
+                }
+            });
+        }
+        renderPlaybackSettings();
 
     }
 
     private String movieFilterSelected = "";
 
     /** The movies page: category browsing first, then the home feed, then short dramas. */
+    /** Reflects the stored playback settings on the settings page. */
+    private void renderPlaybackSettings() {
+        if (autoNextButton != null) {
+            boolean enabled = playbackSettings().autoNextEpisode();
+            autoNextButton.setText(enabled
+                    ? getString(R.string.playback_auto_next_button_on)
+                    : getString(R.string.playback_auto_next_button_off));
+            TextView summary = (TextView) findViewById(R.id.autoNextSummary);
+            if (summary != null) {
+                summary.setText(enabled
+                        ? getString(R.string.playback_auto_next_on)
+                        : getString(R.string.playback_auto_next_off));
+            }
+        }
+        if (qualityButton != null) {
+            qualityButton.setText(getString(R.string.playback_quality_button,
+                    com.nukacast.app.player.PlaybackSettings.qualityLabel(playbackSettings().quality())));
+        }
+        if (decoderButton != null) {
+            boolean software = com.nukacast.app.player.DecoderPreference.prefersSoftware(this);
+            decoderButton.setText(getString(R.string.playback_decoder_button,
+                    getString(software ? R.string.decoder_software : R.string.decoder_auto)));
+        }
+        TextView qualitySummary = (TextView) findViewById(R.id.qualitySummary);
+        if (qualitySummary != null) {
+            boolean software = com.nukacast.app.player.DecoderPreference.prefersSoftware(this);
+            qualitySummary.setText(getString(R.string.playback_quality_note,
+                    com.nukacast.app.player.PlaybackSettings.qualityLabel(playbackSettings().quality()),
+                    getString(software ? R.string.decoder_software : R.string.decoder_auto)));
+        }
+    }
+
+    /** Re-renders the settings page after a change made from the web console. */
+    public void refreshPlaybackSettings() {
+        runOnUiThread(new Runnable() {
+            @Override public void run() { renderPlaybackSettings(); }
+        });
+    }
+
+    /** Reads/writes the playback settings for the debug API and the web console. */
+    public java.util.Map<String, Object> playbackSettingsForDebug() {
+        java.util.Map<String, Object> values = new java.util.LinkedHashMap<String, Object>();
+        values.put("autoNextEpisode", playbackSettings().autoNextEpisode());
+        values.put("quality", playbackSettings().quality());
+        values.put("qualityLabel", com.nukacast.app.player.PlaybackSettings
+                .qualityLabel(playbackSettings().quality()));
+        values.put("softDecoder", com.nukacast.app.player.DecoderPreference.prefersSoftware(this));
+        return values;
+    }
+
+    /** Applies one setting by name; used by the debug API and the web console. */
+    public java.util.Map<String, Object> applyPlaybackSetting(String name, String value) {
+        if ("autoNextEpisode".equals(name)) {
+            playbackSettings().setAutoNextEpisode(!"0".equals(value) && !"false".equals(value));
+        } else if ("quality".equals(name)) {
+            playbackSettings().setQuality(value);
+        } else if ("softDecoder".equals(name)) {
+            if ("0".equals(value) || "false".equals(value)) {
+                com.nukacast.app.player.DecoderPreference.clear(this);
+            } else {
+                com.nukacast.app.player.DecoderPreference.preferSoftware(this);
+            }
+        }
+        runOnUiThread(new Runnable() {
+            @Override public void run() { renderPlaybackSettings(); }
+        });
+        return playbackSettingsForDebug();
+    }
+
     private void buildMovieFilterRow() {
         if (movieFilters == null) return;
         movieFilters.removeAllViews();
@@ -1847,6 +1964,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * end (and dropping back to the list, as this used to) is the difference between usable and not.
      */
     private void advanceEpisodeWhenFinished() {
+        if (!playbackSettings().autoNextEpisode()) {
+            // Auto-advance is a setting: with it off the viewer stays on the finished episode.
+            return;
+        }
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
         if (!"ended".equals(playback.state)) {
