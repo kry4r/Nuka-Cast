@@ -319,7 +319,7 @@ public final class SpiderManager {
             if (jarSpec.isEmpty()) {
                 throw new IllegalStateException("站点未配置 Spider JAR");
             }
-            if (!jarSpidersSupported()) {
+            if (isJarSpiderSite(site.jar, site.globalSpider, site.api) && !jarSpidersSupported()) {
                 // Measured on the affected TV: a config whose sites are all JAR spiders (饭太硬,
                 // 王二小) makes the app load DexClassLoader plugins until the process dies ~50s after
                 // launch, with no Java exception and no log. On API < 21 the JARs cannot work anyway
@@ -791,6 +791,22 @@ public final class SpiderManager {
      */
     public static boolean jarSpidersSupported() {
         return jarSpidersSupportedFor(android.os.Build.VERSION.SDK_INT);
+    }
+
+    /**
+     * Whether a site is a JAR spider, i.e. needs a runtime that Dalvik cannot provide.
+     *
+     * <p>Decided from the spec the site would actually load: sites often carry no {@code jar} of their
+     * own and inherit the configuration's global {@code spider} (饭太硬's 53 sites do exactly that),
+     * so looking at {@code site.jar} alone classified them as loadable and they were retried on every
+     * home load — the loop that killed the process on Android 4.4.
+     */
+    public static boolean isJarSpiderSite(String siteJar, String globalSpider, String siteApi) {
+        String spec = firstNonEmpty(siteJar, globalSpider);
+        if (spec == null || spec.trim().isEmpty()) return false;
+        String lower = spec.trim().toLowerCase(java.util.Locale.ROOT);
+        // A .js spider runs in the bundled engine and works on every supported Android version.
+        return !(lower.endsWith(".js") || lower.contains(".js?"));
     }
 
     /** Threshold logic, separated so it can be tested on any runtime. */

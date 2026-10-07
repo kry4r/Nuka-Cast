@@ -276,9 +276,13 @@ public final class SearchEngine {
         for (TvBoxConfig.Site site : sites) {
             // Plugin sites are dropped entirely while the app is shedding memory, and skipped when
             // their plugin cannot load here (Dalvik verifier, JAR hash mismatch).
+            boolean unsupportedPlugin = site.type == 3
+                    && com.nukacast.app.spider.SpiderManager.isJarSpiderSite(
+                            site.jar, site.globalSpider, site.api)
+                    && !com.nukacast.app.spider.SpiderManager.jarSpidersSupported();
             if (spiderManager != null && site.type == 3
                     && (paused || saturated || spiderManager.compatibility().isUnsupported(site)
-                        || !com.nukacast.app.spider.SpiderManager.jarSpidersSupported())) {
+                        || unsupportedPlugin)) {
                 skippedBroken++;
                 continue;
             }

@@ -290,8 +290,10 @@ public final class TvBoxContentService {
         for (TvBoxConfig.Site site : repository.getEnabledSites()) {
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
             if (site.type == 3) {
-                if (spiders.compatibility().isUnsupported(site)
-                        || !com.nukacast.app.spider.SpiderManager.jarSpidersSupported()) {
+                boolean unsupportedPlugin = com.nukacast.app.spider.SpiderManager.isJarSpiderSite(
+                        site.jar, site.globalSpider, site.api)
+                        && !com.nukacast.app.spider.SpiderManager.jarSpidersSupported();
+                if (spiders.compatibility().isUnsupported(site) || unsupportedPlugin) {
                     skipped++;
                     continue;
                 }
