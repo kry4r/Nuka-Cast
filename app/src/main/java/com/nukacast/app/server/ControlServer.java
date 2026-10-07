@@ -962,18 +962,57 @@ public final class ControlServer extends NanoHTTPD {
     }
 
     private <T> T body(IHTTPSession session, Class<T> type) throws Exception {
-        Map<String, String> files = new HashMap<String, String>();
-        session.parseBody(files);
-        String content = files.get("postData");
+        String content = readBodyAsUtf8(session);
         if (content == null || content.trim().isEmpty()) {
             throw new IllegalArgumentException("请求体为空");
-        }
-        if (content.getBytes(UTF_8).length > MAX_API_BODY_BYTES) {
-            throw new IllegalArgumentException("请求体过大");
         }
         T value = gson.fromJson(content, type);
         if (value == null) throw new IllegalArgumentException("JSON 无效");
         return value;
+    }
+
+    /**
+     * Reads the request body as UTF-8 directly from the stream.
+     *
+     * <p>NanoHTTPD's {@code parseBody} decodes with the charset in the request header and falls back
+     * to US-ASCII when there is none, which silently replaced every Chinese character with "�" —
+     * adding a source named 饭太硬 stored the name as mojibake. JSON is UTF-8 by definition, so the
+     * bytes are decoded here instead of trusting a header that clients routinely omit.
+     */
+    private static String readBodyAsUtf8(IHTTPSession session) throws IOException {
+        String lengthHeader = session.getHeaders().get("content-length");
+        int length = -1;
+        if (lengthHeader != null) {
+            try {
+                length = Integer.parseInt(lengthHeader.trim());
+            } catch (NumberFormatException ignored) {
+                length = -1;
+            }
+        }
+        if (length < 0 || length > MAX_API_BODY_BYTES) {
+            // Without a usable Content-Length the framing is unknown, so let NanoHTTPD read it.
+            Map<String, String> files = new HashMap<String, String>();
+            try {
+                session.parseBody(files);
+            } catch (Exception error) {
+                throw new IOException(error);
+            }
+            String content = files.get("postData");
+            return content == null ? "" : content;
+        }
+        if (length == 0) return "";
+        // Read exactly the declared number of bytes: the socket stays open for keep-alive, so a
+        // read-until-EOF loop would block until the connection timed out.
+        byte[] body = new byte[length];
+        InputStream stream = session.getInputStream();
+        int read = 0;
+        while (read < length) {
+            int chunk = stream.read(body, read, length - read);
+            if (chunk < 0) break;
+            read += chunk;
+        }
+        String content = new String(body, 0, read, UTF_8);
+        return content.startsWith("\uFEFF") ? content.substring(1) : content;
     }
 
     private Response json(Response.IStatus status, Object body) {

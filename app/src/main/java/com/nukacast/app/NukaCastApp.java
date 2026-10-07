@@ -23,6 +23,7 @@ public final class NukaCastApp extends Application implements android.content.Co
     @Override
     public void onCreate() {
         super.onCreate();
+        com.nukacast.app.net.ConscryptTls.install();
         AppLog.initialize(this);
         CrashReporter.install(this);
         SessionMarker.initialize(this);

@@ -12,7 +12,7 @@ import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
-import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
+import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.net.HttpStack;
@@ -41,6 +41,10 @@ public final class PlayerController {
     private final AppState appState;
     private final ProgressListener progressListener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    /** Player state as last seen on the main thread; read by HTTP requests. */
+    private int mirroredPositionMs;
+    private int mirroredDurationMs;
+    private boolean mirroredPlaying;
     private final Object lock = new Object();
     private ExoPlayer player;
     private SurfaceHolder surfaceHolder;
@@ -48,14 +52,22 @@ public final class PlayerController {
     private String url = "";
     private String state = "idle";
     private String error = "";
+    private int tickCount;
+
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
-            reportProgress();
+            mirrorPlayerState();
+            if (++tickCount % TICKS_PER_PROGRESS_REPORT == 0) reportProgress();
             synchronized (lock) {
-                if (player != null) mainHandler.postDelayed(this, 10000L);
+                if (player != null) mainHandler.postDelayed(this, MIRROR_INTERVAL_MS);
             }
         }
     };
+
+    /** How often the main thread refreshes the readable player state. */
+    private static final long MIRROR_INTERVAL_MS = 1000L;
+    /** Progress callbacks are throttled: the library write must not happen every second. */
+    private static final int TICKS_PER_PROGRESS_REPORT = 20;
 
     public PlayerController(AppState appState) {
         this(appState, null);
@@ -147,6 +159,14 @@ public final class PlayerController {
         });
     }
 
+    /**
+     * A consistent view of the player, safe to read from any thread.
+     *
+     * <p>ExoPlayer refuses to be touched from a non-main thread ({@code Player is accessed on the
+     * wrong thread}), which is what {@code /api/player} hit: the HTTP request thread called
+     * {@code getCurrentPosition()}. Playback state is therefore mirrored whenever the main thread
+     * updates it, and this method only reads those mirrored fields.
+     */
     public Snapshot snapshot() {
         synchronized (lock) {
             Snapshot snapshot = new Snapshot();
@@ -154,12 +174,22 @@ public final class PlayerController {
             snapshot.title = title;
             snapshot.url = url;
             snapshot.error = error;
-            if (player != null) {
-                snapshot.positionMs = integerTime(player.getCurrentPosition());
-                snapshot.durationMs = player.getDuration() == C.TIME_UNSET ? 0 : integerTime(player.getDuration());
-                snapshot.playing = player.isPlaying();
-            }
+            snapshot.positionMs = mirroredPositionMs;
+            snapshot.durationMs = mirroredDurationMs;
+            snapshot.playing = mirroredPlaying;
             return snapshot;
+        }
+    }
+
+    /** Called from the main thread to keep the readable copy of the player state current. */
+    private void mirrorPlayerState() {
+        if (player == null) return;
+        long position = player.getCurrentPosition();
+        long duration = player.getDuration();
+        synchronized (lock) {
+            mirroredPositionMs = integerTime(position);
+            mirroredDurationMs = duration == C.TIME_UNSET ? 0 : integerTime(duration);
+            mirroredPlaying = player.isPlaying();
         }
     }
 
@@ -180,18 +210,20 @@ public final class PlayerController {
             // OkHttp data source raised java.lang.NoSuchMethodError from an ExoPlayer loader thread,
             // which is an uncaught exception and therefore killed the process — the "看一会就闪退"
             // that no retry could survive.
-            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                    .setUserAgent(header(headers, "User-Agent", "NukaCast/0.1 ExoPlayer"))
-                    .setDefaultRequestProperties(new LinkedHashMap<String, String>(headers))
-                    .setConnectTimeoutMs(15_000)
-                    .setReadTimeoutMs(20_000)
-                    .setAllowCrossProtocolRedirects(true);
+            OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(
+                    HttpStack.client(),
+                    header(headers, "User-Agent", "NukaCast/0.1 ExoPlayer"),
+                    new LinkedHashMap<String, String>(headers));
+            // DefaultDataSource still handles file:// and content:// for local media, but every
+            // network scheme goes through OkHttp: the platform's HttpsURLConnection cannot negotiate
+            // TLS 1.2 on API 19, which made HTTPS media fail with an SSL handshake error.
             DefaultDataSource.Factory dataSource = new DefaultDataSource.Factory(context, http);
             ExoPlayer created = new ExoPlayer.Builder(context)
                     .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSource))
                     .build();
             player = created;
             created.setWakeMode(C.WAKE_MODE_LOCAL);
+            mirrorPlayerState();
             created.setHandleAudioBecomingNoisy(true);
             if (surfaceHolder != null) created.setVideoSurfaceHolder(surfaceHolder);
             created.addListener(new Player.Listener() {
@@ -233,7 +265,7 @@ public final class PlayerController {
             if (startPositionMs > 0) created.seekTo(startPositionMs);
             created.play();
             mainHandler.removeCallbacks(progressTicker);
-            mainHandler.postDelayed(progressTicker, 10000L);
+            mainHandler.postDelayed(progressTicker, MIRROR_INTERVAL_MS);
         }
     }
 

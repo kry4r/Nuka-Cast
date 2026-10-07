@@ -152,6 +152,11 @@ public final class HttpStack {
         int loaded = 0;
         loaded += loadCertificates(store, "/com/nukacast/app/net/mozilla_ca_bundle.pem", "mozilla");
         loaded += loadCertificates(store, "/com/nukacast/app/net/digicert_global_root_g2.pem", "digicert");
+        // Let's Encrypt's "Generation Y" roots are not in trust stores yet (they began issuing in
+        // 2026), and hosts that already use them failed with "Trust anchor for certification path not
+        // found" — both on this device's 2013 platform store and against the bundled Mozilla list.
+        loaded += loadCertificates(store, "/com/nukacast/app/net/letsencrypt_root_yr.pem", "le-yr");
+        loaded += loadCertificates(store, "/com/nukacast/app/net/letsencrypt_root_ye.pem", "le-ye");
         if (loaded == 0) throw new IOException("缺少内置根证书资源");
         return trustManager(store);
     }

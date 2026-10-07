@@ -114,8 +114,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView featuredPlot;
     private ImageView featuredPoster;
     private SurfaceView videoSurface;
-    private View castPlaybackOverlay;
-    private Button castStopOverlay;
+    private com.nukacast.app.ui.PlayerHudView playerHud;
     private Button refreshSourcesButton;
     private Button scanStorageButton;
     private Button themeToggleButton;
@@ -227,8 +226,30 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (isFullScreenMedia()) {
+            // Any key brings the HUD back; it fades by itself so the picture stays clean.
+            if (playerHud != null) playerHud.reveal();
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+                runtime.getPlayerController().toggle();
+                refreshPlayerHud();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    || keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
+                runtime.getPlayerController().seekBy(30000);
+                refreshPlayerHud();
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                    || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND) {
+                runtime.getPlayerController().seekBy(-10000);
+                refreshPlayerHud();
+                return true;
+            }
+        }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_SPACE) {
             runtime.getPlayerController().toggle();
+            refreshPlayerHud();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
@@ -318,8 +339,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
         viewLogsButton = (Button) findViewById(R.id.viewLogsButton);
         videoSurface = (SurfaceView) findViewById(R.id.videoSurface);
-        castPlaybackOverlay = findViewById(R.id.castPlaybackOverlay);
-        castStopOverlay = (Button) findViewById(R.id.castStopOverlay);
+        playerHud = new com.nukacast.app.ui.PlayerHudView(this);
+        ((android.widget.FrameLayout) findViewById(R.id.rootFrame)).addView(playerHud,
+                new android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
     private void bindNavigation() {
@@ -362,12 +386,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         viewLogsButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { showLogViewer(); }
         });
-        castStopOverlay.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                runtime.getAirPlayReceiver().disconnectSession();
-                Toast.makeText(MainActivity.this, "已退出 AirPlay 投屏", Toast.LENGTH_SHORT).show();
-            }
-        });
+
     }
 
     private void bindFilter(int id, final String filter) {
@@ -387,6 +406,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         findViewById(R.id.navMovies).setSelected(PAGE_MOVIES.equals(page));
         findViewById(R.id.navCast).setSelected(PAGE_CAST.equals(page));
         findViewById(R.id.navSettings).setSelected(PAGE_SETTINGS.equals(page));
+        // The type filters belong to the movies page; leaving it highlighted made it look as if a
+        // filter were still applied while a different page was on screen.
+        if (!PAGE_MOVIES.equals(page)) setFilterSelection("");
         if (PAGE_HOME.equals(page)) renderHome();
         render();
     }
@@ -485,7 +507,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.HORIZONTAL);
         panel.setGravity(Gravity.CENTER_VERTICAL);
-        panel.setPadding(dp(28), dp(22), dp(22), dp(22));
+        panel.setPadding(dp(20), dp(16), dp(16), dp(16));
         panel.setBackgroundDrawable(TvTheme.panel(this));
         panel.setClipChildren(false);
 
@@ -493,12 +515,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         copy.setOrientation(LinearLayout.VERTICAL);
         copy.setGravity(Gravity.CENTER_VERTICAL);
 
-        featuredEyebrow = featuredText(12, TvTheme.secondary(this), true);
-        featuredTitle = featuredText(32, TvTheme.primary(this), true);
+        featuredEyebrow = featuredText(11, TvTheme.secondary(this), true);
+        featuredTitle = featuredText(19, TvTheme.primary(this), true);
         featuredTitle.setSingleLine(true);
         featuredTitle.setEllipsize(TextUtils.TruncateAt.END);
-        featuredMeta = featuredText(14, TvTheme.secondary(this), false);
-        featuredPlot = featuredText(14, TvTheme.secondary(this), false);
+        featuredMeta = featuredText(12, TvTheme.secondary(this), false);
+        featuredPlot = featuredText(12, TvTheme.secondary(this), false);
         featuredPlot.setMaxLines(2);
         featuredPlot.setEllipsize(TextUtils.TruncateAt.END);
         featuredPlot.setLineSpacing(0, 1.15f);
@@ -526,9 +548,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         panel.addView(featuredPoster, posterParams);
 
         featuredPanel = panel;
+        // 150dp instead of 218dp: the hero used to eat the top 40% of a 1080p screen and pushed
+        // every row below the fold.
         LinearLayout.LayoutParams panelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(218));
-        panelParams.bottomMargin = dp(22);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(132));
+        panelParams.bottomMargin = dp(14);
         homeContent.addView(panel, panelParams);
         updateFeatured(item);
     }
@@ -574,15 +598,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         String[] filters = {"电影", "电视剧", "综艺", "动漫", ""};
         for (int i = 0; i < labels.length; i++) {
             final String filter = filters[i];
-            Button button = actionButton(labels[i], 122);
+            Button button = actionButton(labels[i], 96);
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) { showMovies(filter); }
             });
             row.addView(button);
         }
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-        params.bottomMargin = dp(20);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(36));
+        params.bottomMargin = dp(12);
         homeContent.addView(row, params);
     }
 
@@ -629,8 +653,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void addTrack(HorizontalScrollView scroll) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(312));
-        params.bottomMargin = dp(26);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(226));
+        params.bottomMargin = dp(14);
         homeContent.addView(scroll, params);
     }
 
@@ -1091,83 +1115,80 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void showDetail(final MediaDetail detail) {
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(22), dp(8), dp(22), dp(20));
-
-        TextView title = bodyText(detail.name);
-        title.setTextColor(TvTheme.primary(this));
-        title.setTextSize(23);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        content.addView(title);
-
-        TextView meta = bodyText(joinMeta(detail.typeName, detail.year, detail.area, detail.siteName));
-        meta.setPadding(0, dp(6), 0, 0);
-        content.addView(meta);
-
-        if (!safe(detail.plot).isEmpty()) {
-            TextView plot = bodyText(detail.plot);
-            plot.setMaxLines(4);
-            plot.setEllipsize(TextUtils.TruncateAt.END);
-            plot.setPadding(0, dp(12), 0, dp(6));
-            content.addView(plot);
-        }
-
-        final Button favorite = actionButton("", 190);
-        setFavoriteLabel(favorite, detail);
-        content.addView(favorite);
-
         final AlertDialog[] holder = new AlertDialog[1];
-        favorite.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) {
-                boolean added = runtime.getMediaLibrary().toggleFavorite(detail);
-                favorite.setText(added ? "已收藏" : "加入收藏");
-                renderHome();
-            }
-        });
+        final View[] firstFocus = new View[1];
 
-        for (final MediaDetail.PlaySource source : detail.playSources) {
-            TextView sourceTitle = sectionTitle(source.name.isEmpty() ? "播放线路" : source.name);
-            sourceTitle.setPadding(0, dp(16), 0, dp(7));
-            content.addView(sourceTitle);
-            LinearLayout episodeRow = null;
-            for (int i = 0; i < source.episodes.size(); i++) {
-                if (i % 5 == 0) {
-                    episodeRow = new LinearLayout(this);
-                    episodeRow.setOrientation(LinearLayout.HORIZONTAL);
-                    LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-                    rowParams.bottomMargin = dp(6);
-                    content.addView(episodeRow, rowParams);
-                }
-                final MediaDetail.Episode episode = source.episodes.get(i);
-                Button button = actionButton(episode.name, 116);
-                button.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View view) {
-                        if (holder[0] != null) holder[0].dismiss();
-                        playEpisode(detail, source, episode, 0);
+        // Line and episode selection are rendered by DetailScreen so the layout rules (chip sizes,
+        // eight episodes per row, 12sp labels) live in one place instead of inside this activity.
+        final int[] selectedLine = {0};
+        final LinearLayout[] container = new LinearLayout[1];
+
+        com.nukacast.app.ui.DetailScreen.EpisodeListener episodeListener = new com.nukacast.app.ui.DetailScreen.EpisodeListener() {
+            @Override public void onEpisode(String lineName, int lineIndex,
+                                            com.nukacast.app.ui.DetailScreen.MediaEntry entry) {
+                MediaDetail.PlaySource source = detail.playSources.get(selectedLine[0]);
+                MediaDetail.Episode episode = null;
+                for (MediaDetail.Episode candidate : source.episodes) {
+                    if (candidate.id.equals(entry.id)) {
+                        episode = candidate;
+                        break;
                     }
-                });
-                episodeRow.addView(button);
+                }
+                if (episode == null) return;
+                if (holder[0] != null) holder[0].dismiss();
+                playEpisode(detail, source, episode, 0);
             }
-        }
+        };
+        com.nukacast.app.ui.DetailScreen.LineListener lineListener = new com.nukacast.app.ui.DetailScreen.LineListener() {
+            @Override public void onLine(int index) {
+                selectedLine[0] = index;
+                renderDetailBody(container[0], detail, index, firstFocus, holder,
+                        episodeListener, this);
+            }
+        };
 
-        if (detail.playSources.isEmpty()) {
-            TextView empty = bodyText("该条目没有可用播放线路");
-            empty.setPadding(0, dp(18), 0, 0);
-            content.addView(empty);
-        }
+        LinearLayout dialog = new LinearLayout(this);
+        dialog.setOrientation(LinearLayout.VERTICAL);
+        container[0] = dialog;
+        renderDetailBody(dialog, detail, 0, firstFocus, holder, episodeListener, lineListener);
 
         ScrollView scroll = new ScrollView(this);
-        scroll.addView(content);
+        scroll.setFillViewport(true);
+        scroll.addView(dialog, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         holder[0] = new AlertDialog.Builder(this).setView(scroll).create();
         holder[0].show();
         Window window = holder[0].getWindow();
         if (window != null) {
-            window.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.78f),
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            window.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.62f),
+                    (int) (getResources().getDisplayMetrics().heightPixels * 0.74f));
         }
-        favorite.requestFocus();
+        if (firstFocus[0] != null) firstFocus[0].requestFocus();
+    }
+
+    /** Redraws the dialog body; used for the first render and when the line changes. */
+    private void renderDetailBody(LinearLayout container, MediaDetail detail, int selectedLine,
+                                  View[] firstFocus, AlertDialog[] holder,
+                                  com.nukacast.app.ui.DetailScreen.EpisodeListener episodeListener,
+                                  com.nukacast.app.ui.DetailScreen.LineListener lineListener) {
+        container.removeAllViews();
+        String meta = joinMeta(detail.typeName, detail.year, detail.area, detail.siteName);
+        String[] lineNames = new String[detail.playSources.size()];
+        com.nukacast.app.ui.DetailScreen.MediaEntry[][] episodes = new com.nukacast.app.ui.DetailScreen.MediaEntry[detail.playSources.size()][];
+        for (int i = 0; i < detail.playSources.size(); i++) {
+            MediaDetail.PlaySource source = detail.playSources.get(i);
+            lineNames[i] = source.episodes.size() + " 集 · " + (source.name.isEmpty() ? "线路" : source.name);
+            com.nukacast.app.ui.DetailScreen.MediaEntry[] entries = new com.nukacast.app.ui.DetailScreen.MediaEntry[source.episodes.size()];
+            for (int j = 0; j < source.episodes.size(); j++) {
+                MediaDetail.Episode episode = source.episodes.get(j);
+                entries[j] = new com.nukacast.app.ui.DetailScreen.MediaEntry(episode.id, episode.name);
+            }
+            episodes[i] = entries;
+        }
+        LinearLayout body = com.nukacast.app.ui.DetailScreen.build(this, detail.name, meta, detail.plot, lineNames,
+                selectedLine, episodes, episodeListener, lineListener, firstFocus);
+        container.addView(body);
+        firstFocus[0] = null;
     }
 
     private void playEpisode(final MediaDetail detail, final MediaDetail.PlaySource source,
@@ -1429,15 +1450,47 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         boolean hasMedia = state.getActiveMedia() != null && !state.getActiveMedia().isEmpty();
         boolean airplayMedia = airplay.sessionActive
                 || "AirPlay 镜像".equals(state.getActiveMedia());
-        boolean overlayWasVisible = castPlaybackOverlay.getVisibility() == View.VISIBLE;
+        boolean hudWasVisible = playerHud.isShowing();
         appShell.setVisibility(hasMedia ? View.GONE : View.VISIBLE);
         videoSurface.setVisibility(hasMedia ? View.VISIBLE : View.GONE);
-        castPlaybackOverlay.setVisibility(airplayMedia ? View.VISIBLE : View.GONE);
-        if (airplayMedia && !overlayWasVisible) {
-            castStopOverlay.requestFocus();
-        } else if (!airplayMedia && overlayWasVisible) {
-            findViewById(R.id.navCast).requestFocus();
+        if (!hasMedia) {
+            playerHud.hideNow();
+        } else if (airplayMedia) {
+            // Mirroring is watched, not operated: show the notice briefly, then stay out of the way.
+            com.nukacast.app.airplay.AirPlayReceiver.Snapshot mirror =
+                    runtime.getAirPlayReceiver().snapshot();
+            if (!hudWasVisible) {
+                playerHud.show("正在投屏",
+                        mirror.videoWidth > 0 ? mirror.videoWidth + "×" + mirror.videoHeight + " · AirPlay 镜像"
+                                : "AirPlay 镜像",
+                        "按返回键结束投屏", false);
+            }
+        } else {
+            String subtitle = safe(runtime.getState().getActiveMedia());
+            com.nukacast.app.player.PlayerController.Snapshot playback =
+                    runtime.getPlayerController().snapshot();
+            if ("error".equals(playback.state)) {
+                playerHud.showError(safe(playback.error).isEmpty() ? "播放失败" : playback.error);
+            } else if (!hudWasVisible) {
+                playerHud.show(subtitle, "", "按返回键退出播放 · 按菜单键显示控制", true);
+            } else {
+                playerHud.setProgress(playback.positionMs, playback.durationMs);
+            }
         }
+    }
+
+    /** True while the app is showing full-screen video or receiving a mirror. */
+    private boolean isFullScreenMedia() {
+        String active = runtime.getState().getActiveMedia();
+        return active != null && !active.isEmpty();
+    }
+
+    /** Keeps the HUD in step with playback after a key press. */
+    private void refreshPlayerHud() {
+        if (playerHud == null || !isFullScreenMedia()) return;
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        playerHud.setProgress(playback.positionMs, playback.durationMs);
     }
 
     private String castState(AirPlayReceiver.Snapshot snapshot) {
@@ -1461,8 +1514,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private LinearLayout.LayoutParams cardParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(164), dp(292));
-        params.setMargins(dp(3), dp(4), dp(13), dp(4));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(132), dp(210));
+        params.setMargins(dp(3), dp(4), dp(10), dp(4));
         return params;
     }
 
@@ -1470,12 +1523,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         TextView title = new TextView(this);
         title.setText(value);
         title.setTextColor(TvTheme.primary(this));
-        title.setTextSize(21);
+        title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER_VERTICAL);
-        title.setPadding(0, 0, 0, dp(8));
+        title.setPadding(0, 0, 0, dp(4));
         title.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(40)));
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(28)));
         return title;
     }
 
@@ -1483,8 +1536,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         TextView text = new TextView(this);
         text.setText(value);
         text.setTextColor(TvTheme.secondary(this));
-        text.setTextSize(14);
-        text.setLineSpacing(0, 1.15f);
+        text.setTextSize(12);
+        text.setLineSpacing(0, 1.12f);
         return text;
     }
 
@@ -1492,14 +1545,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         Button button = new Button(this);
         button.setText(label);
         button.setTextColor(TvTheme.primary(this));
-        button.setTextSize(14);
+        button.setTextSize(13);
         button.setAllCaps(false);
         button.setSingleLine(true);
         button.setEllipsize(TextUtils.TruncateAt.END);
         button.setGravity(Gravity.CENTER);
         button.setFocusable(true);
         button.setBackgroundDrawable(TvTheme.focusable(this));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(42));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(34));
         params.setMargins(0, 0, dp(8), dp(4));
         button.setLayoutParams(params);
         return button;

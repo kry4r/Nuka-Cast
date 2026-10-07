@@ -45,6 +45,12 @@ public final class TvBoxContentService {
     private final SpiderManager spiders;
     private final StorageLibrary storageLibrary;
     private SiteHealthStore healthStore;
+    private com.nukacast.app.tvbox.TitleIndex titleIndex;
+
+    /** Shares the search engine's title index, so an initials query can find home titles. */
+    public void useTitleIndex(com.nukacast.app.tvbox.TitleIndex index) {
+        this.titleIndex = index;
+    }
 
     /** Sites a measured sweep found working get priority on the home screen. */
     public void useHealthStore(SiteHealthStore store) {
@@ -87,6 +93,8 @@ public final class TvBoxContentService {
      * process a minute after startup. Plain CMS sites (type 0/1) are cheap and come first.
      */
     public static final int MAX_PLUGIN_HOME_SITES = 2;
+    /** How long the first screen waits for sites before rendering what has arrived. */
+    private static final long HOME_BUDGET_MS = 5_000L;
 
     public List<SearchItem> home(int maxSites, int maxItems) throws InterruptedException {
         List<TvBoxConfig.Site> pluginSites = new ArrayList<TvBoxConfig.Site>();
@@ -98,7 +106,8 @@ public final class TvBoxContentService {
         for (TvBoxConfig.Site site : repository.getEnabledSites()) {
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
             if (site.type == 3) {
-                if (spiders.compatibility().isUnsupported(site)) {
+                if (spiders.compatibility().isUnsupported(site)
+                        || !com.nukacast.app.spider.SpiderManager.jarSpidersSupported()) {
                     skipped++;
                     continue;
                 }
@@ -168,32 +177,57 @@ public final class TvBoxContentService {
         }
 
         List<List<SearchItem>> groups = new ArrayList<List<SearchItem>>();
-        List<Future<List<SearchItem>>> futures = homeExecutor.invokeAll(calls, 10, TimeUnit.SECONDS);
         int timedOut = 0;
         int failed = 0;
-        for (int i = 0; i < futures.size(); i++) {
-            Future<List<SearchItem>> future = futures.get(i);
-            if (future.isCancelled()) {
-                timedOut++;
-                homeFailures.failure(selected.get(i), "首页请求超时");
-                AppLog.d("片源", "首页站点超时 [" + safe(selected.get(i).name) + "]");
-                continue;
-            }
+        // Bounded, first-come-first-served: the home screen renders whatever answered inside the
+        // budget instead of waiting for the slowest site. On the affected TV a single unresponsive
+        // CMS host used to hold the whole first screen for ten seconds.
+        java.util.concurrent.ExecutorCompletionService<List<SearchItem>> completion =
+                new java.util.concurrent.ExecutorCompletionService<List<SearchItem>>(homeExecutor);
+        List<Future<List<SearchItem>>> submitted = new ArrayList<Future<List<SearchItem>>>();
+        for (Callable<List<SearchItem>> call : calls) submitted.add(completion.submit(call));
+        long deadline = System.currentTimeMillis() + HOME_BUDGET_MS;
+        int answered = 0;
+        while (answered < submitted.size()) {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0L) break;
+            Future<List<SearchItem>> done;
             try {
-                groups.add(future.get());
+                done = completion.poll(remaining, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (done == null) break;
+            answered++;
+            try {
+                groups.add(done.get());
             } catch (Exception error) {
                 failed++;
-                homeFailures.failure(selected.get(i), error);
-                AppLog.d("片源", "首页站点失败 [" + safe(selected.get(i).name) + "]："
-                        + message(error));
             }
+        }
+        for (Future<List<SearchItem>> future : submitted) {
+            if (!future.isDone()) {
+                future.cancel(true);
+                timedOut++;
+            }
+        }
+        // Sites that never answered inside the budget are recorded as timeouts so their health
+        // verdicts (and the diagnostics page) reflect reality.
+        for (int i = 0; i < selected.size() && i < timedOut; i++) {
+            homeFailures.failure(selected.get(i), "首页请求超时");
+            AppLog.d("片源", "首页站点超时 [" + safe(selected.get(i).name) + "]");
         }
         if (!selected.isEmpty() && (timedOut > 0 || failed > 0)) {
             AppLog.i("片源", "首页加载：" + selected.size() + " 个站点 → "
                     + (selected.size() - timedOut - failed) + " 成功 / " + timedOut
                     + " 超时 / " + failed + " 失败");
         }
-        return SearchResultMerger.merge(groups, Math.max(1, maxItems));
+        List<SearchItem> merged = SearchResultMerger.merge(groups, Math.max(1, maxItems));
+        if (titleIndex != null) {
+            for (SearchItem item : merged) titleIndex.add(item.name);
+        }
+        return merged;
     }
 
     public void shutdown() {
@@ -211,6 +245,15 @@ public final class TvBoxContentService {
     public PlaybackInfo resolve(String sourceId, String siteKey, String flag, String episodeId,
                                 String title) throws Exception {
         if (isStorage(sourceId)) return requireStorage().resolve(episodeId, title);
+        String cached = cachedResolution(episodeId);
+        if (cached != null) {
+            PlaybackInfo hit = new PlaybackInfo();
+            hit.url = cached;
+            hit.direct = true;
+            hit.title = title == null ? "" : title;
+            AppLog.i("解析", "使用已缓存的播放地址");
+            return hit;
+        }
         TvBoxConfig.Site site = requireSite(sourceId, siteKey);
         TvBoxConfig config = repository.getConfig(site.sourceId);
         PlaybackInfo info = site.type == 3
@@ -240,7 +283,43 @@ public final class TvBoxContentService {
                 info.error = "该线路返回的是播放页，未解析出可直接播放的地址";
             }
         }
+        if (info.direct && !info.url.isEmpty()) cacheResolution(episodeId, info.url);
         return info;
+    }
+
+    private static final int MAX_PARSER_ATTEMPTS = 3;
+
+    /**
+     * Parse endpoints are raced on a small pool with one shared deadline.
+     *
+     * <p>Sequentially, three dead parsers cost three full socket timeouts — on the affected TV that
+     * was 8 seconds each, so starting an episode took half a minute and often never finished. Racing
+     * them bounds the wait to a single deadline and lets the fastest working parser win.
+     */
+    private static final long PARSER_DEADLINE_MS = 4000L;
+
+    /** Resolved addresses stay valid for a while; replaying or resuming should not re-resolve. */
+    private static final int MAX_RESOLVE_CACHE = 64;
+    private static final java.util.Map<String, String> RESOLVE_CACHE =
+            new java.util.LinkedHashMap<String, String>() {
+                @Override protected boolean removeEldestEntry(
+                        java.util.Map.Entry<String, String> eldest) {
+                    return size() > MAX_RESOLVE_CACHE;
+                }
+            };
+
+    private static String cachedResolution(String episodeId) {
+        if (episodeId == null || episodeId.isEmpty()) return null;
+        synchronized (RESOLVE_CACHE) {
+            return RESOLVE_CACHE.get(episodeId);
+        }
+    }
+
+    private static void cacheResolution(String episodeId, String url) {
+        if (episodeId == null || episodeId.isEmpty() || url == null || url.isEmpty()) return;
+        synchronized (RESOLVE_CACHE) {
+            RESOLVE_CACHE.put(episodeId, url);
+        }
     }
 
     private String requestCmsDetail(TvBoxConfig.Site site, String vodId) throws Exception {
@@ -274,42 +353,81 @@ public final class TvBoxContentService {
             parsers.add(siteParser);
         }
         if (config != null && config.parses != null) parsers.addAll(config.parses);
-        for (TvBoxConfig.ParseEndpoint parser : parsers) {
-            if (parser == null || parser.url == null || parser.url.trim().isEmpty()) continue;
-            String requestUrl = parserRequest(parser.url.trim(), info.url);
-            if (info.sniffUrl.isEmpty()) info.sniffUrl = requestUrl;
-            try {
-                Request.Builder request = new Request.Builder().url(requestUrl)
-                        .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.4; NukaCast) AppleWebKit/537.36");
-                applyHeaders(request, parser.header);
-                try (Response response = HttpStack.client().newCall(request.build()).execute()) {
-                    if (!response.isSuccessful() || response.body() == null) continue;
-                    String body = ResponseBodies.string(
-                            response.body(), MAX_CMS_BYTES, UTF_8).trim();
-                    PlaybackInfo parsed = PlaybackInfoParser.parse(body, "");
-                    if (parsed.direct && !parsed.url.isEmpty()) {
-                        info.url = parsed.url;
-                        info.direct = true;
-                        info.headers.putAll(parsed.headers);
-                        info.error = "";
-                        return;
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(Math.max(1,
+                        Math.min(MAX_PARSER_ATTEMPTS, parsers.size())));
+        try {
+            List<java.util.concurrent.Future<String>> futures =
+                    new ArrayList<java.util.concurrent.Future<String>>();
+            int started = 0;
+            for (final TvBoxConfig.ParseEndpoint parser : parsers) {
+                if (started >= MAX_PARSER_ATTEMPTS) break;
+                if (parser == null || parser.url == null || parser.url.trim().isEmpty()) continue;
+                started++;
+                final String requestUrl = parserRequest(parser.url.trim(), info.url);
+                if (info.sniffUrl.isEmpty()) info.sniffUrl = requestUrl;
+                futures.add(pool.submit(new java.util.concurrent.Callable<String>() {
+                    @Override public String call() {
+                        return tryParser(parser, requestUrl);
                     }
-                    if (PlaybackInfoParser.isDirectMedia(response.request().url().toString())) {
-                        info.url = response.request().url().toString();
-                        info.direct = true;
-                        info.error = "";
-                        return;
-                    }
-                }
-            } catch (Exception failure) {
-                AppLog.w("解析", "解析接口失败 [" + safe(parser.name) + "]："
-                        + message(failure), failure);
+                }));
             }
+            long deadline = System.currentTimeMillis() + PARSER_DEADLINE_MS;
+            for (java.util.concurrent.Future<String> future : futures) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0L) break;
+                try {
+                    String resolved = future.get(remaining,
+                            java.util.concurrent.TimeUnit.MILLISECONDS);
+                    if (resolved != null && !resolved.isEmpty()) {
+                        info.url = resolved;
+                        info.direct = true;
+                        info.error = "";
+                        for (java.util.concurrent.Future<String> other : futures) other.cancel(true);
+                        AppLog.i("解析", "解析接口返回直链（并发 " + started + " 个）");
+                        return;
+                    }
+                } catch (Exception ignored) {
+                    // Each parser reports its own failure inside tryParser.
+                }
+            }
+        } finally {
+            pool.shutdownNow();
         }
         if (info.sniffUrl.isEmpty()) info.sniffUrl = directSniff;
+        if (PlaybackInfoParser.isDirectMedia(info.url)) {
+            // The address itself is already media: play it rather than sending the user to the
+            // sniffer. An unreachable parse endpoint used to look exactly like a broken source.
+            info.direct = true;
+            info.error = "";
+            AppLog.i("解析", "解析接口不可用，改用原始直链播放");
+            return;
+        }
         info.error = info.sniffUrl.isEmpty()
                 ? "播放地址需要解析，但配置没有可用解析器"
                 : "解析接口未返回直链，需要嗅探解析页";
+    }
+
+    /** Runs one parse endpoint on a pool thread; returns a direct media URL or null. */
+    private String tryParser(TvBoxConfig.ParseEndpoint parser, String requestUrl) {
+        try {
+            Request.Builder request = new Request.Builder().url(requestUrl)
+                    .header("User-Agent",
+                            "Mozilla/5.0 (Linux; Android 4.4; NukaCast) AppleWebKit/537.36");
+            applyHeaders(request, parser.header);
+            try (Response response = HttpStack.client().newCall(request.build()).execute()) {
+                if (!response.isSuccessful() || response.body() == null) return null;
+                String body = ResponseBodies.string(response.body(), MAX_CMS_BYTES, UTF_8).trim();
+                PlaybackInfo parsed = PlaybackInfoParser.parse(body, "");
+                if (parsed.direct && !parsed.url.isEmpty()) return parsed.url;
+                if (PlaybackInfoParser.isDirectMedia(response.request().url().toString())) {
+                    return response.request().url().toString();
+                }
+            }
+        } catch (Exception failure) {
+            AppLog.w("解析", "解析接口失败 [" + safe(parser.name) + "]：" + message(failure));
+        }
+        return null;
     }
 
     private static String parserRequest(String parserUrl, String mediaUrl) {

@@ -270,9 +270,39 @@ public final class TvBoxRepository {
             source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
             sourceStore.update(source);
             AppLog.w("片源", "配置刷新失败 [" + safe(source.name) + "]：" + source.error);
+            if (isPermanentConfigFailure(source.error)) disableUnusable(source, source.error);
             if (error instanceof IOException) throw (IOException) error;
             throw new IOException(source.error, error);
         }
+    }
+
+    /**
+     * Disables a source that cannot work at all, with the reason attached.
+     *
+     * <p>An HTTP 401 means the publisher stopped sharing the config; 403/404 and unresolvable hosts
+     * are equally final. Keeping such a source enabled left 86 dead sites in every home load and
+     * every search on the affected TV, which is what made the first screen look broken. Disabling is
+     * visible and reversible: the source page shows the reason and the switch.
+     */
+    public boolean disableUnusable(ConfigSource source, String reason) {
+        if (source == null || !source.enabled) return false;
+        source.enabled = false;
+        source.error = reason;
+        source.updatedAt = System.currentTimeMillis();
+        sourceStore.update(source);
+        pruneConfigsAndCaches();
+        AppLog.w("片源", "已停用不可用配置 [" + safe(source.name) + "]：" + reason
+                + "（可在源管理里重新启用）");
+        return true;
+    }
+
+    /** True when a refresh failure means the config will never work as-is. */
+    public static boolean isPermanentConfigFailure(String message) {
+        if (message == null) return false;
+        return message.contains("HTTP 401") || message.contains("HTTP 403")
+                || message.contains("HTTP 404") || message.contains("需要授权")
+                || message.contains("Invalid URL host") || message.contains("无法解析")
+                || message.contains("ENOTFOUND") || message.contains("EAI_NODATA");
     }
 
     public List<TvBoxConfig> configsForTree(String id) {

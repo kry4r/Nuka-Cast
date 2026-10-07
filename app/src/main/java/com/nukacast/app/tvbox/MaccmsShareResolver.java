@@ -103,6 +103,8 @@ public final class MaccmsShareResolver {
     }
 
     private static String fetch(String url, String referer) {
+        // Share pages are served over HTTPS by some back ends; API 19 needs Conscrypt for TLS 1.2.
+        com.nukacast.app.net.ConscryptTls.install();
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(url).openConnection();

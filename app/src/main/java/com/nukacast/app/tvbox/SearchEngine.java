@@ -27,6 +27,10 @@ public final class SearchEngine {
     public static final int MAX_SEARCH_SITES = 24;
     private static final long SEARCH_DEADLINE_SECONDS = 10;
     private final TvBoxRepository repository;
+    private final TitleIndex titleIndex = new TitleIndex();
+
+    /** Titles seen on this device, for turning an initials query into a real one. */
+    public TitleIndex titles() { return titleIndex; }
     /** Site tasks run in parallel; the count also tells whether the pool is still busy. */
     private static final int SEARCH_POOL_SIZE = 4;
     private final ExecutorService executor = Executors.newFixedThreadPool(SEARCH_POOL_SIZE);
@@ -58,6 +62,10 @@ public final class SearchEngine {
 
     public SearchResponse search(final SearchQuery query) throws InterruptedException {
         long startedAt = System.currentTimeMillis();
+        // A query of initials cannot match Chinese titles in a CMS database. If this device has
+        // already seen the matching title (home lists, earlier results), search for that instead —
+        // which is what a user typing "LLDQ" expects to happen.
+        final String initialsExpanded = expandInitials(query);
         final List<TvBoxConfig.Site> sites = selectedSites(query);
         List<Callable<SiteOutcome>> calls = new ArrayList<Callable<SiteOutcome>>();
         for (final TvBoxConfig.Site site : sites) {
@@ -79,6 +87,7 @@ public final class SearchEngine {
         List<Future<SiteOutcome>> futures = executor.invokeAll(calls, SEARCH_DEADLINE_SECONDS, TimeUnit.SECONDS);
         SearchResponse response = new SearchResponse();
         response.keyword = query.keyword;
+        response.expandedKeyword = initialsExpanded == null ? "" : initialsExpanded;
         response.searchedSites = sites.size();
         int successfulSiteCount = 0;
         int timedOutSites = 0;
@@ -138,6 +147,8 @@ public final class SearchEngine {
                     + (System.currentTimeMillis() - startedAt) + " ms");
         }
         response.items.addAll(SearchResultMerger.merge(successfulItems, query.pageSize));
+        // Remember the titles that came back: they are what makes the next initials query work.
+        for (SearchItem item : response.items) titleIndex.add(item.name);
         response.elapsedMs = System.currentTimeMillis() - startedAt;
         response.partial |= response.failedSites > 0;
         if (query.sourceId != null && !query.sourceId.isEmpty()
@@ -180,6 +191,20 @@ public final class SearchEngine {
         return inFlight.get() >= SEARCH_POOL_SIZE;
     }
 
+    /**
+     * Returns the real title to search for when {@code query.keyword} is initials and this device
+     * knows a matching title, or null when the query should be used as typed.
+     */
+    private String expandInitials(SearchQuery query) {
+        if (query == null || !PinyinInitials.isInitialQuery(query.keyword)) return null;
+        List<String> candidates = titleIndex.match(query.keyword, 3);
+        if (candidates.isEmpty()) return null;
+        String title = candidates.get(0);
+        AppLog.i("搜索", "首字母 " + query.keyword + " → 按“" + title + "”搜索");
+        query.keyword = title;
+        return title;
+    }
+
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
         List<TvBoxConfig.Site> sites = selectSites(repository.getEnabledSites(), query);
         boolean saturated = poolSaturated();
@@ -191,7 +216,8 @@ public final class SearchEngine {
             // Plugin sites are dropped entirely while the app is shedding memory, and skipped when
             // their plugin cannot load here (Dalvik verifier, JAR hash mismatch).
             if (spiderManager != null && site.type == 3
-                    && (paused || saturated || spiderManager.compatibility().isUnsupported(site))) {
+                    && (paused || saturated || spiderManager.compatibility().isUnsupported(site)
+                        || !com.nukacast.app.spider.SpiderManager.jarSpidersSupported())) {
                 skippedBroken++;
                 continue;
             }

@@ -319,6 +319,19 @@ public final class SpiderManager {
             if (jarSpec.isEmpty()) {
                 throw new IllegalStateException("站点未配置 Spider JAR");
             }
+            if (!jarSpidersSupported()) {
+                // Measured on the affected TV: a config whose sites are all JAR spiders (饭太硬,
+                // 王二小) makes the app load DexClassLoader plugins until the process dies ~50s after
+                // launch, with no Java exception and no log. On API < 21 the JARs cannot work anyway
+                // — Dalvik rejects their bytecode with VerifyError — so the honest answer is to refuse
+                // them once, record why, and let every later load and search skip the site.
+                String reason = "该站点需要 Android 5.0 以上的插件运行环境（本机 "
+                        + android.os.Build.VERSION.SDK_INT + "，JAR 无法加载）";
+                compatibility.record(site, reason, true);
+                IllegalStateException refused = new IllegalStateException(reason);
+                trace.failure(refused);
+                throw refused;
+            }
             String className = spiderClassName(site.api);
             LoadedJar loaded = loadedJar(jarSpec);
             String sessionKey = jarSpec + "|" + siteIdentity(site) + "|" + className
@@ -771,6 +784,19 @@ public final class SpiderManager {
     }
 
     private static String safe(String value) { return value == null ? "" : value; }
+
+    /**
+     * JAR spiders need a runtime that can verify modern bytecode. Android 4.4 (Dalvik) cannot, and
+     * repeatedly trying costs the whole process, so they are refused on this platform.
+     */
+    public static boolean jarSpidersSupported() {
+        return jarSpidersSupportedFor(android.os.Build.VERSION.SDK_INT);
+    }
+
+    /** Threshold logic, separated so it can be tested on any runtime. */
+    static boolean jarSpidersSupportedFor(int sdkInt) {
+        return sdkInt >= 21;
+    }
 
     private static String siteIdentity(TvBoxConfig.Site site) {
         return safe(site.sourceId) + "|" + safe(site.key);

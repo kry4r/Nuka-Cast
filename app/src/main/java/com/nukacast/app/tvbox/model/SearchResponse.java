@@ -5,6 +5,8 @@ import java.util.List;
 
 public final class SearchResponse {
     public String keyword;
+    /** Set when an initials query was expanded to this real title before searching. */
+    public String expandedKeyword = "";
     public long elapsedMs;
     public int searchedSites;
     public int failedSites;

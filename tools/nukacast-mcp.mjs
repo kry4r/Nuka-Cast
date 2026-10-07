@@ -174,6 +174,37 @@ readline.on("line", (line) => {
   void handle(message)
 })
 
+/*
+ * The same tools are reachable from a shell, which is how a debug session starts before an MCP
+ * client is configured:
+ *
+ *   NUKACAST_HOST=192.168.5.3:9978 node tools/nukacast-mcp.mjs --list
+ *   NUKACAST_HOST=192.168.5.3:9978 node tools/nukacast-mcp.mjs --call nukacast_snapshot
+ *   NUKACAST_HOST=192.168.5.3:9978 node tools/nukacast-mcp.mjs --call nukacast_search '{"keyword":"庆余年"}'
+ */
+const cliIndex = process.argv.indexOf("--call")
+if (cliIndex >= 0) {
+  const tool = process.argv[cliIndex + 1]
+  let args = {}
+  const rawArgs = process.argv[cliIndex + 2]
+  if (rawArgs) {
+    try {
+      args = JSON.parse(rawArgs)
+    } catch (error) {
+      console.error(`参数不是合法 JSON：${error.message}`)
+      process.exit(2)
+    }
+  }
+  const result = await callTool(tool, args).catch((error) => ({ error: `${error.name}: ${error.message}` }))
+  process.stdout.write(typeof result === "string" ? result : JSON.stringify(result, null, 2))
+  process.stdout.write("\n")
+  process.exit(0)
+}
+if (process.argv.includes("--list")) {
+  for (const tool of TOOLS) console.log(`${tool.name}\n    ${tool.description.split(/\n/)[0]}`)
+  process.exit(0)
+}
+
 async function handle(message) {
   const { id, method, params } = message
   try {

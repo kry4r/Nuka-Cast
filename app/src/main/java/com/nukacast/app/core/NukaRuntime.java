@@ -59,6 +59,7 @@ public final class NukaRuntime {
         searchEngine.useHealthStore(siteHealthStore);
         contentService = new TvBoxContentService(tvBoxRepository, spiderManager, storageLibrary);
         contentService.useHealthStore(siteHealthStore);
+        contentService.useTitleIndex(searchEngine.titles());
         liveService = new LiveService(tvBoxRepository, tvBoxRepository.getLiveSourceStore());
         mediaLibrary = new MediaLibraryStore(this.context);
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
