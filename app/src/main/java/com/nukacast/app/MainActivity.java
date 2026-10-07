@@ -1198,8 +1198,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 try {
                     final String title = detail.name + " · " + episode.name;
-                    final PlaybackInfo info = runtime.getContentService().resolve(detail.sourceId,
-                            detail.siteKey, source.name, episode.id, title);
+                    final PlaybackInfo info = runtime.getContentService().resolvePlayable(
+                            detail.sourceId, detail.siteKey, source.name, episode.id, detail.vodId,
+                            title);
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             PendingPlayback pending = PendingPlayback.episode(title, info,
@@ -1228,8 +1229,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 try {
                     final String title = item.name + (item.episodeName.isEmpty()
                             ? "" : " · " + item.episodeName);
-                    final PlaybackInfo info = runtime.getContentService().resolve(item.sourceId,
-                            item.siteKey, item.playSource, item.episodeId, title);
+                    final PlaybackInfo info = runtime.getContentService().resolvePlayable(
+                            item.sourceId, item.siteKey, item.playSource, item.episodeId,
+                            item.vodId, title);
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             PendingPlayback pending = PendingPlayback.resume(title, info, item);

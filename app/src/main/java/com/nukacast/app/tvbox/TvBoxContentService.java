@@ -242,6 +242,74 @@ public final class TvBoxContentService {
         homeFailures.retainSites(sites);
     }
 
+    /**
+     * Resolves an episode, trying the item's other lines when this one yields nothing playable.
+     *
+     * <p>Real example: 光速资源 lists two lines for the same episode — {@code gsyun} publishes a
+     * player page and {@code gsm3u8} the playlist itself. Asking the user to discover the second one
+     * is exactly what "没法播放" was; every mainstream player switches line automatically, and so does
+     * this method (at most a few extra requests, CMS only).
+     *
+     * @param vodId item id, needed to enumerate the other lines; may be empty when unknown.
+     */
+    public PlaybackInfo resolvePlayable(String sourceId, String siteKey, String flag, String episodeId,
+                                        String vodId, String title) throws Exception {
+        PlaybackInfo first = resolve(sourceId, siteKey, flag, episodeId, title);
+        if (first.direct && !first.url.isEmpty()) return first;
+        if (isStorage(sourceId) || vodId == null || vodId.isEmpty()) return first;
+        TvBoxConfig.Site site;
+        try {
+            site = requireSite(sourceId, siteKey);
+        } catch (Exception missing) {
+            return first;
+        }
+        if (site.type == 3) return first;
+        MediaDetail detail;
+        try {
+            detail = detail(sourceId, siteKey, vodId);
+        } catch (Exception failed) {
+            AppLog.d("解析", "换线时无法获取剧集信息：" + message(failed));
+            return first;
+        }
+        List<MediaDetail.PlaySource> lines = detail.playSources;
+        if (lines == null || lines.size() < 2) return first;
+        int episodeIndex = indexOfEpisode(lines, flag, episodeId);
+        int tried = 0;
+        for (MediaDetail.PlaySource line : lines) {
+            if (line == null || line.episodes == null || line.episodes.isEmpty()) continue;
+            if (line.name != null && line.name.equals(flag)) continue;
+            if (tried >= MAX_LINE_ATTEMPTS) break;
+            tried++;
+            MediaDetail.Episode candidate = episodeIndex >= 0 && episodeIndex < line.episodes.size()
+                    ? line.episodes.get(episodeIndex) : line.episodes.get(0);
+            try {
+                PlaybackInfo attempt = resolve(sourceId, siteKey, line.name, candidate.id, title);
+                if (attempt.direct && !attempt.url.isEmpty()) {
+                    AppLog.i("解析", "原线路不可用，已自动切换到 [" + safe(line.name) + "]");
+                    return attempt;
+                }
+            } catch (Exception ignored) {
+                // Try the next line; the first line's error is the one reported if none works.
+            }
+        }
+        return first;
+    }
+
+    /** Index of the episode being played inside its own line, so other lines match episode numbers. */
+    private static int indexOfEpisode(List<MediaDetail.PlaySource> lines, String flag, String episodeId) {
+        for (MediaDetail.PlaySource line : lines) {
+            if (line == null || line.episodes == null) continue;
+            if (flag != null && line.name != null && !line.name.equals(flag)) continue;
+            for (int i = 0; i < line.episodes.size(); i++) {
+                if (line.episodes.get(i) != null && episodeId != null
+                        && episodeId.equals(line.episodes.get(i).id)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
     public PlaybackInfo resolve(String sourceId, String siteKey, String flag, String episodeId,
                                 String title) throws Exception {
         if (isStorage(sourceId)) return requireStorage().resolve(episodeId, title);
@@ -288,6 +356,8 @@ public final class TvBoxContentService {
     }
 
     private static final int MAX_PARSER_ATTEMPTS = 3;
+    /** How many other lines are tried before giving up on an episode. */
+    private static final int MAX_LINE_ATTEMPTS = 3;
 
     /**
      * Parse endpoints are raced on a small pool with one shared deadline.

@@ -122,3 +122,26 @@ node tools/nukacast-watch.mjs --host 192.168.5.3:9978      # 崩溃取证（外�
 | 集数页字号过大、排版拥挤 | `DetailScreen`：紧凑网格（76×34dp、8 列、6dp 间距）|
 | 离开影视页后类型筛选仍高亮 | `showPage` 中清空筛选 |
 | 站点体检会走完全部站点 | 内存预算检查 + 每站点释放会话 + 跳过不可用站点 |
+
+## 9. v0.4.2：播放质量与可用性（全部由真机/模拟器实测驱动）
+
+### 9.1 实测发现（API 19 x86 模拟器 + 小体积测试流）
+
+| 现象 | 测量 | 结论 |
+| --- | --- | --- |
+| 「太糊了」 | `/api/player` 显示选中 `320x184@246k`，而清单里有 `1280x720@2.1M` 与 `1920x1080@6.2M` | ExoPlayer 的自适应按带宽估算挑最低档；`forceHighestSupportedBitrate` 不起作用 |
+| 强制最高档后「一直缓冲」 | 覆盖到 1080p 变体后 `state=buffering` 且永不前进 | 该解码器不支持 1080p（`format_supported=NO_EXCEEDS_CAPABILITIES`），既不报错也不出画 |
+| 部分线路「未解析出可播放地址」 | `https://v.gsuus.com/play/<id>` 页面里是 `const vid = '.../index.m3u8'` | 解析正则只认 `url=` 变量；且旧实现用 `HttpURLConnection`，在 API 19 上对该站点 TLS 失败 |
+| `/api/debug/play` 永远 400「不支持的播放地址」 | 参数顺序写反：`play(ctx, title, url, …)` | 调试接口自己坏掉了 |
+
+### 9.2 修复
+
+- **画质**：按“解码器真正支持”筛选变体（`MediaCodecInfo.isFormatSupported`），在其中选像素最大（同尺寸取最高码率）的一档并显式 override；同尺寸不同码率的自适应保留。
+- **保底**：① 强制最高档后 8 秒无画面 → 自动回到自适应；② 解码失败 → 先换软件解码（持久化，设备属性）；③ 仍失败 → 放弃强制、回到自适应重播。
+- **换线**：`resolvePlayable()` —— 当前线路拿不到可播地址时，自动尝试同一剧目的其他线路（最多 3 条，按集号对齐），电视端点播与 `/api/play` 都走这条路径。
+- **播放页解析**：改用应用 OkHttp（内置根证书 + Conscrypt），并识别 `url/vid/video/src` 变量名。
+- **推荐源**：加回随包的 `asset://sources/starter.json`（7 个纯 JSON 接口站点，Android 4.4 可用），排在饭太硬/王二小之前；后两者在 API < 21 上无法工作（插件仓）。
+- **调试接口**：修好 `/api/debug/play` 的参数顺序；`/api/player` 现在返回实际选中的视频轨道（尺寸/码率/编码）、可见的全部变体、当前解码偏好，因此「糊/不清晰」可以用数字回答。
+
+验证：55 suites / 223 unit tests 全通过 · lint 0 error / 4 warning · assembleDebug + androidTest 编译通过 ·
+模拟器实测：`state=playing`，位置持续推进（4s→35s），选中轨道与全部变体均可在 `/api/player` 查到。

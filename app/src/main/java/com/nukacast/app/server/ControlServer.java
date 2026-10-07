@@ -420,7 +420,7 @@ public final class ControlServer extends NanoHTTPD {
         // Probe first: a URL that answers 403/404 explains a black screen long before the player
         // reports "source error", and that response is the exact condition that used to crash the app.
         payload.put("probe", ProbeTool.run(url, "GET"));
-        runtime.getPlayerController().play(runtime.getContext(), title, url, headers);
+        runtime.getPlayerController().play(runtime.getContext(), url, title, headers);
         payload.put("player", runtime.getPlayerController().snapshot());
         return payload;
     }
@@ -708,8 +708,8 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/play".equals(path) && Method.POST.equals(session.getMethod())) {
             ContentRequest request = body(session, ContentRequest.class);
-            PlaybackInfo info = runtime.getContentService().resolve(request.sourceId, request.siteKey,
-                    request.flag, request.episodeId, request.title);
+            PlaybackInfo info = runtime.getContentService().resolvePlayable(request.sourceId,
+                    request.siteKey, request.flag, request.episodeId, request.vodId, request.title);
             if (!info.direct) throw new IllegalArgumentException(
                     info.error.isEmpty() ? "无法解析播放地址" : info.error);
             com.nukacast.app.tvbox.model.SearchItem item = new com.nukacast.app.tvbox.model.SearchItem();

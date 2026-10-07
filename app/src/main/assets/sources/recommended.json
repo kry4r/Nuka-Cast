@@ -1,7 +1,15 @@
 {
   "verifiedAt": "2026-10-07",
-  "note": "只保留饭太硬与王二小两个点播源，以及一个短剧源（非凡资源·短剧，CMS 接口，剧集页自动解析）。注意：这两个点播仓的站点全部是插件站点（type 3，需要配置自带的 JAR），Android 5.0 以下的设备无法加载它们的 JAR。",
+  "note": "饭太硬与王二小（按要求保留）是插件仓：53/96 个站点全部需要它们各自的 Spider JAR，Android 5.0 以下无法加载（Dalvik 校验失败），在 4.4 电视上会因此反复加载插件。NukaCast 内置片源是随包的纯 JSON 接口站点，任何版本都能搜索与直连播放；短剧用非凡资源·短剧（CMS 接口，剧集页自动解析成 m3u8）。",
   "items": [
+    {
+      "id": "vod-bundled",
+      "kind": "vod",
+      "group": "点播",
+      "name": "NukaCast 内置片源（纯接口）",
+      "url": "asset://sources/starter.json",
+      "note": "随包内置的 7 个纯 JSON 接口站点（光速/豪华/量子/非凡/电影天堂/好剧/暴风），无需插件运行时，Android 4.4 及以上都能用"
+    },
     {
       "id": "vod-fantuan",
       "kind": "vod",

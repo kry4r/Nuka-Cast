@@ -2,13 +2,14 @@ package com.nukacast.app.tvbox;
 
 import com.nukacast.app.diagnostics.AppLog;
 
-import java.io.InputStream;
-import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
  * Turns a MacCMS "share" player page into the media URL it wraps.
@@ -30,8 +31,9 @@ public final class MaccmsShareResolver {
     private static final long CACHE_TTL_MS = 10 * 60 * 1000L;
     private static final int MAX_CACHE = 64;
     private static final Pattern[] MEDIA_PATTERNS = {
-            // const url = "/20260918/49391_69162221/index.m3u8?sign=..." (current share theme)
-            Pattern.compile("(?:const|let|var|window\\.)?\\s*url\\s*[:=]\\s*[\"']([^\"']+)[\"']"),
+            // const url = "/20260918/49391_69162221/index.m3u8?sign=..." (current share theme).
+            // Some players name the variable vid (v.gsuus.com/play/<id>), so several names are accepted.
+            Pattern.compile("(?:const|let|var|window\\.)?\\s*(?:url|vid|video|source|src)\\s*[:=]\\s*[\"']([^\"']+)[\"']"),
             // player_aaaa = {"url":"https:\\/\\/...\\/index.m3u8","url_next":...}
             Pattern.compile("\"url\"\\s*:\\s*\"([^\"]+)\""),
             // Any absolute media link in the page.
@@ -103,41 +105,30 @@ public final class MaccmsShareResolver {
     }
 
     private static String fetch(String url, String referer) {
-        // Share pages are served over HTTPS by some back ends; API 19 needs Conscrypt for TLS 1.2.
-        com.nukacast.app.net.ConscryptTls.install();
-        HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) new URL(url).openConnection();
-            connection.setInstanceFollowRedirects(true);
-            connection.setConnectTimeout(10_000);
-            connection.setReadTimeout(15_000);
-            connection.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android 9; TV) AppleWebKit/537.36 Chrome/120 Safari/537.36");
-            connection.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*");
-            if (referer != null && !referer.isEmpty()) {
-                connection.setRequestProperty("Referer", referer);
-            }
-            if (connection.getResponseCode() >= 400) {
-                AppLog.d(TAG, "播放页返回 HTTP " + connection.getResponseCode());
-                return null;
-            }
-            InputStream stream = connection.getInputStream();
-            StringBuilder page = new StringBuilder();
-            try {
-                byte[] buffer = new byte[8192];
-                int read;
-                while (page.length() < MAX_PAGE_BYTES && (read = stream.read(buffer)) > 0) {
-                    page.append(new String(buffer, 0, read, "UTF-8"));
+            Request.Builder request = new Request.Builder().url(url)
+                    .header("User-Agent",
+                            "Mozilla/5.0 (Linux; Android 9; TV) AppleWebKit/537.36 Chrome/120 Safari/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,*/*");
+            if (referer != null && !referer.isEmpty()) request.header("Referer", referer);
+            // OkHttp rather than HttpURLConnection: the app's client carries the bundled root
+            // certificates and Conscrypt TLS 1.2. With the platform stack alone these hosts failed to
+            // handshake on Android 4.4 (current Let's Encrypt roots are not in its trust store), and
+            // the episode then looked unplayable even though the address was sitting in the page.
+            try (Response response = com.nukacast.app.net.HttpStack.client()
+                    .newCall(request.build()).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    AppLog.d(TAG, "播放页返回 HTTP " + response.code());
+                    return null;
                 }
-            } finally {
-                stream.close();
+                String page = com.nukacast.app.net.ResponseBodies.string(response.body(),
+                        MAX_PAGE_BYTES, java.nio.charset.Charset.forName("UTF-8"));
+                return extract(page, url);
             }
-            return extract(page.toString(), url);
         } catch (Throwable error) {
-            AppLog.d(TAG, "播放页解析失败：" + error.getClass().getSimpleName());
+            AppLog.d(TAG, "播放页解析失败：" + error.getClass().getSimpleName()
+                    + (error.getMessage() == null ? "" : " " + error.getMessage()));
             return null;
-        } finally {
-            if (connection != null) connection.disconnect();
         }
     }
 
