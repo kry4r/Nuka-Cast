@@ -111,7 +111,10 @@ public final class DlnaService {
         if ("GetMediaInfo".equals(action)) {
             Map<String, String> out = new LinkedHashMap<String, String>();
             out.put("NrTracks", renderer.currentUri().isEmpty() ? "0" : "1");
-            out.put("MediaDuration", DlnaRenderer.formatTime(renderer.durationMs()));
+            // With nothing loaded a leftover duration from the last session is a lie; control points
+            // show it as the length of an empty player.
+            out.put("MediaDuration", DlnaRenderer.formatTime(
+                    renderer.loaded() ? renderer.durationMs() : 0));
             out.put("CurrentURI", renderer.currentUri());
             out.put("CurrentURIMetaData", renderer.currentMetadata());
             out.put("NextURI", "");
@@ -124,7 +127,8 @@ public final class DlnaService {
         if ("GetPositionInfo".equals(action)) {
             Map<String, String> out = new LinkedHashMap<String, String>();
             out.put("Track", renderer.currentUri().isEmpty() ? "0" : "1");
-            out.put("TrackDuration", DlnaRenderer.formatTime(renderer.durationMs()));
+            out.put("TrackDuration", DlnaRenderer.formatTime(
+                    renderer.loaded() ? renderer.durationMs() : 0));
             out.put("TrackMetaData", renderer.currentMetadata());
             out.put("TrackURI", renderer.currentUri());
             out.put("RelTime", DlnaRenderer.formatTime(renderer.positionMs()));

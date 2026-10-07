@@ -155,6 +155,83 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {} },
   },
   {
+    name: "nukacast_epg",
+    description:
+      "Programme list of a live channel as the TV fetched it (what is on now and next), plus whether the " +
+      "source has a guide at all.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceId: { type: "string", description: "Live source id (see nukacast_live_catalog)." },
+        channelId: { type: "string", description: "Channel id from nukacast_live_catalog." },
+      },
+      required: ["sourceId", "channelId"],
+    },
+  },
+  {
+    name: "nukacast_live_catalog",
+    description: "Live sources and their channels grouped as the TV lists them (ids for nukacast_epg).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceId: { type: "string", description: "Omit to list the sources instead of one source's channels." },
+      },
+    },
+  },
+  {
+    name: "nukacast_live_search",
+    description: "Find a channel by name or pinyin initials across a source's channels (the TV's own search).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Channel name or initials, e.g. 湖南 or hnws." },
+        source: { type: "string", description: "Optional: switch to the live source whose name contains this." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "nukacast_settings",
+    description:
+      "Read or change the TV's playback settings: autoNextEpisode, quality (auto|highest|lowest), softDecoder. " +
+      "Omit name/value to read them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "autoNextEpisode | quality | softDecoder" },
+        value: { type: "string", description: "1/0 for the switches, auto|highest|lowest for quality." },
+      },
+    },
+  },
+  {
+    name: "nukacast_library",
+    description: "Favourites and watch history as recorded on the TV (nukacast_favorite toggles one).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "nukacast_favorite",
+    description: "Toggles a favourite on the TV, exactly like holding OK on a card does.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceId: { type: "string" },
+        siteKey: { type: "string" },
+        vodId: { type: "string" },
+        name: { type: "string" },
+        poster: { type: "string" },
+        remarks: { type: "string" },
+      },
+      required: ["name", "vodId"],
+    },
+  },
+  {
+    name: "nukacast_dlna",
+    description:
+      "DLNA renderer state: whether discovery is running, how many M-SEARCH requests were answered, and " +
+      "what is loaded (the form's control URL is in the reply, for tools/dlna-cast.mjs).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "nukacast_export",
     description: "Download the full text diagnostic bundle the TV's export button produces (same content, without touching the TV).",
     inputSchema: { type: "object", properties: {} },
@@ -197,12 +274,15 @@ if (cliIndex >= 0) {
   }
   const result = await callTool(tool, args).catch((error) => ({ error: `${error.name}: ${error.message}` }))
   process.stdout.write(typeof result === "string" ? result : JSON.stringify(result, null, 2))
+  // Closing the reader first keeps Node from asserting on teardown when stdout is a closed pipe
+  // (e.g. `... --call nukacast_library | head`).
+  readline.close()
   process.stdout.write("\n")
-  process.exit(0)
+  process.exitCode = 0
 }
 if (process.argv.includes("--list")) {
   for (const tool of TOOLS) console.log(`${tool.name}\n    ${tool.description.split(/\n/)[0]}`)
-  process.exit(0)
+  process.exitCode = 0
 }
 
 async function handle(message) {
@@ -284,6 +364,39 @@ async function callTool(name, args) {
       return request("POST", "/api/debug/play", args, 90_000)
     case "nukacast_player":
       return request("GET", "/api/debug/player")
+    case "nukacast_epg": {
+      const params = new URLSearchParams({ sourceId: args.sourceId, channelId: args.channelId })
+      return request("GET", `/api/debug/epg?${params}`)
+    }
+    case "nukacast_live_catalog": {
+      if (args.sourceId) {
+        const params = new URLSearchParams({ sourceId: args.sourceId })
+        return request("GET", `/api/live/catalog?${params}`)
+      }
+      return request("GET", "/api/live/sources")
+    }
+    case "nukacast_live_search": {
+      const params = new URLSearchParams({ query: args.query })
+      if (args.source) params.set("source", args.source)
+      return request("GET", `/api/debug/live?${params}`)
+    }
+    case "nukacast_settings": {
+      if (!args.name) return request("GET", "/api/settings")
+      return request("POST", "/api/settings", { name: args.name, value: args.value ?? "" })
+    }
+    case "nukacast_library":
+      return request("GET", "/api/library")
+    case "nukacast_favorite":
+      return request("POST", "/api/debug/favorite", {
+        sourceId: args.sourceId,
+        siteKey: args.siteKey,
+        vodId: args.vodId,
+        name: args.name,
+        poster: args.poster,
+        remarks: args.remarks,
+      })
+    case "nukacast_dlna":
+      return request("GET", "/api/debug/dlna")
     case "nukacast_export":
       return requestText("GET", "/api/logs/export")
     default:

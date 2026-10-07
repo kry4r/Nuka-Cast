@@ -108,6 +108,11 @@ public final class DlnaRenderer {
         sink.pause();
     }
 
+    /** True while a URI is loaded (including while paused); false after Stop. */
+    public synchronized boolean loaded() {
+        return !currentUri.isEmpty() && !NO_MEDIA.equals(state);
+    }
+
     public synchronized void stop() {
         state = currentUri.isEmpty() ? NO_MEDIA : STOPPED;
         positionAnchorMs = 0;
