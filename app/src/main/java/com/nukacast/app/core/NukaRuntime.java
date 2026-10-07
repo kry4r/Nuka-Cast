@@ -5,6 +5,7 @@ import android.content.Context;
 import com.nukacast.app.airplay.AirPlayReceiver;
 import com.nukacast.app.drama.DramaService;
 import com.nukacast.app.live.LiveService;
+import com.nukacast.app.sources.RecommendedSources;
 import com.nukacast.app.library.MediaLibraryStore;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.server.ControlServer;
@@ -28,6 +29,7 @@ public final class NukaRuntime {
     private final TvBoxRepository tvBoxRepository;
     private final SpiderManager spiderManager;
     private final DramaService dramaService;
+    private final RecommendedSources recommendedSources;
     private final StorageLibrary storageLibrary;
     private final SearchEngine searchEngine;
     private final TvBoxContentService contentService;
@@ -44,6 +46,8 @@ public final class NukaRuntime {
         tvBoxRepository = new TvBoxRepository(this.context, sourceStore);
         spiderManager = new SpiderManager(this.context);
         dramaService = new DramaService(this.context, tvBoxRepository, spiderManager);
+        recommendedSources = new RecommendedSources(this.context, sourceStore,
+                tvBoxRepository.getLiveSourceStore(), dramaService.registry());
         storageLibrary = new StorageLibrary(this.context);
         searchEngine = new SearchEngine(this.context, tvBoxRepository, spiderManager, storageLibrary);
         contentService = new TvBoxContentService(tvBoxRepository, spiderManager, storageLibrary);
@@ -99,6 +103,7 @@ public final class NukaRuntime {
     public TvBoxContentService getContentService() { return contentService; }
     public SpiderManager getSpiderManager() { return spiderManager; }
     public DramaService getDramaService() { return dramaService; }
+    public RecommendedSources getRecommendedSources() { return recommendedSources; }
     public StorageLibrary getStorageLibrary() { return storageLibrary; }
     public LiveService getLiveService() { return liveService; }
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }

@@ -44,6 +44,7 @@ public final class TvBoxRepository {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
     private final Context context;
     private final SourceStore sourceStore;
+    private final LiveSourceStore liveSourceStore;
     private final Gson gson = new Gson();
     private final ConfigDecoder decoder = new ConfigDecoder(gson);
     private final ConfigPayloadResolver payloadResolver = new ConfigPayloadResolver(decoder);
@@ -53,7 +54,12 @@ public final class TvBoxRepository {
     public TvBoxRepository(Context context, SourceStore sourceStore) {
         this.context = context.getApplicationContext();
         this.sourceStore = sourceStore;
+        this.liveSourceStore = new LiveSourceStore(this.context);
         restoreCache();
+    }
+
+    public LiveSourceStore getLiveSourceStore() {
+        return liveSourceStore;
     }
 
     public Context getContext() {
@@ -107,6 +113,16 @@ public final class TvBoxRepository {
             if (!source.enabled) continue;
             TvBoxConfig config = configs.get(source.id);
             if (config != null) result.addAll(config.lives);
+        }
+        // User playlists come last and stay independent of every TVBox config.
+        for (com.nukacast.app.tvbox.model.LivePlaylist playlist : liveSourceStore.enabled()) {
+            TvBoxConfig.LiveSource live = new TvBoxConfig.LiveSource();
+            live.name = playlist.name;
+            live.url = playlist.url;
+            live.epg = playlist.epg;
+            live.logo = playlist.logo;
+            live.sourceId = "user:" + playlist.id;
+            result.add(live);
         }
         return result;
     }

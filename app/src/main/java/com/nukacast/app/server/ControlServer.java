@@ -29,8 +29,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -103,6 +105,42 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/live".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getLiveService().sources());
         }
+        if ("/api/live/sources".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, liveSources());
+        }
+        if ("/api/live/sources".equals(path) && Method.POST.equals(session.getMethod())) {
+            LiveSourceRequest request = body(session, LiveSourceRequest.class);
+            com.nukacast.app.tvbox.model.LivePlaylist created =
+                    runtime.getTvBoxRepository().getLiveSourceStore().add(request.name, request.url);
+            return json(Response.Status.CREATED, created);
+        }
+        if (path.startsWith("/api/live/sources/") && Method.DELETE.equals(session.getMethod())) {
+            String id = path.substring("/api/live/sources/".length());
+            boolean removed = runtime.getTvBoxRepository().getLiveSourceStore().remove(id);
+            return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
+                    Collections.singletonMap("removed", removed));
+        }
+        if (path.startsWith("/api/live/sources/") && path.endsWith("/enabled")
+                && Method.POST.equals(session.getMethod())) {
+            String id = path.substring("/api/live/sources/".length(),
+                    path.length() - "/enabled".length());
+            DramaEnabledRequest request = body(session, DramaEnabledRequest.class);
+            boolean updated = runtime.getTvBoxRepository().getLiveSourceStore()
+                    .setEnabled(id, request.enabled);
+            return json(updated ? Response.Status.OK : Response.Status.NOT_FOUND,
+                    Collections.singletonMap("enabled", updated && request.enabled));
+        }
+        if ("/api/recommended".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, recommendedSources());
+        }
+        if ("/api/recommended/verify".equals(path) && Method.POST.equals(session.getMethod())) {
+            RecommendedVerifyRequest request = body(session, RecommendedVerifyRequest.class);
+            return json(Response.Status.OK, verifyRecommended(request));
+        }
+        if ("/api/recommended/add".equals(path) && Method.POST.equals(session.getMethod())) {
+            RecommendedAddRequest request = body(session, RecommendedAddRequest.class);
+            return json(Response.Status.OK, addRecommended(request));
+        }
         if ("/api/live/catalog".equals(path) && Method.GET.equals(session.getMethod())) {
             String sourceId = session.getParms().get("sourceId");
             if (sourceId == null || sourceId.isEmpty()) throw new IllegalArgumentException("缺少直播源 ID");
@@ -131,9 +169,8 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/drama/providers".equals(path) && Method.POST.equals(session.getMethod())) {
             DramaProviderRequest request = body(session, DramaProviderRequest.class);
-            DramaProviderConfig provider = request.suggested
-                    ? runtime.getDramaService().registry().addSuggested()
-                    : runtime.getDramaService().registry().add(request.name, request.url);
+            DramaProviderConfig provider = runtime.getDramaService().registry()
+                    .add(request.name, request.url);
             return json(Response.Status.CREATED, provider);
         }
         if (path.startsWith("/api/drama/providers/") && Method.DELETE.equals(session.getMethod())) {
@@ -167,6 +204,37 @@ public final class ControlServer extends NanoHTTPD {
             DramaLineResult result = runtime.getDramaService().lines(
                     request.providerId, request.dramaId, request.sourceId);
             return json(Response.Status.OK, result);
+        }
+        if ("/api/drama/browse".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaBrowseRequest request = body(session, DramaBrowseRequest.class);
+            return json(Response.Status.OK, runtime.getDramaService().browse(
+                    request.providerId, request.categoryId, request.page));
+        }
+        if ("/api/drama/play".equals(path) && Method.POST.equals(session.getMethod())) {
+            DramaPlayRequest request = body(session, DramaPlayRequest.class);
+            com.nukacast.app.drama.model.DramaEpisode episode = runtime.getDramaService()
+                    .episode(request.providerId, request.dramaId, request.index);
+            com.nukacast.app.tvbox.model.SearchItem item =
+                    new com.nukacast.app.tvbox.model.SearchItem();
+            item.sourceId = "drama:" + safe(request.providerId);
+            item.siteKey = safe(request.providerId);
+            item.siteName = "短剧直连";
+            item.vodId = safe(request.dramaId);
+            item.name = safe(request.title).isEmpty() ? episode.name : request.title;
+            item.poster = safe(request.poster);
+            item.remarks = episode.name;
+            runtime.getMediaLibrary().start(item, "drama", String.valueOf(episode.index),
+                    episode.name);
+            String title = safe(request.title).isEmpty()
+                    ? episode.name : request.title + " · " + episode.name;
+            runtime.getPlayerController().play(context, episode.playUrl, title, episode.headers);
+            Map<String, Object> payload = new HashMap<String, Object>();
+            payload.put("title", title);
+            payload.put("url", episode.playUrl);
+            payload.put("index", episode.index);
+            payload.put("episodeName", episode.name);
+            payload.put("headers", episode.headers);
+            return json(Response.Status.ACCEPTED, payload);
         }
         if ("/api/sources".equals(path) && Method.POST.equals(session.getMethod())) {
             SourceRequest request = body(session, SourceRequest.class);
@@ -484,16 +552,127 @@ public final class ControlServer extends NanoHTTPD {
         DramaService service = runtime.getDramaService();
         Map<String, Object> result = new HashMap<String, Object>();
         result.put("providers", service.registry().providers());
-        result.put("suggestedName", com.nukacast.app.drama.DramaCatalogRegistry.SUGGESTED_NAME);
-        result.put("suggestedUrl", com.nukacast.app.drama.DramaCatalogRegistry.SUGGESTED_BASE_URL);
+        return result;
+    }
+
+    /** User playlists plus the live sources that come from TVBox configs, marked for the UI. */
+    private List<Map<String, Object>> liveSources() {
+        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
+        for (com.nukacast.app.tvbox.model.LivePlaylist playlist : runtime.getTvBoxRepository()
+                .getLiveSourceStore().all()) {
+            Map<String, Object> row = new HashMap<String, Object>();
+            row.put("id", playlist.id);
+            row.put("name", playlist.name);
+            row.put("url", playlist.url);
+            row.put("enabled", playlist.enabled);
+            row.put("error", playlist.error);
+            row.put("updatedAt", playlist.updatedAt);
+            row.put("user", true);
+            result.add(row);
+        }
+        for (com.nukacast.app.live.model.LiveSourceInfo info : runtime.getLiveService().sources()) {
+            Map<String, Object> row = new HashMap<String, Object>();
+            row.put("id", info.id);
+            row.put("name", info.name);
+            row.put("url", info.url);
+            row.put("enabled", true);
+            row.put("error", "");
+            row.put("updatedAt", 0L);
+            row.put("user", info.sourceId != null && info.sourceId.startsWith("user:"));
+            result.add(row);
+        }
+        return result;
+    }
+
+    private Map<String, Object> recommendedSources() {
+        com.nukacast.app.sources.RecommendedSources sources = runtime.getRecommendedSources();
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("verifiedAt", sources.verifiedAt());
+        result.put("note", sources.note());
+        result.put("items", sources.list());
+        return result;
+    }
+
+    private Map<String, Object> verifyRecommended(RecommendedVerifyRequest request) {
+        com.nukacast.app.sources.RecommendedSources sources = runtime.getRecommendedSources();
+        final List<com.nukacast.app.sources.RecommendedSource> targets =
+                new ArrayList<com.nukacast.app.sources.RecommendedSource>();
+        if (request != null && request.all) {
+            for (com.nukacast.app.sources.RecommendedSource item : sources.list()) {
+                if (request.kind == null || request.kind.isEmpty()
+                        || request.kind.equals(item.kind)) {
+                    targets.add(item);
+                }
+            }
+        } else if (request != null && request.id != null && !request.id.isEmpty()) {
+            com.nukacast.app.sources.RecommendedSource item = sources.find(request.id);
+            if (item == null) throw new IllegalArgumentException("推荐源不存在");
+            targets.add(item);
+        } else {
+            throw new IllegalArgumentException("缺少要检测的推荐源");
+        }
+        // Probes hit third-party hosts: run them in parallel so a full pass stays interactive.
+        java.util.concurrent.ExecutorService pool =
+                java.util.concurrent.Executors.newFixedThreadPool(4);
+        List<java.util.concurrent.Future<com.nukacast.app.sources.RecommendedSource.Probe>> futures =
+                new ArrayList<java.util.concurrent.Future<com.nukacast.app.sources.RecommendedSource.Probe>>();
+        for (final com.nukacast.app.sources.RecommendedSource item : targets) {
+            futures.add(pool.submit(new java.util.concurrent.Callable<
+                    com.nukacast.app.sources.RecommendedSource.Probe>() {
+                @Override public com.nukacast.app.sources.RecommendedSource.Probe call() {
+                    return sources.verify(item.id);
+                }
+            }));
+        }
+        List<com.nukacast.app.sources.RecommendedSource.Probe> probes =
+                new ArrayList<com.nukacast.app.sources.RecommendedSource.Probe>();
+        for (java.util.concurrent.Future<com.nukacast.app.sources.RecommendedSource.Probe> future
+                : futures) {
+            try {
+                probes.add(future.get(40, java.util.concurrent.TimeUnit.SECONDS));
+            } catch (Exception error) {
+                AppLog.w("推荐源", "检测未完成：" + error.getMessage());
+            }
+        }
+        pool.shutdownNow();
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("probes", probes);
+        result.put("items", sources.list());
+        return result;
+    }
+
+    private Map<String, Object> addRecommended(RecommendedAddRequest request) {
+        com.nukacast.app.sources.RecommendedSources sources = runtime.getRecommendedSources();
+        int added = 0;
+        if (request != null && request.all) {
+            added = sources.addAll(request.kind);
+        } else if (request != null && request.ids != null && !request.ids.isEmpty()) {
+            for (String id : request.ids) {
+                try {
+                    sources.add(id);
+                    added++;
+                } catch (RuntimeException error) {
+                    AppLog.w("推荐源", "添加失败 [" + id + "]：" + error.getMessage());
+                }
+            }
+        } else if (request != null && request.id != null && !request.id.isEmpty()) {
+            sources.add(request.id);
+            added = 1;
+        } else {
+            throw new IllegalArgumentException("缺少要添加的推荐源");
+        }
+        runtime.sourceHealthChanged();
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        result.put("added", added);
+        result.put("items", sources.list());
         return result;
     }
 
     private static final class SourceRequest { String name; String url; }
+    private static final class LiveSourceRequest { String name; String url; }
     private static final class DramaProviderRequest {
         String name;
         String url;
-        boolean suggested;
     }
     private static final class DramaEnabledRequest { boolean enabled; }
     private static final class DramaSearchRequest {
@@ -504,6 +683,29 @@ public final class ControlServer extends NanoHTTPD {
         String providerId;
         String dramaId;
         String sourceId;
+    }
+    private static final class DramaBrowseRequest {
+        String providerId;
+        String categoryId;
+        int page;
+    }
+    private static final class DramaPlayRequest {
+        String providerId;
+        String dramaId;
+        String title;
+        String poster;
+        int index;
+    }
+    private static final class RecommendedVerifyRequest {
+        String id;
+        String kind;
+        boolean all;
+    }
+    private static final class RecommendedAddRequest {
+        String id;
+        java.util.List<String> ids;
+        String kind;
+        boolean all;
     }
     private static final class StorageRequest {
         String name;

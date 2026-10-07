@@ -1,2 +1,3 @@
 web/index.html text eol=lf
 app/src/main/assets/web/** text eol=lf
+app/src/main/assets/sources/** text eol=lf
