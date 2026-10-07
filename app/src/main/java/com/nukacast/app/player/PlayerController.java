@@ -425,7 +425,11 @@ public final class PlayerController {
                         error = description;
                         AppLog.e("播放器", error, failure);
                         reportProgress();
-                        appState.updateActiveMedia("");
+                        // The media stays active on purpose. Clearing it here dropped the activity out
+                        // of full-screen playback and back to the page behind it, which is exactly the
+                        // "播放后直接闪退到主页面" the user reported: the error was never even visible.
+                        // Whoever started playback decides when it ends (back key, or the retry chain
+                        // giving up in MainActivity).
                     }
                 }
             });

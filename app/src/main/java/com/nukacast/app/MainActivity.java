@@ -1256,6 +1256,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * the failure is shown.
      */
     public void onPlaybackTick(int positionMs, int durationMs) {
+        reportPlaybackFailure();
         if (livePlayingIndex < 0 && activeDetail != null) tryNextLine();
         if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
         if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
@@ -1272,6 +1273,55 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveAutoSwitch++;
         AppLog.i("直播", "频道播放失败，自动换到下一个（第 " + liveAutoSwitch + " 次）");
         switchLiveChannel(1);
+    }
+
+    /** When the current failure was first seen, so the message stays up long enough to read. */
+    private long failureShownAt;
+    /** True once the failure was reported for the current episode. */
+    private boolean failureReported;
+
+    /**
+     * Keeps a failed playback on screen with an explanation instead of silently dropping back to the
+     * list. The retry chain and the line switch run first; this only reports what is left.
+     */
+    private void reportPlaybackFailure() {
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        boolean failed = "error".equals(playback.state);
+        if (!failed) {
+            failureReported = false;
+            failureShownAt = 0L;
+            return;
+        }
+        String reason = playback.error == null || playback.error.isEmpty()
+                ? "播放失败" : friendlyPlaybackError(playback.error);
+        if (!failureReported) {
+            failureReported = true;
+            failureShownAt = System.currentTimeMillis();
+            AppLog.w("播放器", "播放失败已上报：" + reason);
+        }
+        if (playerHud != null) {
+            boolean moreLines = lineAttempts < MAX_LINE_ATTEMPTS && activeDetail != null
+                    && activeDetail.playSources != null && activeDetail.playSources.size() > 1;
+            playerHud.showError(reason + (moreLines ? "\n正在尝试其他线路…" : "\n按返回键退出"));
+        }
+        // Give up only after the chain had its chance, and never before the message was readable.
+        if (lineAttempts >= MAX_LINE_ATTEMPTS && System.currentTimeMillis() - failureShownAt > 8000L) {
+            stopActivePlayback();
+            android.widget.Toast.makeText(this, reason, android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Turns a PlaybackException name into something a viewer can act on. */
+    private static String friendlyPlaybackError(String raw) {
+        if (raw.contains("DECODING") || raw.contains("DECODER")) {
+            return "这台电视的解码器无法播放该清晰度";
+        }
+        if (raw.contains("IO_") || raw.contains("InvalidResponseCode")) {
+            return "片源地址无法访问（可能已失效）";
+        }
+        if (raw.contains("PARSING")) return "该线路返回的内容不是视频";
+        return "播放失败：" + raw;
     }
 
     /**
