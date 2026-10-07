@@ -145,6 +145,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private final java.util.List<com.nukacast.app.live.model.LiveCatalog.Channel> livePlaying =
             new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
     private int livePlayingIndex = -1;
+    /** How many lines may be tried for one failed episode. */
+    private static final int MAX_LINE_ATTEMPTS = 3;
     /** Channel pages are 120 entries: large playlists are far too big for one screen. */
     private int liveChannelPage;
     /** Sources that failed this session, so the page can skip them. */
@@ -1254,6 +1256,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * the failure is shown.
      */
     public void onPlaybackTick(int positionMs, int durationMs) {
+        if (livePlayingIndex < 0 && activeDetail != null) tryNextLine();
         if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
         if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
         com.nukacast.app.player.PlayerController.Snapshot playback =
@@ -1269,6 +1272,39 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveAutoSwitch++;
         AppLog.i("直播", "频道播放失败，自动换到下一个（第 " + liveAutoSwitch + " 次）");
         switchLiveChannel(1);
+    }
+
+    /**
+     * Moves to another play line when the current one cannot be played.
+     *
+     * <p>Reported from the TV as "我点击主页源推荐的还是放不了": a CMS item offers several lines and
+     * the first is often dead or geo-blocked. Instead of leaving the user with an error, the next line
+     * is tried automatically - which is what the dedicated players do.
+     */
+    private void tryNextLine() {
+        if (System.currentTimeMillis() - lineSwitchAt < 6000L) return;
+        if (lineAttempts >= MAX_LINE_ATTEMPTS) return;
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        if (!"error".equals(playback.state)) {
+            if ("playing".equals(playback.state)) lineAttempts = 0;
+            return;
+        }
+        final MediaDetail detail = activeDetail;
+        MediaDetail.PlaySource next =
+                com.nukacast.app.player.LinePicker.next(detail, activeLineName);
+        if (next == null) return;
+        MediaDetail.Episode episode =
+                com.nukacast.app.player.LinePicker.episodeOf(next, activeEpisodeId);
+        if (episode == null) return;
+        lineAttempts++;
+        lineSwitchAt = System.currentTimeMillis();
+        AppLog.i("播放器", "当前线路播放失败，自动换到“" + next.name + "”（第 " + lineAttempts + " 次）");
+        if (playerHud != null) {
+            playerHud.show(detail.name + " · " + episode.name, "正在换线：" + next.name,
+                    "按返回键退出", true);
+        }
+        playEpisode(detail, next, episode, 0);
     }
 
     /** Zaps to the neighbouring channel while watching live TV. */
@@ -2086,8 +2122,22 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         firstFocus[0] = null;
     }
 
+    /** What the player is showing, so a failed line can be replaced by another one. */
+    private MediaDetail activeDetail;
+    private String activeLineName = "";
+    private String activeEpisodeId = "";
+    private String activeEpisodeName = "";
+    private int lineAttempts;
+    private long lineSwitchAt;
+
     private void playEpisode(final MediaDetail detail, final MediaDetail.PlaySource source,
                              final MediaDetail.Episode episode, final int startPositionMs) {
+        activeDetail = detail;
+        activeLineName = source == null ? "" : source.name;
+        activeEpisodeId = episode == null ? "" : episode.id;
+        activeEpisodeName = episode == null ? "" : episode.name;
+        lineAttempts = 0;
+        lineSwitchAt = System.currentTimeMillis();
         Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
         io.execute(new Runnable() {
             @Override public void run() {
@@ -2252,6 +2302,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void stopActivePlayback() {
+        activeDetail = null;
         if (runtime.getAirPlayReceiver().snapshot().sessionActive
                 || "AirPlay 镜像".equals(runtime.getState().getActiveMedia())) {
             runtime.getAirPlayReceiver().disconnectSession();

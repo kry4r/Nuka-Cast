@@ -63,9 +63,41 @@ public final class SearchEngine {
     public SearchResponse search(final SearchQuery query) throws InterruptedException {
         long startedAt = System.currentTimeMillis();
         // A query of initials cannot match Chinese titles in a CMS database. If this device has
-        // already seen the matching title (home lists, earlier results), search for that instead —
-        // which is what a user typing "LLDQ" expects to happen.
-        final String initialsExpanded = expandInitials(query);
+        // already seen a matching title (home lists, earlier results), search for that instead -
+        // which is what a user typing "LLDQ" expects to happen - preferring the canonical prefix
+        // (流浪地球) over one long sequel, and retrying with the full title if that finds nothing.
+        final List<String> initialKeywords = initialKeywords(query);
+        SearchResponse response = searchOnce(query, initialKeywords.isEmpty()
+                ? "" : initialKeywords.get(0), startedAt);
+        if (response.items.isEmpty() && initialKeywords.size() > 1) {
+            AppLog.i("搜索", "首字母结果为空，改按“" + initialKeywords.get(1) + "”再搜一次");
+            SearchQuery retry = new SearchQuery();
+            retry.keyword = initialKeywords.get(1);
+            retry.sourceId = query.sourceId;
+            retry.siteKeys = query.siteKeys;
+            retry.page = query.page;
+            retry.pageSize = query.pageSize;
+            SearchResponse second = searchOnce(retry, "", startedAt);
+            if (!second.items.isEmpty()) {
+                List<SearchItem> combined = new ArrayList<SearchItem>(response.items);
+                combined.addAll(second.items);
+                List<List<SearchItem>> groups = new ArrayList<List<SearchItem>>();
+                groups.add(combined);
+                response.items.clear();
+                response.items.addAll(SearchResultMerger.merge(groups, query.pageSize));
+                response.searchedSites += second.searchedSites;
+                response.failedSites += second.failedSites;
+                response.partial = response.partial || second.partial;
+            }
+        }
+        return response;
+    }
+
+    private SearchResponse searchOnce(final SearchQuery query, String expandedKeyword,
+                                      long startedAt) throws InterruptedException {
+        final String initialsExpanded = expandedKeyword == null || expandedKeyword.isEmpty()
+                ? null : expandedKeyword;
+        if (initialsExpanded != null) query.keyword = initialsExpanded;
         final List<TvBoxConfig.Site> sites = selectedSites(query);
         List<Callable<SiteOutcome>> calls = new ArrayList<Callable<SiteOutcome>>();
         for (final TvBoxConfig.Site site : sites) {
@@ -195,7 +227,7 @@ public final class SearchEngine {
      * Returns the real title to search for when {@code query.keyword} is initials and this device
      * knows a matching title, or null when the query should be used as typed.
      */
-    private String expandInitials(SearchQuery query) {
+    String expandInitials(SearchQuery query) {
         if (query == null || !PinyinInitials.isInitialQuery(query.keyword)) return null;
         List<String> candidates = titleIndex.match(query.keyword, 3);
         if (candidates.isEmpty()) return null;
@@ -203,6 +235,35 @@ public final class SearchEngine {
         AppLog.i("搜索", "首字母 " + query.keyword + " → 按“" + title + "”搜索");
         query.keyword = title;
         return title;
+    }
+
+    /**
+     * The keyword an initials query should really search for.
+     *
+     * <p>"LLDQ" with 流浪地球之大夏战狼 in the index must search <em>流浪地球</em>, not that one long
+     * sequel: the canonical prefix matches every site that carries any 流浪地球 title. The full title
+     * is kept as a second attempt for indexes that hold nothing but long names.
+     */
+    private List<String> initialKeywords(SearchQuery query) {
+        List<String> keywords = new ArrayList<String>();
+        String exact = expandInitials(query);
+        if (exact == null) return keywords;
+        keywords.add(canonicalTitle(exact));
+        if (!keywords.get(0).equals(exact)) keywords.add(exact);
+        return keywords;
+    }
+
+    /** Trims a title at the first subtitle/season marker: 流浪地球之大夏战狼 → 流浪地球. */
+    static String canonicalTitle(String title) {
+        if (title == null) return "";
+        String value = title.trim();
+        int cut = value.length();
+        for (String marker : new String[]{"：", ":", "（", "(", "·", "之", " ", "第"}) {
+            int index = value.indexOf(marker);
+            if (index >= 2 && index < cut) cut = index;
+        }
+        String canonical = value.substring(0, cut).replaceAll("[0-9]+$", "").trim();
+        return canonical.length() >= 2 ? canonical : value;
     }
 
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
