@@ -414,12 +414,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+/** Fetches a plain-text artifact (the diagnostic bundle) rather than JSON. */
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(path)
+  const text = await response.text()
+  if (!response.ok) throw new Error(text.slice(0, 200) || `HTTP ${response.status}`)
+  return text
+}
+
 export const api = {
   status: () => request<Status>("/api/status"),
   device: () => request<Device>("/api/device"),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   logs: () => request<LogEntry[]>("/api/logs"),
   clearLogs: () => request<{ cleared: boolean }>("/api/logs", { method: "DELETE" }),
+  exportDiagnostics: (level?: LogLevel) =>
+    requestText(`/api/logs/export${level ? `?level=${level}` : ""}`),
   sources: () => request<Source[]>("/api/sources"),
   sites: () => request<Site[]>("/api/sites"),
   addSource: (name: string, url: string) => request<Source>("/api/sources", {

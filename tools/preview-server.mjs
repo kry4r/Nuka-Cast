@@ -117,6 +117,26 @@ const api = {
     { id: "src-2", name: "小盒子多仓", url: "http://xhztv.top/dc", kind: "warehouse", enabled: true, error: "", searchError: "", siteCount: 0, liveCount: 0, latencyMs: 320, parentId: "" },
     { id: "src-2-1", name: "🐔肥猫", url: "http://我不是.肥猫.live/接口禁止贩卖", kind: "single", enabled: true, error: "", searchError: "最近搜索全部失败", siteCount: 18, liveCount: 2, latencyMs: 1500, parentId: "src-2" },
   ],
+  "/api/logs/export": {
+    __text: true,
+    body: () => {
+      const lines = []
+      lines.push("NukaCast 诊断报告")
+      lines.push("生成时间：" + new Date().toLocaleString())
+      lines.push("（这是预览服务的示例内容，电视端导出的文件包含真实日志与设备状态）")
+      lines.push("")
+      lines.push("== 设备 ==")
+      lines.push("厂商/型号：Sharp SHARP-TVC")
+      lines.push("系统：Android 4.4.2（API 19） · ABI armeabi-v7a")
+      lines.push("")
+      lines.push("== 运行日志 ==")
+      for (const entry of api["/api/logs"]) {
+        lines.push(new Date(entry.timestamp).toISOString() + "  " + entry.level + "  [" + entry.tag + "]")
+        lines.push(entry.message + (entry.repeats ? "（重复 " + entry.repeats + " 次）" : ""))
+      }
+      return lines.join("\n")
+    },
+  },
   "/api/logs": [
     { level: "INFO", tag: "片源", message: "配置刷新成功 [PyramidStore 单仓]：23 个站点", timestamp: now - 20000 },
     { level: "WARN", tag: "短剧", message: "目录详情失败：目录 HTTP 502（api.ffzyapi.com）", timestamp: now - 60000 },
@@ -271,6 +291,13 @@ createServer(async (request, response) => {
       return
     }
     const body = request.method === "POST" ? await readBody(request) : null
+    if (payload.__text) {
+      // Plain-text artifacts (the diagnostic bundle) keep their own content type.
+      const text = typeof payload.body === "function" ? payload.body() : String(payload.body)
+      response.writeHead(200, { "content-type": "text/plain; charset=utf-8", "content-disposition": "attachment; filename=nukacast-diagnostics-preview.txt" })
+      response.end(text)
+      return
+    }
     if (url.pathname === "/api/recommended/add" || url.pathname === "/api/recommended/verify") {
       response.writeHead(200, { "content-type": "application/json" }).end(json({ added: 0, probes: [], items: api["/api/recommended"].items }))
       return

@@ -95,6 +95,9 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/logs".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, AppLog.snapshot(null));
         }
+        if ("/api/logs/export".equals(path) && Method.GET.equals(session.getMethod())) {
+            return diagnosticExport(session);
+        }
         if ("/api/logs".equals(path) && Method.DELETE.equals(session.getMethod())) {
             AppLog.clear();
             return json(Response.Status.OK, Collections.singletonMap("cleared", true));
@@ -437,6 +440,31 @@ public final class ControlServer extends NanoHTTPD {
         }
         summary.put("samples", samples);
         return summary;
+    }
+
+    /**
+     * One-click diagnostic bundle. Returns a text file so it can be attached to a report as-is; the
+     * web console downloads it, and the TV writes the same content next to its own files.
+     */
+    private Response diagnosticExport(IHTTPSession session) {
+        Map<String, String> parameters = session.getParms();
+        com.nukacast.app.diagnostics.AppLog.Level level = null;
+        String requested = parameters == null ? null : parameters.get("level");
+        if (requested != null && !requested.isEmpty() && !"all".equalsIgnoreCase(requested)) {
+            try {
+                level = com.nukacast.app.diagnostics.AppLog.Level.valueOf(
+                        requested.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                level = null;
+            }
+        }
+        String body = com.nukacast.app.diagnostics.DiagnosticsReport.build(context, runtime, level);
+        Response response = newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8",
+                body);
+        response.addHeader("Content-Disposition",
+                "attachment; filename=\"" + com.nukacast.app.diagnostics.DiagnosticsReport.fileName() + "\"");
+        response.addHeader("Cache-Control", "no-store");
+        return response;
     }
 
     private Response serveStorageMedia(IHTTPSession session, String id) throws Exception {

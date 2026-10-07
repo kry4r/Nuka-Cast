@@ -60,6 +60,7 @@ import com.nukacast.app.ui.MediaCardView;
 import com.nukacast.app.ui.PosterImageLoader;
 import com.nukacast.app.ui.TvTheme;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -1562,8 +1563,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         final AlertDialog[] holder = new AlertDialog[1];
+        Button export = actionButton("导出诊断包", 150);
         Button clear = actionButton("清空", 110);
         Button close = actionButton("关闭", 110);
+        export.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                exportDiagnostics();
+            }
+        });
         clear.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
                 AppLog.clear();
@@ -1575,6 +1582,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 if (holder[0] != null) holder[0].dismiss();
             }
         });
+        actions.addView(export);
         actions.addView(clear);
         actions.addView(close);
         root.addView(actions, new LinearLayout.LayoutParams(
@@ -1592,6 +1600,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
         });
         dialog.show();
+    }
+
+    /**
+     * Writes the same diagnostic bundle the web console downloads next to the app's files, and
+     * shows the full path so it can be pulled with adb or a file manager on the TV.
+     */
+    private void exportDiagnostics() {
+        final File target = com.nukacast.app.diagnostics.DiagnosticsReport.write(this, runtime, AppLog.Level.ERROR);
+        if (target == null) {
+            Toast.makeText(this, "导出失败，请稍后重试", Toast.LENGTH_LONG).show();
+            return;
+        }
+        AppLog.i("诊断", "已导出诊断包：" + target.getAbsolutePath());
+        new AlertDialog.Builder(this)
+                .setTitle("诊断包已导出")
+                .setMessage("日志与设备状态已写入：\n" + target.getAbsolutePath()
+                        + "\n\n可以用文件管理器打开，或在电脑上执行：\n"
+                        + "adb pull " + target.getAbsolutePath())
+                .setPositiveButton("知道了", null)
+                .show();
     }
 
     private void updateLogText(TextView view, AppLog.Level level) {

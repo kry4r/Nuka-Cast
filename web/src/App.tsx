@@ -4,6 +4,7 @@ import {
   Cast,
   CircleAlert,
   Clapperboard,
+  Download,
   Film,
   FileWarning,
   Gauge,
@@ -326,6 +327,25 @@ function levelDot(level: LogLevel): string {
   if (level === "ERROR") return "bg-rose-400"
   if (level === "WARN") return "bg-amber-400"
   return "bg-emerald-400/70"
+}
+
+/** Saves text produced by the device as a file, without a round trip through a URL. */
+function downloadText(fileName: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function diagnosticFileName(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `nukacast-diagnostics-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`
 }
 
 function formatDuration(milliseconds: number): string {
@@ -1450,6 +1470,18 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
     }
   }, [setError])
 
+  const [exporting, setExporting] = useState(false)
+  const exportBundle = async () => {
+    setExporting(true)
+    try {
+      downloadText(diagnosticFileName(), await api.exportDiagnostics("ERROR"))
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const rows = useMemo(() => device ? [
     ["系统", `${device.manufacturer} ${device.model} · Android ${device.androidVersion} / API ${device.sdk}`],
     ["架构", device.primaryAbi],
@@ -1471,6 +1503,11 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
           <Badge variant={device?.hasHardwareAvcDecoder ? "secondary" : "destructive"}>
             {device?.hasHardwareAvcDecoder ? "支持 1080p 硬解" : "未检测到硬解"}
           </Badge>
+        }
+        action={
+          <Button size="sm" disabled={exporting} onClick={exportBundle}>
+            {exporting ? <LoaderCircle className="animate-spin" /> : <Download />}导出诊断包
+          </Button>
         }
       />
 
@@ -1693,6 +1730,7 @@ function LogView({ setError }: { setError: (value: string) => void }) {
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  const [exporting, setExporting] = useState(false)
   const visible = useMemo(() => (filter === "ALL" ? entries : entries.filter((entry) => entry.level === filter)).slice().reverse(), [entries, filter])
   const counts = useMemo(() => ({
     ERROR: entries.filter((entry) => entry.level === "ERROR").length,
@@ -1711,16 +1749,34 @@ function LogView({ setError }: { setError: (value: string) => void }) {
     }
   }
 
+  // Export always includes the log filter currently shown: "only errors" is the common case when
+  // reporting a problem, and the bundle carries device state either way.
+  const exportBundle = async () => {
+    setExporting(true)
+    try {
+      const text = await api.exportDiagnostics(filter === "ALL" ? undefined : filter)
+      downloadText(diagnosticFileName(), text)
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="日志"
-        subtitle="保留最近 500 条调试、信息、警告和错误记录，电视端“设置 → 错误日志”看到的是同一份。"
+        subtitle="保留最近 400 条调试、信息、警告和错误记录（连续相同的行会折叠并标注重复次数）。导出诊断包会附带设备状态、片源错误、阶段诊断与上次运行的内存曲线。"
         badges={<Badge variant="outline">{visible.length} / {entries.length} 条</Badge>}
         action={
           <>
             <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
               <RefreshCw className={refreshing ? "animate-spin" : ""} />刷新
+            </Button>
+            <Button size="sm" disabled={exporting} onClick={exportBundle} title="导出日志与设备状态为一个文本文件">
+              {exporting ? <LoaderCircle className="animate-spin" /> : <Download />}
+              {filter === "ALL" ? "导出诊断包" : `导出${filter === "ERROR" ? "错误" : "警告"}`}
             </Button>
             <Button variant="outline" size="sm" disabled={clearing || entries.length === 0} onClick={clear}>
               {clearing ? <LoaderCircle className="animate-spin" /> : <Trash2 />}清空
