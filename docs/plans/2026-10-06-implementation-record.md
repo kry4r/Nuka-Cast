@@ -51,6 +51,18 @@
 - 新增 `Api19UiLoadTest`（androidTest）：真实布局/导航 ID 膨胀、关键类加载、内嵌 web 资源、Conscrypt 未被降级。
 - `.github/workflows/android.yml` 仪器测试改为矩阵：API 35 x86_64（`includeTestAbi`）与 API 19 x86（`includeLegacyTestAbi`），`run-instrumentation.sh` 接受 ABI 属性参数，诊断产物按 API 区分。
 
+### 1.5 构建链与依赖审计
+
+- 网页构建链升级到 Tailwind 4.3.3 + `@tailwindcss/postcss`（移除 autoprefixer）与 tailwind-merge 3.7；`tailwind.config.js` 通过 `@config` 保留原有颜色/圆角/`darkMode` 配置，`styles.css` 改为 `@import "tailwindcss"`。
+- `vitest` 4.1.10 → 4.1.11，`postcss`/`nanoid`/`source-map-js` 取补丁版；`npm audit --audit-level=high` 从 11 个告警（含 7 high）归零（上游新增的 braces `*` 公告无可用补丁，唯一修法就是 Tailwind 4，而 Tailwind 4 不再依赖 chokidar/braces）。
+- 迁移后逐条校验：`web/src` 中 199 个字面 `className` token 全部存在于新产物 CSS；旧 CSS 的 185 个选择器只少了 2 个——`backdrop-blur-sm`（已按 v4 命名改为 `backdrop-blur-xs`，视觉效果不变）与从未使用的 `inline`。自定义 `rounded-sm/md/lg` = 4/6/8px 与 `bg-card`/`border-border` 变量均保持。
+- `package-lock.json` 的 `resolved` 全部指向 registry.npmjs.org，`npm ci` 在本机与 CI 一致可重现。
+
+### 1.6 CI 修复（不降级）
+
+- `android-actions/setup-android` 默认安装的 `tools` 包被上游删除导致所有 job 开跑即失败，改为只装 `platform-tools`（platform/build-tools/cmake/ndk 仍由后续步骤显式安装）。
+- API 19 仪器测试首轮结果：`dramaAndAirPlayClassesVerifyWithoutLinkageErrors`、`snifferAndPlayerClassesVerifyOnApi19`、`bundlesWebControlAssets` 与 **`legacyTlsStackLoadsInsteadOfDegradingToPlatformTls`（Conscrypt 在 API 19 x86 正常加载）** 全部通过；只有布局膨胀因 API 19 的 `SurfaceView` 构造需要 Looper 而失败，已改为 `runOnMainSync` 在主线程膨胀真实布局。断言仍为“不得降级到平台 TLS”，没有放宽。
+
 ## 2. 本地证据
 
 ```text
@@ -82,7 +94,8 @@ python plistlib 等价变换 -> 836B 模板身份替换后仍为合法 binary pl
 | HttpStack 初始化失败不再带走 UI | pass（JVM 测试覆盖边界与回退客户端） | API19 真机 TLS provider 加载由 CI + 真机确认 |
 | 阶段诊断（source/spider/airplay/http） | pass（JVM 测试 + `/api/diagnostics.stages` + 网页展示） | 真机采集仍需结合 logcat/native |
 | Spider 会话身份与 LRU | pass（代码 + 编译） | 需在真实多仓配置下观察会话命中/释放 |
-| API19 x86 类加载/布局/TLS | 代码 + CI job 完成，流水线 pending | API19 job 严格断言 Conscrypt 未降级；若 CI 失败，修代码而不是放宽断言 |
+| API19 x86 类加载/布局/TLS | 首轮 4/5 通过，布局膨胀已修复待重跑 | API19 job 严格断言 Conscrypt 未降级（已实测通过）；修代码而不是放宽断言 |
+| 网页构建链与依赖审计 | pass（`npm ci` + `npm test` + `npm run build` + `npm audit --audit-level=high` = 0） | 由 CI build job 复核“资源未过期” |
 | 插件独立进程 / 不可中断执行（T2/F02/F03） | **未实施** | 需要单独设计 IPC 契约，见 spec 3.2 |
 | 24 帧门槛之外的真机首帧耗时 | **pending** | 需要 SHARP/iPhone |
 
