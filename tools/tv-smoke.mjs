@@ -200,6 +200,33 @@ async function main() {
     `aspect ${beforeSpeed} → ${aspectAction.aspect}`);
   await call("GET", "/api/debug/player/action?name=exit");
 
+  // The on-screen keyboard itself: typing must reach the search box and be remembered.
+  await call("GET", "/api/debug/type?page=search&text=LLDQ");
+  await new Promise((r) => setTimeout(r, 4000));
+  const typed = (await call("GET", "/api/debug/type?page=search&text=LLDQ")).data;
+  check("on-screen keyboard types and remembers",
+    (typed.typed || "").includes("LLDQ") && (typed.recentSearches || []).includes("LLDQ"),
+    `typed “${typed.typed}”, recent: ${(typed.recentSearches || []).join(", ")}`);
+
+  // Favourites: the library is what the 收藏 page and the home row read.
+  const favSource = items[0];
+  if (favSource) {
+    const favourite = (action) => call("POST", "/api/debug/favorite", {
+      sourceId: favSource.sourceId, siteKey: favSource.siteKey, siteName: favSource.siteName,
+      vodId: favSource.vodId, name: favSource.name, poster: favSource.poster,
+    }).then((r) => r.data);
+    const before = (await call("GET", "/api/debug/library")).data.favorites || [];
+    const wasFavourite = before.some((f) => f.name === favSource.name);
+    // The toggle must agree with what the library then reports, whichever way it went.
+    const toggled = await favourite();
+    const after = (await call("GET", "/api/debug/library")).data.favorites || [];
+    const nowFavourite = after.some((f) => f.name === favSource.name);
+    check("favourites are stored and listed", toggled.favorited === !wasFavourite && nowFavourite === !wasFavourite,
+      `“${favSource.name}” ${wasFavourite ? "on" : "off"} → ${nowFavourite ? "on" : "off"}, ${after.length} favourites`);
+    // Put it back, so repeated runs do not change the device state.
+    await favourite();
+  }
+
   // DLNA: the TV must advertise itself and accept a cast over SOAP.
   const dlna = (await call("GET", "/api/debug/dlna?probe=1")).data;
   check("DLNA renders as a media renderer", Boolean(dlna.running) && Boolean(dlna.ssdpAnswered),

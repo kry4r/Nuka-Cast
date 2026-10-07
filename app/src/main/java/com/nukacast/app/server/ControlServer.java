@@ -255,6 +255,31 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("aspect", activity.aspectModeForDebug());
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/type".equals(path)) {
+            // Types into the TV's own on-screen keyboard (search or live channel search).
+            final String target = session.getParms().containsKey("page")
+                    ? session.getParms().get("page") : "search";
+            final String text = session.getParms().containsKey("text")
+                    ? session.getParms().get("text") : "";
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            String typed = activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                @Override public String call() {
+                    return activity.typeForDebug(target, text);
+                }
+            });
+            List<String> recent = activity.onUiThreadNow(
+                    new java.util.concurrent.Callable<List<String>>() {
+                        @Override public List<String> call() {
+                            return activity.recentSearchesForDebug();
+                        }
+                    });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("page", target);
+            payload.put("typed", typed);
+            payload.put("recentSearches", recent);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/live".equals(path)) {
             // Opens the live page and searches its channels, so the largest playlist can be checked
             // remotely (11k channels cannot be scrolled through from here).
@@ -301,6 +326,44 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("query", query);
             payload.put("hits", hits);
             payload.put("sources", names);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/library".equals(path)) {
+            // Favourites and history as recorded on the device, so the TV pages can be checked remotely.
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            List<Map<String, Object>> favorites = new ArrayList<Map<String, Object>>();
+            for (com.nukacast.app.library.LibraryItem item : runtime.getMediaLibrary().favorites()) {
+                favorites.add(libraryEntry(item));
+            }
+            List<Map<String, Object>> history = new ArrayList<Map<String, Object>>();
+            for (com.nukacast.app.library.LibraryItem item : runtime.getMediaLibrary().history()) {
+                history.add(libraryEntry(item));
+            }
+            payload.put("favorites", favorites);
+            payload.put("history", history);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/favorite".equals(path)) {
+            // Toggles a favourite exactly like the remote does, so the page and the smoke test agree.
+            ContentRequest request = body(session, ContentRequest.class);
+            com.nukacast.app.tvbox.model.SearchItem item =
+                    new com.nukacast.app.tvbox.model.SearchItem();
+            item.sourceId = safe(request.sourceId);
+            item.siteKey = safe(request.siteKey);
+            item.siteName = safe(request.siteName);
+            item.vodId = safe(request.vodId);
+            item.name = safe(request.name);
+            item.poster = safe(request.poster);
+            item.remarks = safe(request.remarks);
+            if (item.name.isEmpty() || item.vodId.isEmpty()) {
+                throw new IllegalArgumentException("缺少 name 或 vodId");
+            }
+            boolean added = runtime.getMediaLibrary().toggleFavorite(item);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("favorited", added);
+            payload.put("total", runtime.getMediaLibrary().favorites().size());
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity != null) activity.refreshMoviesPage();
             return json(Response.Status.OK, payload);
         }
         if ("/api/debug/dlna".equals(path)) {
@@ -379,6 +442,18 @@ public final class ControlServer extends NanoHTTPD {
         payload.put("degraded", HttpStack.degraded());
         payload.put("initError", HttpStack.initError());
         return payload;
+    }
+
+    /** One library entry, reduced to what a caller needs to check the TV pages. */
+    private Map<String, Object> libraryEntry(com.nukacast.app.library.LibraryItem item) {
+        Map<String, Object> entry = new LinkedHashMap<String, Object>();
+        entry.put("name", item.name);
+        entry.put("siteName", item.siteName);
+        entry.put("vodId", item.vodId);
+        entry.put("episodeName", item.episodeName);
+        entry.put("positionMs", item.positionMs);
+        entry.put("durationMs", item.durationMs);
+        return entry;
     }
 
     /** Device, budget and current usage in one place: the numbers a crash report needs. */

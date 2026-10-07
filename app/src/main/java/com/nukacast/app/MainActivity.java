@@ -183,6 +183,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
     private LinearLayout searchResults;
     private LinearLayout searchKeyboard;
+    private LinearLayout searchRecentRow;
+    /** Recent keywords, newest first; kept in preferences so they survive a restart. */
+    private final java.util.List<String> recentSearches = new java.util.ArrayList<String>();
     private EditText searchKeyword;
     private TextView searchStatus;
     private TextView homeLoading;
@@ -431,6 +434,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (movieFilters != null) movieFilters.setClipChildren(false);
         searchResults = (LinearLayout) findViewById(R.id.searchResults);
         searchKeyboard = (LinearLayout) findViewById(R.id.searchKeyboard);
+        searchRecentRow = (LinearLayout) findViewById(R.id.searchRecent);
+        loadRecentSearches();
+        renderRecentSearches();
         searchKeyword = (EditText) findViewById(R.id.searchKeyword);
         searchStatus = (TextView) findViewById(R.id.searchStatus);
         homeLoading = (TextView) findViewById(R.id.homeLoading);
@@ -503,7 +509,51 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         addMovieFilter("分类浏览", "");
         addMovieFilter("最近更新", "首页");
         addMovieFilter("短剧", "短剧");
+        addMovieFilter("收藏", "收藏");
         setFilterSelection("");
+    }
+
+    /** Renders the favourites, with a way to remove one without leaving the page. */
+    private void renderFavoriteGrid() {
+        moviesContent.removeAllViews();
+        List<LibraryItem> favorites = runtime.getMediaLibrary().favorites();
+        moviesContent.addView(sectionTitle("我的收藏 · " + favorites.size() + " 部"));
+        if (favorites.isEmpty()) {
+            moviesContent.addView(bodyText("还没有收藏。在影视页选中影片后按菜单键即可收藏。"));
+            return;
+        }
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        moviesContent.addView(grid);
+        int columns = gridColumns();
+        LinearLayout row = null;
+        for (int i = 0; i < favorites.size(); i++) {
+            if (i % columns == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(178));
+                rowParams.bottomMargin = dp(8);
+                grid.addView(row, rowParams);
+            }
+            final LibraryItem library = favorites.get(i);
+            MediaCardView card = card(library.toSearchItem(), 0, 0);
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { openMedia(library.toSearchItem()); }
+            });
+            card.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override public boolean onLongClick(View view) {
+                    runtime.getMediaLibrary().toggleFavorite(library.toSearchItem());
+                    Toast.makeText(MainActivity.this, "已取消收藏：" + library.name,
+                            Toast.LENGTH_SHORT).show();
+                    renderFavoriteGrid();
+                    return true;
+                }
+            });
+            row.addView(card, cardParams());
+        }
+        // Removing is a long press on the card, the convention on TV remotes.
+        moviesContent.addView(bodyText("长按卡片可取消收藏"));
     }
 
     private void addMovieFilter(String label, final String filter) {
@@ -654,6 +704,50 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
     }
 
+    /** Re-renders the movies page, so a change made from the web console shows up on the TV. */
+    public void refreshMoviesPage() {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if (PAGE_MOVIES.equals(currentPage)) showMovies(currentMovieFilter);
+            }
+        });
+    }
+
+    /**
+     * Types into the on-screen keyboard of a page, key by key.
+     *
+     * <p>Goes through the same handlers the remote uses ({@code pressSearchKey} /
+     * {@code pressLiveSearchKey}), so a check here covers the keyboard itself, not just the search
+     * engine behind it.
+     *
+     * @param target "search" or "live"
+     * @return the text that ended up in the box
+     */
+    public String typeForDebug(final String target, final String text) {
+        if ("live".equals(target)) {
+            if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
+            if (liveSearchPanel == null || liveSearchPanel.getVisibility() != View.VISIBLE) {
+                toggleLiveSearch();
+            }
+            liveSearchText = "";
+            for (int i = 0; i < text.length(); i++) {
+                pressLiveSearchKey(text.substring(i, i + 1));
+            }
+            return liveSearchText;
+        }
+        if (!PAGE_SEARCH.equals(currentPage)) showPage(PAGE_SEARCH);
+        searchKeyword.setText("");
+        for (int i = 0; i < text.length(); i++) {
+            pressSearchKey(text.substring(i, i + 1));
+        }
+        return searchKeyword.getText().toString();
+    }
+
+    /** Keywords shown on the search page, newest first (debug API). */
+    public List<String> recentSearchesForDebug() {
+        return new java.util.ArrayList<String>(recentSearches);
+    }
+
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
     public String playerMenuActionForDebug(String action) {
         if (action == null) return "no-action";
@@ -725,6 +819,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if ("短剧".equals(filter)) {
             browseMode = false;
             renderDramaMovies();
+            return;
+        }
+        if ("收藏".equals(filter)) {
+            browseMode = false;
+            renderFavoriteGrid();
             return;
         }
         if ("首页".equals(filter)) {
@@ -2204,9 +2303,69 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         }
     }
 
+    /** Adds a keyword to the recent list and keeps at most twelve of them. */
+    private void rememberSearch(String keyword) {
+        String value = keyword == null ? "" : keyword.trim();
+        if (value.isEmpty()) return;
+        recentSearches.remove(value);
+        recentSearches.add(0, value);
+        while (recentSearches.size() > 12) recentSearches.remove(recentSearches.size() - 1);
+        StringBuilder stored = new StringBuilder();
+        for (String entry : recentSearches) {
+            if (stored.length() > 0) stored.append('\n');
+            stored.append(entry);
+        }
+        getSharedPreferences("search_history", MODE_PRIVATE).edit()
+                .putString("recent", stored.toString()).apply();
+        renderRecentSearches();
+    }
+
+    private void loadRecentSearches() {
+        String stored = getSharedPreferences("search_history", MODE_PRIVATE)
+                .getString("recent", "");
+        recentSearches.clear();
+        if (stored == null) return;
+        for (String line : stored.split("\n")) {
+            String value = line.trim();
+            if (!value.isEmpty() && !recentSearches.contains(value)) recentSearches.add(value);
+        }
+    }
+
+    private void renderRecentSearches() {
+        if (searchRecentRow == null) return;
+        searchRecentRow.removeAllViews();
+        if (recentSearches.isEmpty()) return;
+        for (final String keyword : recentSearches) {
+            Button chip = actionButton(keyword, 0);
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    searchKeyword.setText(keyword);
+                    searchFromKeyboard();
+                }
+            });
+            Button remove = actionButton("×", 0);
+            remove.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    recentSearches.remove(keyword);
+                    StringBuilder stored = new StringBuilder();
+                    for (String entry : recentSearches) {
+                        if (stored.length() > 0) stored.append('\n');
+                        stored.append(entry);
+                    }
+                    getSharedPreferences("search_history", MODE_PRIVATE).edit()
+                            .putString("recent", stored.toString()).apply();
+                    renderRecentSearches();
+                }
+            });
+            searchRecentRow.addView(chip);
+            searchRecentRow.addView(remove);
+        }
+    }
+
     private void searchFromKeyboard() {
         String keyword = searchKeyword.getText().toString().trim();
         if (keyword.isEmpty()) return;
+        rememberSearch(keyword);
         SearchQuery query = new SearchQuery();
         query.keyword = keyword;
         List<ConfigSource> ranked = runtime.getTvBoxRepository().getRankedLeafSources();
