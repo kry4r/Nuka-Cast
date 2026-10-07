@@ -204,6 +204,33 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("scrolled", runtime.scrollBy(delta));
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/open".equals(path)) {
+            // Opening a detail screen remotely is how its layout is checked on a TV that is not in
+            // front of the developer: navigate + screenshot + /api/debug/layout.
+            String sourceId = session.getParms().get("sourceId");
+            String siteKey = session.getParms().get("siteKey");
+            String vodId = session.getParms().get("vodId");
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) {
+                return json(Response.Status.OK, errorPayload("界面未在前台"));
+            }
+            try {
+                final com.nukacast.app.tvbox.model.MediaDetail detail =
+                        runtime.getContentService().detail(sourceId, siteKey, vodId);
+                activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                    @Override public String call() {
+                        activity.openDetailForDebug(detail);
+                        return detail.name;
+                    }
+                });
+                Map<String, Object> payload = new LinkedHashMap<String, Object>();
+                payload.put("opened", detail.name);
+                payload.put("lines", detail.playSources == null ? 0 : detail.playSources.size());
+                return json(Response.Status.OK, payload);
+            } catch (Exception error) {
+                return json(Response.Status.OK, errorPayload(message(error)));
+            }
+        }
         if ("/api/debug/layout".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getLayoutReport());
         }
@@ -1007,6 +1034,12 @@ public final class ControlServer extends NanoHTTPD {
             input.close();
         }
         return output.toByteArray();
+    }
+
+    private static Map<String, Object> errorPayload(String message) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("error", message);
+        return payload;
     }
 
     private <T> T body(IHTTPSession session, Class<T> type) throws Exception {

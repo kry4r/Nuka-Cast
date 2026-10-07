@@ -515,6 +515,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         else showPage(PAGE_HOME);
     }
 
+    /** Opens a detail screen on the UI thread; used by the debug API to inspect that screen. */
+    public void openDetailForDebug(final MediaDetail detail) {
+        if (detail == null) return;
+        showDetail(detail);
+    }
+
     /** Scrolls the page currently on screen; positive values scroll down. */
     public boolean scrollCurrentPage(int delta) {
         android.view.View focused = getCurrentFocus();

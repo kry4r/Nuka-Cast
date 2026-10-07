@@ -163,8 +163,9 @@ public final class DetailScreen {
         button.setMinimumWidth(0);
         button.setPadding(dp(context, 8), 0, dp(context, 8), 0);
         button.setBackgroundResource(com.nukacast.app.R.drawable.bg_chip);
+        // A focused chip is filled with the accent colour, so its label must switch to dark.
         button.setTextColor(context.getResources().getColorStateList(
-                com.nukacast.app.R.color.text_primary));
+                com.nukacast.app.R.color.text_chip));
         button.setFocusable(true);
         if (widthDp > 0) button.setWidth(dp(context, widthDp));
         return button;

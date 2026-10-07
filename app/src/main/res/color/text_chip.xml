@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Chip labels.
+
+  The focused chip is filled with @color/accent (near white), so its text has to turn dark:
+  with the shared light text colour the label became invisible, which looked like an empty white
+  box in the line selector.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/surface" />
+    <item android:color="@color/text_primary" />
+</selector>
