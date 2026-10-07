@@ -339,7 +339,7 @@ function DetailDialog({ detail, onClose, setError }: { detail: MediaDetail; onCl
   const [posterFailed, setPosterFailed] = useState(false)
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={detail.name}>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-xs sm:p-6" role="dialog" aria-modal="true" aria-label={detail.name}>
       <div className="mx-auto min-h-full max-w-5xl border bg-background shadow-xl">
         <header className="sticky top-0 z-10 flex min-h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
           <div className="min-w-0 flex-1"><h2 className="truncate text-lg font-semibold">{detail.name}</h2><div className="text-xs text-muted-foreground">{detail.siteName}</div></div>
@@ -588,7 +588,7 @@ function DramaDialog({ detail, onSwitch, onClose, setError }: { detail: DramaDet
   }
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-xs sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
       <div className="mx-auto min-h-full max-w-5xl border bg-background shadow-xl">
         <header className="sticky top-0 z-10 flex min-h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
           <div className="min-w-0 flex-1"><h2 className="truncate text-lg font-semibold">{item.title}</h2><div className="text-xs text-muted-foreground">短剧目录 · ID {item.dramaId}</div></div>
