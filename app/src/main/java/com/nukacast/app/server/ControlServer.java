@@ -258,7 +258,18 @@ public final class ControlServer extends NanoHTTPD {
                 @Override public Boolean call() {
                     boolean any = false;
                     for (int i = 0; i < Math.max(1, Math.min(20, repeat)); i++) {
-                        long now = android.os.SystemClock.uptimeMillis();
+                        // A dispatched BACK event does not reach onBackPressed (the framework acts on it
+                        // before dispatch) and does not close a dialog either, so both are done here —
+                        // otherwise an automated run leaves a modal holding every later key.
+                        if (code == android.view.KeyEvent.KEYCODE_BACK) {
+                            if (activity.closeTopDialogForDebug()) {
+                                any = true;
+                                continue;
+                            }
+                            activity.onBackPressed();
+                            any = true;
+                            continue;
+                        }
                         any |= activity.dispatchKeyEvent(new android.view.KeyEvent(
                                 android.view.KeyEvent.ACTION_DOWN, code));
                         any |= activity.dispatchKeyEvent(new android.view.KeyEvent(

@@ -167,6 +167,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Channel search: its own panel, query text and on-screen keyboard. */
     private LinearLayout liveSearchPanel;
     private LinearLayout liveSearchKeyboard;
+    /** The source/group chip rows, hidden while the search keyboard is open (see toggleLiveSearch). */
+    private View liveSourceRowHolder;
+    private View liveGroupRowHolder;
     private TextView liveSearchQuery;
     private String liveSearchText = "";
     private boolean liveSearching;
@@ -397,6 +400,19 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveJumpHandler.removeCallbacks(commitLiveJump);
         liveJumpHandler.postDelayed(commitLiveJump, 1500L);
         return true;
+    }
+
+    /**
+     * Shows or hides the rows used to browse the catalog.
+     *
+     * <p>The on-screen keyboard needs most of the height, so while it is open the source and group rows
+     * plus the programme line give way to the results grid, which is what the viewer is looking at.
+     */
+    private void setLiveBrowsingRowsVisible(boolean visible) {
+        int state = visible ? View.VISIBLE : View.GONE;
+        if (liveSourceRowHolder != null) liveSourceRowHolder.setVisibility(state);
+        if (liveGroupRowHolder != null) liveGroupRowHolder.setVisibility(state);
+        if (liveEpgLine != null) liveEpgLine.setVisibility(state);
     }
 
     /** Number feedback: on screen while watching, on the list otherwise. */
@@ -911,6 +927,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         payload.put("focusedChannel", focused == null ? "" : focused.name);
         payload.put("focusedChannelId", focused == null ? "" : focused.id);
         payload.put("watching", livePlayingIndex);
+        // The first few entries of the list the number keys count through, so a caller can check what
+        // "the 3rd channel" means without reading the screen.
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels = visibleChannelList();
+        payload.put("channelCount", channels.size());
+        List<String> firstChannels = new java.util.ArrayList<String>();
+        for (int i = 0; i < channels.size() && i < 8; i++) {
+            firstChannels.add(channels.get(i).name);
+        }
+        payload.put("firstChannels", firstChannels);
         return payload;
     }
 
@@ -974,6 +999,33 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         "按返回键结束投屏", false);
             }
         });
+    }
+
+    /** The modal currently on screen, if any (only one is ever shown at a time). */
+    private AlertDialog activeDialog;
+
+    /**
+     * Shows a dialog and remembers it.
+     *
+     * <p>A modal holds the input focus, so an automated check that cannot close it will find every later
+     * key press ignored; remembering it gives the debug API a way to dismiss it.
+     */
+    private void showDialog(AlertDialog dialog) {
+        activeDialog = dialog;
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(DialogInterface dismissed) {
+                activeDialog = null;
+            }
+        });
+        dialog.show();
+    }
+
+    /** Closes the dialog on screen, if there is one (debug API). */
+    public boolean closeTopDialogForDebug() {
+        AlertDialog dialog = activeDialog;
+        if (dialog == null || !dialog.isShowing()) return false;
+        dialog.dismiss();
+        return true;
     }
 
     /** Re-renders the movies page, so a change made from the web console shows up on the TV. */
@@ -1630,9 +1682,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         livePage.addView(liveSearchPanel);
 
         liveSourceRow = chipRow();
-        livePage.addView(chipRowHolder(liveSourceRow));
+        liveSourceRowHolder = chipRowHolder(liveSourceRow);
+        livePage.addView(liveSourceRowHolder);
         liveGroupRow = chipRow();
-        livePage.addView(chipRowHolder(liveGroupRow));
+        liveGroupRowHolder = chipRowHolder(liveGroupRow);
+        livePage.addView(liveGroupRowHolder);
 
         ScrollView channels = new ScrollView(this);
         channels.setVerticalScrollBarEnabled(false);
@@ -1656,12 +1710,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void toggleLiveSearch() {
         if (liveSearchPanel.getVisibility() == View.VISIBLE) {
             liveSearchPanel.setVisibility(View.GONE);
+            setLiveBrowsingRowsVisible(true);
             liveSearchText = "";
             liveSearching = false;
             renderLiveChannels();
             return;
         }
         liveSearchPanel.setVisibility(View.VISIBLE);
+        // Measured: keyboard (640px) + source/group rows + grid do not fit on a 1080p screen, and the
+        // grid — where the search results appear — was pushed off it. Browsing rows step aside.
+        setLiveBrowsingRowsVisible(false);
         liveSearching = true;
         liveSearchText = "";
         buildKeyboard(liveSearchKeyboard, new Runnable() {
@@ -1677,6 +1735,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Shows the channels matching the query typed on the on-screen keyboard. */
     private void renderLiveSearchResults() {
+        setLiveBrowsingRowsVisible(false);
         liveSearchQuery.setText(liveSearchText.isEmpty()
                 ? "输入频道名或首字母" : "搜索：" + liveSearchText);
         List<com.nukacast.app.live.model.LiveCatalog.Channel> hits =
@@ -1918,6 +1977,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final int LIVE_PAGE_SIZE = 120;
 
     private void renderLiveChannels() {
+        setLiveBrowsingRowsVisible(!liveSearching && liveSearchPanel != null
+                && liveSearchPanel.getVisibility() != View.VISIBLE);
         if (liveSearching) {
             renderLiveSearchResults();
             return;
@@ -2125,7 +2186,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                                 }
                             });
                         }
-                        dialog.show();
+                        showDialog(dialog);
                     }
                 });
             }
@@ -2876,7 +2937,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             LinearLayout rowView = new LinearLayout(this);
             rowView.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(50));
             rowParams.topMargin = dp(6);
             rowView.setLayoutParams(rowParams);
             for (String key : row) {
@@ -3743,6 +3804,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void onPlayerMenuAction(String action) {
+        if ("stop".equals(action)) {
+            // Leaving full-screen playback from a script: an injected BACK key event does not reach
+            // onBackPressed (the framework handles it), so the debug API needs its own way out.
+            stopActivePlayback();
+            return;
+        }
         if ("prev".equals(action)) {
             stepEpisode(-1);
             return;

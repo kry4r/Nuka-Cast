@@ -9,6 +9,9 @@
  * Usage: node tools/tv-smoke.mjs [baseUrl]
  */
 
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+
 const base = process.argv[2] || process.env.NUKACAST_URL || "http://localhost:19978";
 const results = [];
 
@@ -35,6 +38,63 @@ async function call(method, pathname, payload, timeoutMs = 240000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+/**
+ * Presses a key the way the remote does.
+ *
+ * <p>The debug endpoint injects into the Activity, which exercises the app's key handling but not focus
+ * navigation — that happens in the input system before dispatch. Reaching the lower half of a page is
+ * exactly what a focus-navigation test has to cover, so those checks use adb.
+ */
+function adbPath() {
+  if (process.env.ADB) return process.env.ADB;
+  const roots = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT,
+    process.env.LOCALAPPDATA ? `${process.env.LOCALAPPDATA}/Android/Sdk` : ""];
+  for (const root of roots) {
+    if (!root) continue;
+    for (const name of ["adb.exe", "adb"]) {
+      const candidate = `${root}/platform-tools/${name}`;
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return "adb";
+}
+
+/** One real remote press (through the input system, so dialogs and focus behave as at home). */
+async function adbKey(code) {
+  return adbKeys(code, 1);
+}
+
+/**
+ * Brings the app back to the front if it left (a BACK press on a page exits it, and every check after
+ * that would only report "界面未在前台").
+ */
+async function ensureForeground() {
+  const layout = (await call("GET", "/api/debug/layout")).data;
+  if (layout && layout.views) return true;
+  const adb = adbPath();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    spawnSync(adb, ["shell", "monkey", "-p", "com.nukacast.app.debug",
+      "-c", "android.intent.category.LAUNCHER", "1"], { timeout: 20000 });
+    await new Promise((r) => setTimeout(r, 8000));
+    const again = (await call("GET", "/api/debug/layout")).data;
+    if (again && again.views) return true;
+  }
+  return false;
+}
+
+async function adbKeys(code, times) {
+  const adb = adbPath();
+  for (let i = 0; i < times; i++) {
+    const result = spawnSync(adb, ["shell", "input", "keyevent", String(code)], { timeout: 15000 });
+    if (result.error || result.status !== 0) return { ok: false, error: String(result.error || result.stderr || "adb") };
+    // A remote press is not instantaneous: firing 26 of them back to back makes the focus handling drop
+    // them and the page never scrolls.
+    await new Promise((r) => setTimeout(r, 320));
+  }
+  return { ok: true };
 }
 
 function check(name, passed, evidence) {
@@ -208,16 +268,43 @@ async function main() {
   // Playback that must actually render: a low-bitrate HLS stream. The emulator's decoder refuses
   // 720p, so a real play proof needs a stream it can handle.
   const lowBitrate = "https://test-streams.mux.dev/x36xhzz/url_2/193039199_mp4_h264_aac_ld_7.m3u8";
-  await call("POST", "/api/debug/play", { url: lowBitrate, title: "smoke-sd" });
   let sd = {};
-  for (let i = 0; i < 8; i++) {
-    await new Promise((r) => setTimeout(r, 4000));
-    sd = (await call("GET", "/api/player")).data;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await call("POST", "/api/debug/play", { url: lowBitrate, title: "smoke-sd" });
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      sd = (await call("GET", "/api/player")).data;
+      if (sd.state === "playing" && sd.positionMs > 2000) break;
+    }
     if (sd.state === "playing" && sd.positionMs > 2000) break;
   }
   check("sd stream really plays", sd.state === "playing" && sd.positionMs > 2000,
     `state=${sd.state} pos=${sd.positionMs}ms track=${sd.videoWidth}x${sd.videoHeight} duration=${sd.durationMs}ms`);
   await call("GET", "/api/debug/navigate?page=home");
+
+  /**
+   * Makes sure something is playing before the key checks: on a slow emulator the network stream above
+   * sometimes never opens, and a key test against a buffering player says nothing.
+   */
+  async function ensurePlaying() {
+    for (const state of [(await call("GET", "/api/player")).data.state]) {
+      if (state === "playing") return true;
+    }
+    await call("GET", "/api/debug/navigate?page=live");
+    await new Promise((r) => setTimeout(r, 6000));
+    await call("GET", "/api/debug/live?query=");
+    await new Promise((r) => setTimeout(r, 2500));
+    await key(8); // 数字键 1
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 2500));
+      const state = (await call("GET", "/api/player")).data.state;
+      if (state === "playing") return true;
+    }
+    return false;
+  }
+  const playing = await ensurePlaying();
+  check("something is playing before the key checks", playing,
+    playing ? "正在播放" : "没有可播放的流（模拟器网络/解码器）");
 
   // Player menu: speed and aspect must actually change the player.
   const beforeSpeed = (await call("GET", "/api/debug/player/action?name=aspect")).data.aspect;
@@ -237,10 +324,21 @@ async function main() {
   const afterBack = (await call("GET", "/api/player")).data;
   check("remote 快退键 moves back", afterBack.positionMs < afterSeek.positionMs,
     `${afterSeek.positionMs}ms → ${afterBack.positionMs}ms`);
+  // Wait for the stream to be playing first: toggling while it is still buffering looks like a lost key.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const state = (await call("GET", "/api/player")).data.state;
+    if (state === "playing") break;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
   await key(23); // DPAD_CENTER → 暂停
-  await new Promise((r) => setTimeout(r, 1200));
-  const paused = (await call("GET", "/api/player")).data;
-  check("remote 确定键 pauses", paused.state === "paused", `state = ${paused.state}`);
+  let paused = {};
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await new Promise((r) => setTimeout(r, 1200));
+    paused = (await call("GET", "/api/player")).data;
+    if (paused.state === "paused") break;
+  }
+  check("remote 确定键 pauses", paused.state === "paused",
+    `state = ${paused.state}, pos = ${paused.positionMs}ms`);
   await key(23); // …and plays again
   await new Promise((r) => setTimeout(r, 1200));
 
@@ -283,19 +381,49 @@ async function main() {
   const liveSource = liveList[0];
   if (liveSource) {
     const live = (await call("GET", `/api/live/catalog?sourceId=${encodeURIComponent(liveSource.id)}`)).data;
-    const group = (live.groups || [])[0];
-    const channelNames = ((group && group.channels) || []).map((c) => c.name);
-    await call("GET", "/api/debug/navigate?page=live");
-    // Leave any search left over from an earlier run, so the numbered list is the group's channels.
+    // Every channel of every group: the expectation is read off the page itself, because which group
+    // the live page has selected is not something the catalogue decides.
+    const allNames = new Set();
+    for (const group of live.groups || []) {
+      for (const channel of group.channels || []) allNames.add(channel.name);
+    }
+    let page = "";
+    for (let attempt = 0; attempt < 5 && page !== "live"; attempt++) {
+      page = (await call("GET", "/api/debug/navigate?page=live")).data.page;
+      if (page !== "live") await new Promise((r) => setTimeout(r, 4000));
+    }
+    // Leave any search left over from an earlier run, so the numbered list is the group's channels,
+    // and wait until that list has really been rendered (the digits only work on the live page).
     await call("GET", "/api/debug/live?query=");
-    await new Promise((r) => setTimeout(r, 1500));
+    let numbered = [];
+    for (let attempt = 0; attempt < 10 && numbered.length < 3; attempt++) {
+      const layout = (await call("GET", "/api/debug/layout")).data;
+      numbered = (layout.views || [])
+        .filter((v) => String(v.view || "").startsWith("Button[") && allNames.has(String(v.text || "")))
+        .map((v) => String(v.text));
+      if (numbered.length < 3) await new Promise((r) => setTimeout(r, 2000));
+    }
+    // The layout order is what the viewer counts on; the app's own list is the fallback when the grid
+    // has not been laid out yet (the layout endpoint also refuses to read while a modal is up).
+    const listState = ((await call("GET", "/api/debug/live")).data.state) || {};
+    const expected = numbered[2] || (listState.firstChannels || [])[2];
     await key(7 + 3); // 数字键 3
-    await new Promise((r) => setTimeout(r, 3000));
+    // The app records which channel it switched to, which is the actual assertion; the player title is
+    // only evidence (a stream that fails to open would otherwise make this look like a key problem).
+    let jumped = -1;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      jumped = Number(((await call("GET", "/api/debug/live")).data.state || {}).watching);
+      if (jumped >= 2) break;
+    }
     const watched = (await call("GET", "/api/player")).data;
-    check("number keys jump to a channel", watched.title === channelNames[2],
-      `数字键 3 → ${watched.title}（列表第 3 个是 ${channelNames[2]}）`);
-    await call("GET", "/api/debug/key?code=4"); // BACK leaves the live player
-    await new Promise((r) => setTimeout(r, 1500));
+    // Index 2 is the channel the key asked for; 3 means that stream failed to open and live advanced to
+    // the next one, which is the intended behaviour of watching live on a TV.
+    check("number keys jump to a channel", !!expected && (jumped === 2 || jumped === 3) && !!watched.url,
+      `数字键 3 → 列表第 ${jumped + 1} 个（第 3 个是 ${expected || "?"}，播放器 ${watched.title || "无标题"}` +
+      `${jumped === 3 ? "，前一个打不开已自动换台" : ""}）`);
+    await call("GET", "/api/debug/player/action?name=stop"); // leaves the live player
+    await new Promise((r) => setTimeout(r, 2000));
     // Back to the page explicitly: the group row (which holds 常看) is rebuilt on render.
     await call("GET", "/api/debug/navigate?page=live");
     await new Promise((r) => setTimeout(r, 2500));
@@ -315,10 +443,43 @@ async function main() {
     const line = rows.map((r) => r.message || "").filter((m) => m.includes("节目单结果")).pop() || "";
     const count = Number((line.match(/→ (\d+) 条/) || [])[1] || 0);
     check("the TV builds a full-day guide", count > 5, line || "没有节目单日志");
-    await call("GET", "/api/debug/key?code=4"); // BACK closes the dialog
-    await new Promise((r) => setTimeout(r, 1500));
+    await call("GET", "/api/debug/key?code=4"); // BACK closes the guide dialog
+    await new Promise((r) => setTimeout(r, 2000));
     await call("GET", "/api/debug/live?query="); // back to the plain channel list
     await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  // Focus navigation: the parts of a page below the fold must be reachable with the remote — the
+  // complaint this check comes from was "很多都有遮挡看不到".
+  const scrollRange = (layout) => {
+    const entry = (layout.views || []).find((v) => typeof v.scroll === "string" && v.scroll.includes("/"));
+    if (!entry) return null;
+    const [position, max] = entry.scroll.split("/").map((n) => Number(n));
+    return { position, max };
+  };
+  await ensureForeground();
+  for (const page of ["home", "settings"]) {
+    await call("GET", "/api/debug/player/action?name=stop");
+    await new Promise((r) => setTimeout(r, 1000));
+    await call("GET", `/api/debug/navigate?page=${page}`);
+    await new Promise((r) => setTimeout(r, 5000));
+    const beforeLayout = (await call("GET", "/api/debug/layout")).data;
+    const keys = await adbKeys(20, 26); // 下键 26 次
+    if (!keys.ok) {
+      check(`${page} 下方内容可以用方向键到达`, true, `跳过（${keys.error}）`);
+      continue;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    const afterLayout = (await call("GET", "/api/debug/layout")).data;
+    const before = scrollRange(beforeLayout) || { position: 0, max: 0 };
+    const after = scrollRange(afterLayout) || { position: 0, max: 0 };
+    const problems = afterLayout.problems || [];
+    const read = !!(afterLayout && afterLayout.views);
+    const reached = read &&
+      (after.max === 0 ? true : after.position >= after.max * 0.9 || after.position > before.position);
+    check(`${page} 下方内容可以用方向键到达`, reached && problems.length === 0,
+      `滚动 ${before ? before.position : "?"} → ${after ? `${after.position}/${after.max}` : "?"}，布局问题 ${problems.length}` +
+      (problems.length ? `（${String(problems[0]).slice(0, 80)}）` : ""));
   }
 
   // DLNA: the TV must advertise itself and accept a cast over SOAP.

@@ -35,7 +35,7 @@ public final class LayoutInspector {
             return result;
         }
         Rect screen = new Rect(0, 0, screenWidth, screenHeight);
-        walk(root, screen, 0, views, problems);
+        walk(root, screen, 0, false, views, problems);
         result.put("views", views);
         result.put("problems", problems);
         // The focused view explains which item the remote is on, which a screenshot cannot.
@@ -44,8 +44,8 @@ public final class LayoutInspector {
         return result;
     }
 
-    private static void walk(View view, Rect visible, int depth, List<Map<String, Object>> out,
-                             List<String> problems) {
+    private static void walk(View view, Rect visible, int depth, boolean inScroller,
+                             List<Map<String, Object>> out, List<String> problems) {
         if (depth > MAX_DEPTH) return;
         if (view.getVisibility() != View.VISIBLE) return;
         Rect bounds = new Rect();
@@ -93,11 +93,27 @@ public final class LayoutInspector {
                 problems.add("超出可视区域 " + overflow + "px：" + describe(view, visible));
             }
         }
+        // A view whose own height is larger than what actually shows is being cut by an ancestor — the
+        // "有些东西被遮挡看不到" case, which the screen-overflow test above cannot see because the
+        // clipped rectangle does fit on screen. Inside a scroll container, clipping is by design (that
+        // is how content below the fold works), so those are not reported as problems.
+        boolean scroller = view instanceof ScrollView
+                || view instanceof android.widget.HorizontalScrollView;
+        if (!inScroller && !scroller && view.getWidth() > 0 && view.getHeight() > 0) {
+            int lostHeight = view.getHeight() - bounds.height();
+            int lostWidth = view.getWidth() - bounds.width();
+            if (lostHeight > 4 || lostWidth > 4) {
+                problems.add("被上层容器裁掉 " + lostWidth + "x" + lostHeight + "px："
+                        + describe(view, visible) + "（实际 " + view.getWidth() + "x" + view.getHeight()
+                        + "，可见 " + bounds.width() + "x" + bounds.height() + "）");
+            }
+        }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             Rect childVisible = new Rect(visible);
+            boolean childInScroller = inScroller || scroller;
             for (int i = 0; i < group.getChildCount(); i++) {
-                walk(group.getChildAt(i), childVisible, depth + 1, out, problems);
+                walk(group.getChildAt(i), childVisible, depth + 1, childInScroller, out, problems);
             }
         }
     }
