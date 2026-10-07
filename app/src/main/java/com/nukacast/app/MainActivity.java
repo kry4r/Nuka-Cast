@@ -160,6 +160,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private boolean liveSearching;
     /** True while the live source list is being read, so the page does not start several loads. */
     private boolean liveLoading;
+    /** Guards the home page category rows against concurrent loads. */
+    private boolean homeCategoryLoading;
+    /** Where the home page category rows are rendered. */
+    private LinearLayout homeCategoryContainer;
     private long liveSwitchAt;
     /** When the source list was last read, so re-entering the page does not refetch constantly. */
     private long liveLoadedAt;
@@ -1728,6 +1732,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         if (!favorites.isEmpty()) addLibrarySection("我的收藏", favorites, false);
 
+        // One row per common category, like a TV box's home page. Filled in the background.
+        homeCategoryContainer = new LinearLayout(this);
+        homeCategoryContainer.setOrientation(LinearLayout.VERTICAL);
+        homeContent.addView(homeCategoryContainer);
+        renderHomeCategoryRows();
+
         if (!homeItems.isEmpty()) {
             addMediaSection("最近更新", homeItems, 24);
         } else {
@@ -1737,6 +1747,106 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             empty.setPadding(0, dp(28), 0, 0);
             homeContent.addView(empty);
         }
+    }
+
+    /** Category rows shown on the home page, in this order, when the site has them. */
+    private static final String[] HOME_ROW_CATEGORIES = {"电影", "电视剧", "综艺", "动漫", "纪录片"};
+
+    /** Rows already rendered, so a refresh does not duplicate them. */
+    private final java.util.Map<String, LinearLayout> homeRows =
+            new java.util.LinkedHashMap<String, LinearLayout>();
+
+    private void renderHomeCategoryRows() {
+        if (homeCategoryLoading) return;
+        homeCategoryLoading = true;
+        io.execute(new Runnable() {
+            @Override public void run() {
+                final java.util.List<Object[]> rows = new java.util.ArrayList<Object[]>();
+                try {
+                    java.util.List<com.nukacast.app.tvbox.model.Category> sites = enabledCmsSites();
+                    for (String wanted : HOME_ROW_CATEGORIES) {
+                        if (rows.size() >= 3) break;
+                        java.util.List<SearchItem> items = loadHomeRow(wanted, sites);
+                        if (items == null || items.isEmpty()) continue;
+                        rows.add(new Object[]{wanted, items});
+                    }
+                } catch (Throwable error) {
+                    AppLog.d("片源", "首页分类行加载失败：" + error.getClass().getSimpleName());
+                }
+                final java.util.List<Object[]> loaded = rows;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        homeCategoryLoading = false;
+                        if (homeCategoryContainer == null) return;
+                        // Only the rows replaced on this pass; the container also holds the rows shown
+                        // before, so a re-render does not blank the page.
+                        if (homeCategoryContainer.getChildCount() > 0) return;
+                        for (Object[] row : loaded) {
+                            @SuppressWarnings("unchecked")
+                            java.util.List<SearchItem> items = (java.util.List<SearchItem>) row[1];
+                            addCategoryRow(homeCategoryContainer, (String) row[0], items, 20);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Finds a usable category list for {@code wanted} on the enabled sites.
+     *
+     * <p>Some sites name a category "电影" but return a handful of records for it while another
+     * category of the same site carries thousands — measured on 光速资源, where browsing by the
+     * declared id was nearly empty. Several sites and several matching categories are therefore tried
+     * before the row is dropped.
+     */
+    private java.util.List<SearchItem> loadHomeRow(String wanted,
+            java.util.List<com.nukacast.app.tvbox.model.Category> sites) {
+        int siteTries = 0;
+        for (com.nukacast.app.tvbox.model.Category site : sites) {
+            if (siteTries++ >= 3) break;
+            java.util.List<com.nukacast.app.tvbox.model.Category> categories;
+            try {
+                categories = runtime.getContentService().categories(site.sourceId, site.siteKey);
+            } catch (Throwable error) {
+                continue;
+            }
+            int categoryTries = 0;
+            for (com.nukacast.app.tvbox.model.Category category : categories) {
+                if (category.name == null || !category.name.contains(wanted)) continue;
+                if (categoryTries++ >= 3) break;
+                try {
+                    java.util.List<SearchItem> items = runtime.getContentService()
+                            .browse(site.sourceId, site.siteKey, category.id, 1);
+                    if (items != null && items.size() >= 6) return items;
+                } catch (Throwable error) {
+                    AppLog.d("片源", "首页分类行 " + wanted + " 读取失败："
+                            + error.getClass().getSimpleName());
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Same row style as the other home sections, but into a container of the caller's choice. */
+    private void addCategoryRow(LinearLayout container, String title, List<SearchItem> items, int limit) {
+        container.addView(sectionTitle(title));
+        HorizontalScrollView scroll = horizontalTrack();
+        LinearLayout track = (LinearLayout) scroll.getChildAt(0);
+        int count = Math.min(limit, items.size());
+        for (int i = 0; i < count; i++) {
+            final SearchItem item = items.get(i);
+            MediaCardView card = card(item, 0, 0);
+            card.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { openMedia(item); }
+            });
+            bindFavoriteShortcut(card, item);
+            track.addView(card, cardParams());
+        }
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(172));
+        params.bottomMargin = dp(6);
+        container.addView(scroll, params);
     }
 
     private void addFeaturedPanel(SearchItem item) {

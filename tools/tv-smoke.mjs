@@ -65,6 +65,21 @@ async function main() {
   check("categories available", sitesWithCategories.length > 0,
     `${sitesWithCategories.length} sites, e.g. ${sitesWithCategories[0]?.siteName} ${sitesWithCategories[0]?.categories?.length} categories`);
 
+  // Browsing a category is what fills the home page rows, so it must return more than a stub list.
+  const firstSite = (categories.sites || []).find((s) => (s.categories || []).length > 0);
+  let browsed = 0;
+  if (firstSite) {
+    for (const category of (firstSite.categories || []).slice(0, 4)) {
+      const page = (await call("GET", `/api/debug/browse?siteKey=${encodeURIComponent(firstSite.siteKey)}` +
+        `&categoryId=${encodeURIComponent(category.id)}&page=1`)).data;
+      const count = (page.items || []).length;
+      if (count > browsed) browsed = count;
+      if (browsed >= 6) break;
+    }
+  }
+  check("category browsing returns a list", browsed >= 6,
+    `${firstSite?.siteName} best category returned ${browsed} items`);
+
   // Search by title.
   const search = (await call("POST", "/api/search", { keyword: "流浪地球" })).data;
   const items = search.items || [];
