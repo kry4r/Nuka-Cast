@@ -68,6 +68,22 @@ async function adbKey(code) {
 }
 
 /**
+ * Reads the layout, retrying while the report is nearly empty.
+ *
+ * <p>The pages rebuild their views when they load, and a report taken inside that window lists almost
+ * nothing — which would let a layout check pass without having looked at anything.
+ */
+async function layoutWithContent(minimum = 5) {
+  let layout = {};
+  for (let attempt = 0; attempt < 8; attempt++) {
+    layout = (await call("GET", "/api/debug/layout")).data;
+    if ((layout.views || []).length >= minimum) return layout;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return layout;
+}
+
+/**
  * Brings the app back to the front if it left (a BACK press on a page exits it, and every check after
  * that would only report "界面未在前台").
  */
@@ -245,7 +261,7 @@ async function main() {
   const opened = (await call("GET", `/api/debug/open?sourceId=${encodeURIComponent(first.sourceId)}` +
     `&siteKey=${encodeURIComponent(first.siteKey)}&vodId=${encodeURIComponent(first.vodId)}`)).data;
   await new Promise((r) => setTimeout(r, 4000));
-  const detailLayout = (await call("GET", "/api/debug/layout")).data;
+  const detailLayout = await layoutWithContent();
   const detailProblems = detailLayout.problems || [];
   // The detail screen is a modal, so everything in the report belongs to it: line chips look like
   // "36 集 · gsyun" and every other button is an episode chip.
@@ -419,7 +435,7 @@ async function main() {
     await call("GET", "/api/debug/live?query=");
     let numbered = [];
     for (let attempt = 0; attempt < 10 && numbered.length < 3; attempt++) {
-      const layout = (await call("GET", "/api/debug/layout")).data;
+      const layout = await layoutWithContent(3);
       numbered = (layout.views || [])
         .filter((v) => String(v.view || "").startsWith("Button[") && allNames.has(String(v.text || "")))
         .map((v) => String(v.text));
@@ -449,7 +465,7 @@ async function main() {
     // Back to the page explicitly: the group row (which holds 常看) is rebuilt on render.
     await call("GET", "/api/debug/navigate?page=live");
     await new Promise((r) => setTimeout(r, 2500));
-    const layout = (await call("GET", "/api/debug/layout")).data;
+    const layout = await layoutWithContent();
     const texts = (layout.views || []).map((v) => String(v.text || ""));
     check("watched channels are listed under 常看", texts.some((t) => t.startsWith("常看")),
       texts.filter((t) => t.startsWith("常看")).join(" / ") || "没有常看分组");
@@ -485,18 +501,19 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1000));
     await call("GET", `/api/debug/navigate?page=${page}`);
     await new Promise((r) => setTimeout(r, 5000));
-    const beforeLayout = (await call("GET", "/api/debug/layout")).data;
+    const beforeLayout = await layoutWithContent();
     const keys = await adbKeys(20, 26); // 下键 26 次
     if (!keys.ok) {
       check(`${page} 下方内容可以用方向键到达`, true, `跳过（${keys.error}）`);
       continue;
     }
     await new Promise((r) => setTimeout(r, 2000));
-    const afterLayout = (await call("GET", "/api/debug/layout")).data;
+    const afterLayout = await layoutWithContent();
     const before = scrollRange(beforeLayout) || { position: 0, max: 0 };
     const after = scrollRange(afterLayout) || { position: 0, max: 0 };
     const problems = afterLayout.problems || [];
-    const read = !!(afterLayout && afterLayout.views);
+    // A report this small means the page had not been laid out yet, not that it was clean.
+    const read = (afterLayout.views || []).length >= 5 && (beforeLayout.views || []).length >= 5;
     const reached = read &&
       (after.max === 0 ? true : after.position >= after.max * 0.9 || after.position > before.position);
     check(`${page} 下方内容可以用方向键到达`, reached && problems.length === 0,
