@@ -14,3 +14,6 @@ local.properties
 *.zip
 web/vite.config.js
 web/vite.config.d.ts
+
+# Local dev artifacts
+.preview/
