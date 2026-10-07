@@ -108,6 +108,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final String PAGE_SEARCH = "search";
     private static final String PAGE_CAST = "cast";
     private static final String PAGE_SETTINGS = "settings";
+    private static final String PAGE_LIVE = "live";
 
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final PosterImageLoader images = new PosterImageLoader();
@@ -122,9 +123,38 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private View searchPage;
     private View castPage;
     private View settingsPage;
+    private android.view.ViewGroup pageContainer;
     private LinearLayout homeContent;
     private LinearLayout moviesContent;
     private LinearLayout movieFilters;
+    // ---- 直播 ----------------------------------------------------------------
+    private Button navLive;
+    private LinearLayout livePage;
+    private LinearLayout liveSourceRow;
+    private LinearLayout liveGroupRow;
+    private LinearLayout liveChannelGrid;
+    private TextView liveStatus;
+    private final java.util.concurrent.ExecutorService liveIo =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.List<com.nukacast.app.live.model.LiveSourceInfo> liveSources =
+            new java.util.ArrayList<com.nukacast.app.live.model.LiveSourceInfo>();
+    private com.nukacast.app.live.model.LiveCatalog liveCatalog;
+    private String liveSourceId = "";
+    private String liveGroupName = "";
+    /** Channels of the group being watched, so up/down can zap during playback. */
+    private final java.util.List<com.nukacast.app.live.model.LiveCatalog.Channel> livePlaying =
+            new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
+    private int livePlayingIndex = -1;
+    /** Channel pages are 120 entries: large playlists are far too big for one screen. */
+    private int liveChannelPage;
+    /** Sources that failed this session, so the page can skip them. */
+    private final java.util.Set<String> liveFailedSources = new java.util.HashSet<String>();
+    private String liveLastError = "";
+    private long liveSwitchAt;
+    /** When the source list was last read, so re-entering the page does not refetch constantly. */
+    private long liveLoadedAt;
+    /** Consecutive automatic channel switches after failures, reset on a successful play. */
+    private int liveAutoSwitch;
     /** Category browsing state: which site and category the movies page is showing. */
     private final java.util.List<com.nukacast.app.tvbox.model.Category> browseCategories =
             new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
@@ -274,6 +304,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (isFullScreenMedia()) {
             // Any key brings the HUD back; it fades by itself so the picture stays clean.
             if (playerHud != null) playerHud.reveal();
+            // Live TV zaps channels with up/down, the way a set-top box does.
+            if (livePlayingIndex >= 0 && keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                switchLiveChannel(-1);
+                return true;
+            }
+            if (livePlayingIndex >= 0 && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                switchLiveChannel(1);
+                return true;
+            }
             if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
                 runtime.getPlayerController().toggle();
                 refreshPlayerHud();
@@ -360,6 +399,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void bindViews() {
         appShell = findViewById(R.id.appShell);
         homePage = findViewById(R.id.homePage);
+        pageContainer = (android.view.ViewGroup) homePage.getParent();
         moviesPage = findViewById(R.id.moviesPage);
         searchPage = findViewById(R.id.searchPage);
         castPage = findViewById(R.id.castPage);
@@ -412,6 +452,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         buildSearchKeyboard();
 
         buildMovieFilterRow();
+        buildLivePage();
 
         refreshSourcesButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { refreshSources(); }
@@ -464,7 +505,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Switches page by name; used by the debug API so a screen can be inspected on demand. */
     public void showPageByName(String name) {
         if (name == null) return;
-        if ("movies".equals(name)) showPage(PAGE_MOVIES);
+        if ("live".equals(name)) showPage(PAGE_LIVE);
+        else if ("movies".equals(name)) showPage(PAGE_MOVIES);
         else if ("search".equals(name)) showPage(PAGE_SEARCH);
         else if ("cast".equals(name)) showPage(PAGE_CAST);
         else if ("settings".equals(name)) showPage(PAGE_SETTINGS);
@@ -509,14 +551,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         searchPage.setVisibility(PAGE_SEARCH.equals(page) ? View.VISIBLE : View.GONE);
         castPage.setVisibility(PAGE_CAST.equals(page) ? View.VISIBLE : View.GONE);
         settingsPage.setVisibility(PAGE_SETTINGS.equals(page) ? View.VISIBLE : View.GONE);
+        if (livePage != null) livePage.setVisibility(PAGE_LIVE.equals(page) ? View.VISIBLE : View.GONE);
         findViewById(R.id.navHome).setSelected(PAGE_HOME.equals(page));
         findViewById(R.id.navMovies).setSelected(PAGE_MOVIES.equals(page));
         findViewById(R.id.navCast).setSelected(PAGE_CAST.equals(page));
         findViewById(R.id.navSettings).setSelected(PAGE_SETTINGS.equals(page));
+        if (navLive != null) navLive.setSelected(PAGE_LIVE.equals(page));
         // The type filters belong to the movies page; leaving it highlighted made it look as if a
         // filter were still applied while a different page was on screen.
         if (!PAGE_MOVIES.equals(page)) setFilterSelection("");
         if (PAGE_HOME.equals(page)) renderHome();
+        if (PAGE_LIVE.equals(page)) loadLive();
         render();
     }
 
@@ -859,6 +904,389 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if (category.siteKey.equals(siteKey)) return category.sourceId;
         }
         return "";
+    }
+
+    // --------------------------------------------------------------------------------------
+    // 直播：电视端独立页面（源 → 分组 → 频道），与 TVBox 的直播用法对齐
+    // --------------------------------------------------------------------------------------
+
+    /** Builds the live page in code: the other pages come from the XML layout, this one is dynamic. */
+    private void buildLivePage() {
+        android.view.ViewGroup nav = (android.view.ViewGroup) findViewById(R.id.navHome).getParent();
+        navLive = new Button(this);
+        navLive.setText("直播");
+        navLive.setTextSize(13);
+        navLive.setAllCaps(false);
+        navLive.setFocusable(true);
+        navLive.setGravity(Gravity.CENTER);
+        navLive.setTextColor(TvTheme.primary(this));
+        navLive.setBackgroundDrawable(TvTheme.focusable(this));
+        LinearLayout.LayoutParams navParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
+        navParams.bottomMargin = dp(6);
+        navLive.setLayoutParams(navParams);
+        navLive.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showPage(PAGE_LIVE); }
+        });
+        int navIndex = nav.getChildCount();
+        for (int i = 0; i < nav.getChildCount(); i++) {
+            if (nav.getChildAt(i).getId() == R.id.navMovies) {
+                navIndex = i + 1;
+                break;
+            }
+        }
+        nav.addView(navLive, Math.min(navIndex, nav.getChildCount()));
+
+        livePage = new LinearLayout(this);
+        livePage.setOrientation(LinearLayout.VERTICAL);
+        livePage.setVisibility(View.GONE);
+
+        liveStatus = bodyText("");
+        liveStatus.setPadding(0, 0, 0, dp(6));
+        livePage.addView(liveStatus);
+
+        liveSourceRow = chipRow();
+        livePage.addView(chipRowHolder(liveSourceRow));
+        liveGroupRow = chipRow();
+        livePage.addView(chipRowHolder(liveGroupRow));
+
+        ScrollView channels = new ScrollView(this);
+        channels.setVerticalScrollBarEnabled(false);
+        liveChannelGrid = new LinearLayout(this);
+        liveChannelGrid.setOrientation(LinearLayout.VERTICAL);
+        channels.addView(liveChannelGrid, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        livePage.addView(channels, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        pageContainer.addView(livePage, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private LinearLayout chipRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        return row;
+    }
+
+    private android.widget.HorizontalScrollView chipRowHolder(LinearLayout row) {
+        android.widget.HorizontalScrollView bar = new android.widget.HorizontalScrollView(this);
+        bar.setHorizontalScrollBarEnabled(false);
+        bar.addView(row, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(40));
+        params.bottomMargin = dp(6);
+        bar.setLayoutParams(params);
+        return bar;
+    }
+
+    /** Loads the live sources once, then the catalog of the selected one. */
+    private void loadLive() {
+        // The list is re-read on every visit: sources can be added or removed from the web console
+        // while the app is open, and a page that keeps showing a deleted source looks broken.
+        if (System.currentTimeMillis() - liveLoadedAt < 5000L && !liveSources.isEmpty()) {
+            renderLiveSourceRow();
+            if (liveCatalog == null && !liveSourceId.isEmpty()) loadLiveCatalog(liveSourceId);
+            return;
+        }
+        {
+            liveFailedSources.clear();
+            liveLastError = "";
+            liveCatalog = null;
+            liveGroupName = "";
+            liveSources.clear();
+            liveSourceId = "";
+        }
+        if (liveSources.isEmpty()) {
+            liveStatus.setText("正在读取直播源…");
+            liveIo.execute(new Runnable() {
+                @Override public void run() {
+                    final List<com.nukacast.app.live.model.LiveSourceInfo> found =
+                            new java.util.ArrayList<com.nukacast.app.live.model.LiveSourceInfo>();
+                    try {
+                        found.addAll(runtime.getLiveService().sources());
+                    } catch (Throwable error) {
+                        AppLog.w("直播", "读取直播源失败：" + error.getClass().getSimpleName());
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            liveSources.clear();
+                            liveSources.addAll(found);
+                            if (liveSources.isEmpty()) {
+                                liveStatus.setText("还没有直播源：在网页的“直播”页添加一个 IPTV 清单，"
+                                        + "或在“源管理”里添加带直播的片源。");
+                                liveSourceRow.removeAllViews();
+                                liveGroupRow.removeAllViews();
+                                liveChannelGrid.removeAllViews();
+                                return;
+                            }
+                            liveLoadedAt = System.currentTimeMillis();
+                            if (liveSourceId.isEmpty() || liveFailedSources.contains(liveSourceId)) {
+                                String next = nextUntriedLiveSource();
+                                liveSourceId = next == null ? liveSources.get(0).id : next;
+                            }
+                            renderLiveSourceRow();
+                            loadLiveCatalog(liveSourceId);
+                        }
+                    });
+                }
+            });
+            return;
+        }
+        renderLiveSourceRow();
+        if (liveCatalog == null) loadLiveCatalog(liveSourceId);
+    }
+
+    /** The first source that has not failed in this session, or null. */
+    private String nextUntriedLiveSource() {
+        for (com.nukacast.app.live.model.LiveSourceInfo info : liveSources) {
+            if (!liveFailedSources.contains(info.id)) return info.id;
+        }
+        return null;
+    }
+
+    private void renderLiveSourceRow() {
+        liveSourceRow.removeAllViews();
+        for (final com.nukacast.app.live.model.LiveSourceInfo info : liveSources) {
+            Button chip = actionButton(info.name == null ? "直播源" : info.name, 0);
+            chip.setSelected(info.id.equals(liveSourceId));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    if (info.id.equals(liveSourceId)) return;
+                    liveSourceId = info.id;
+                    liveCatalog = null;
+                    liveGroupName = "";
+                    renderLiveSourceRow();
+                    loadLiveCatalog(liveSourceId);
+                }
+            });
+            liveSourceRow.addView(chip);
+        }
+    }
+
+    private void loadLiveCatalog(final String sourceId) {
+        liveStatus.setText("正在读取频道…");
+        liveLastError = "";
+        liveChannelGrid.removeAllViews();
+        liveGroupRow.removeAllViews();
+        liveIo.execute(new Runnable() {
+            @Override public void run() {
+                com.nukacast.app.live.model.LiveCatalog catalog = null;
+                String failure = "";
+                try {
+                    catalog = runtime.getLiveService().catalog(sourceId);
+                } catch (Throwable error) {
+                    failure = error.getMessage() == null ? "直播源读取失败" : error.getMessage();
+                }
+                final com.nukacast.app.live.model.LiveCatalog result = catalog;
+                final String reason = failure;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (result == null || result.groups.isEmpty()) {
+                            liveFailedSources.add(sourceId);
+                            liveLastError = reason.isEmpty() ? "这个直播源没有频道。" : reason;
+                            // Try the next source rather than leaving the page empty: playlists hosted
+                            // on blocked or dead hosts are common.
+                            String next = nextUntriedLiveSource();
+                            if (next != null) {
+                                liveSourceId = next;
+                                renderLiveSourceRow();
+                                loadLiveCatalog(next);
+                                return;
+                            }
+                            liveStatus.setText(liveFailedSources.size() > 1
+                                    ? "所有直播源都不可用：" + liveLastError
+                                    : "直播源读取失败：" + liveLastError);
+                            return;
+                        }
+                        liveCatalog = result;
+                        if (liveGroupName.isEmpty()) liveGroupName = result.groups.get(0).name;
+                        renderLiveGroups();
+                        renderLiveChannels();
+                    }
+                });
+            }
+        });
+    }
+
+    private void renderLiveGroups() {
+        liveGroupRow.removeAllViews();
+        for (final com.nukacast.app.live.model.LiveCatalog.Group group : liveCatalog.groups) {
+            Button chip = actionButton(group.name + " (" + group.channels.size() + ")", 0);
+            chip.setSelected(group.name.equals(liveGroupName));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    liveGroupName = group.name;
+                    liveChannelPage = 0;
+                    renderLiveGroups();
+                    renderLiveChannels();
+                }
+            });
+            liveGroupRow.addView(chip);
+        }
+    }
+
+    private static final int LIVE_PAGE_SIZE = 120;
+
+    private void renderLiveChannels() {
+        liveChannelGrid.removeAllViews();
+        com.nukacast.app.live.model.LiveCatalog.Group group = null;
+        for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
+            if (candidate.name.equals(liveGroupName)) group = candidate;
+        }
+        if (group == null) return;
+        int total = group.channels.size();
+        int pages = Math.max(1, (total + LIVE_PAGE_SIZE - 1) / LIVE_PAGE_SIZE);
+        liveChannelPage = Math.max(0, Math.min(liveChannelPage, pages - 1));
+        int from = liveChannelPage * LIVE_PAGE_SIZE;
+        int to = Math.min(total, from + LIVE_PAGE_SIZE);
+        liveStatus.setText(liveCatalog.sourceName + " · " + group.name + " · " + total + " 个频道"
+                + (pages > 1 ? "（第 " + (liveChannelPage + 1) + "/" + pages + " 页）" : ""));
+        // A playlist such as iptv-org's carries 11k channels; building every button at once both
+        // stalls the UI thread and exhausts memory on a 1.5GB TV, so a group is paged.
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels =
+                group.channels.subList(from, to);
+        int columns = liveColumns();
+        LinearLayout row = null;
+        for (int i = 0; i < channels.size(); i++) {
+            if (i % columns == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(30));
+                rowParams.bottomMargin = dp(4);
+                liveChannelGrid.addView(row, rowParams);
+            }
+            final com.nukacast.app.live.model.LiveCatalog.Channel channel = channels.get(i);
+            Button button = actionButton(channel.name, 0);
+            button.setSingleLine(true);
+            button.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(30), 1f);
+            params.setMargins(dp(2), 0, dp(2), 0);
+            button.setLayoutParams(params);
+            button.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { playLiveChannel(channel); }
+            });
+            row.addView(button);
+        }
+        if (pages > 1) {
+            LinearLayout pager = new LinearLayout(this);
+            pager.setOrientation(LinearLayout.HORIZONTAL);
+            Button previous = actionButton("上一页", 0);
+            previous.setEnabled(liveChannelPage > 0);
+            previous.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    if (liveChannelPage > 0) {
+                        liveChannelPage--;
+                        renderLiveChannels();
+                    }
+                }
+            });
+            Button next = actionButton("下一页", 0);
+            next.setEnabled(liveChannelPage < livePageCount() - 1);
+            next.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    if (liveChannelPage < livePageCount() - 1) {
+                        liveChannelPage++;
+                        renderLiveChannels();
+                    }
+                }
+            });
+            pager.addView(previous);
+            pager.addView(next);
+            LinearLayout.LayoutParams pagerParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, dp(30));
+            pagerParams.topMargin = dp(4);
+            liveChannelGrid.addView(pager, pagerParams);
+        }
+        if (row != null && row.getChildCount() > 0) row.getChildAt(0).requestFocus();
+    }
+
+    private int livePageCount() {
+        for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
+            if (candidate.name.equals(liveGroupName)) {
+                return Math.max(1,
+                        (candidate.channels.size() + LIVE_PAGE_SIZE - 1) / LIVE_PAGE_SIZE);
+            }
+        }
+        return 1;
+    }
+
+    private int liveColumns() {
+        float widthDp = getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density;
+        return Math.max(3, (int) ((widthDp - 150f) / 120f));
+    }
+
+    /** Starts a channel and remembers its neighbours so 上/下键 can zap. */
+    private void playLiveChannel(com.nukacast.app.live.model.LiveCatalog.Channel channel) {
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> group =
+                new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
+        for (com.nukacast.app.live.model.LiveCatalog.Group candidate : liveCatalog.groups) {
+            if (candidate.name.equals(liveGroupName)) group.addAll(candidate.channels);
+        }
+        livePlaying.clear();
+        livePlaying.addAll(group);
+        livePlayingIndex = group.indexOf(channel);
+        if (channel.urls.isEmpty()) {
+            android.widget.Toast.makeText(this, "该频道没有播放地址",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        liveSwitchAt = System.currentTimeMillis();
+        liveAutoSwitch = 0;
+        runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
+        render();
+        if (playerHud != null) {
+            playerHud.show(channel.name, (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播",
+                    "按返回键退出 · 上/下键换台", true);
+        }
+    }
+
+    /**
+     * Called once a second while media is playing.
+     *
+     * <p>A live channel that dies has to be replaced: a dead stream otherwise leaves the player in
+     * an error state with no way back except leaving the page. Up to three channels are tried, then
+     * the failure is shown.
+     */
+    public void onPlaybackTick(int positionMs, int durationMs) {
+        if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
+        if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        if (!"error".equals(playback.state)) return;
+        if (liveAutoSwitch >= 3) {
+            if (playerHud != null) {
+                playerHud.showError("这个频道的地址播不了，按返回键退出或上/下键换台");
+            }
+            liveAutoSwitch = 0;
+            return;
+        }
+        liveAutoSwitch++;
+        AppLog.i("直播", "频道播放失败，自动换到下一个（第 " + liveAutoSwitch + " 次）");
+        switchLiveChannel(1);
+    }
+
+    /** Zaps to the neighbouring channel while watching live TV. */
+    private void switchLiveChannel(int delta) {
+        if (livePlaying.isEmpty()) return;
+        liveSwitchAt = System.currentTimeMillis();
+        int next = livePlayingIndex + delta;
+        if (next < 0) next = livePlaying.size() - 1;
+        if (next >= livePlaying.size()) next = 0;
+        com.nukacast.app.live.model.LiveCatalog.Channel channel = livePlaying.get(next);
+        if (channel.urls.isEmpty()) return;
+        livePlayingIndex = next;
+        runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
+        if (playerHud != null) {
+            playerHud.show(channel.name,
+                    (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播",
+                    "按返回键退出 · 上/下键换台", true);
+        }
     }
 
     private void renderDramaMovies() {

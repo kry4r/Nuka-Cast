@@ -35,4 +35,49 @@ public final class ResponseBodies {
             throws IOException {
         return new String(bytes(body, maximumBytes), charset);
     }
+
+    /**
+     * Decodes a text response, honouring the charset the server declares and falling back to GBK.
+     *
+     * <p>Chinese IPTV playlists and CMS responses are frequently GBK while claiming nothing at all in
+     * the headers; decoding them as UTF-8 turned every channel name into mojibake ("ֱ���й�" on the
+     * TV). UTF-8 is tried strictly first, and only a decode failure falls back, so the common case is
+     * unchanged.
+     */
+    public static String text(ResponseBody body, int maximumBytes) throws IOException {
+        byte[] raw = bytes(body, maximumBytes);
+        String declared = body.contentType() == null || body.contentType().charset() == null
+                ? "" : body.contentType().charset().name();
+        if (!declared.isEmpty()) {
+            try {
+                return new String(raw, Charset.forName(declared));
+            } catch (Exception ignored) {
+                // Unsupported name: fall through to detection.
+            }
+        }
+        try {
+            return UTF8_NEW_DECODER.get().decode(java.nio.ByteBuffer.wrap(raw)).toString();
+        } catch (Exception invalidUtf8) {
+            for (String name : FALLBACK_CHARSETS) {
+                try {
+                    return new String(raw, Charset.forName(name));
+                } catch (Exception ignored) {
+                    // Try the next candidate.
+                }
+            }
+            return new String(raw, Charset.forName("UTF-8"));
+        }
+    }
+
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
+    /** GBK first: it is what Chinese playlists actually use when they are not UTF-8. */
+    private static final String[] FALLBACK_CHARSETS = {"GBK", "GB18030", "ISO-8859-1"};
+    private static final ThreadLocal<java.nio.charset.CharsetDecoder> UTF8_NEW_DECODER =
+            new ThreadLocal<java.nio.charset.CharsetDecoder>() {
+                @Override protected java.nio.charset.CharsetDecoder initialValue() {
+                    return UTF_8.newDecoder()
+                            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+                }
+            };
 }

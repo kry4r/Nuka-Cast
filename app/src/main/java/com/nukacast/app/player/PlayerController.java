@@ -68,6 +68,8 @@ public final class PlayerController {
     private DefaultTrackSelector trackSelector;
     /** True while the best available variant is being forced; cleared when the decoder refuses it. */
     private boolean bestQualityForced;
+    /** Ceiling on internal restarts, so no failure mode can become a restart loop. */
+    private static final int MAX_RESTARTS_PER_MEDIA = 3;
     /** Video override currently applied, so it is not re-applied on every tracks change. */
     private com.google.android.exoplayer2.source.TrackGroup forcedGroup;
     private int forcedTrack = -1;
@@ -80,6 +82,12 @@ public final class PlayerController {
     private String currentTitle = "";
     private Map<String, String> currentHeaders = Collections.emptyMap();
     private int retriedWithSoftware;
+    /** The URL whose play request may force the best variant; null disables forcing entirely. */
+    private String forceQualityForUrl;
+    /** Set when both decoders refused the stream: the smallest variant is tried before giving up. */
+    private boolean preferLowestVariant;
+    /** Internal restarts (decoder fallback, quality fallback) for the current media. */
+    private int restartsForUrl;
     /** Codec name seen for the current stream, for diagnostics. */
     private String decoderName = "";
     /** Video track actually being rendered: answers "why does it look soft". */
@@ -154,6 +162,11 @@ public final class PlayerController {
         }
         mainHandler.post(new Runnable() {
             @Override public void run() {
+                // A request from the user: forcing the best variant is allowed again, as is the
+                // decoder-fallback retry.
+                forceQualityForUrl = mediaUrl;
+                restartsForUrl = 0;
+                preferLowestVariant = false;
                 startPlayer(context.getApplicationContext(), mediaUrl, mediaTitle,
                         headers == null ? Collections.<String, String>emptyMap() : headers,
                         Math.max(0, startPositionMs));
@@ -315,9 +328,10 @@ public final class PlayerController {
                     .build());
             trackSelector = selector;
             // forceHighestSupportedBitrate alone was not enough: ExoPlayer still selected the 320p
-            // variant of a manifest offering 1080p at 6.2 Mbps, which is what "太糊了" was. The
-            // highest variant is therefore selected explicitly once the manifest is known.
-            bestQualityForced = true;
+            // variant of a manifest offering 1080p at 6.2 Mbps, which is what "太糊了" was, so the
+            // highest variant is selected explicitly. Only for the URL the user actually asked for:
+            // a retry after a decoder failure must never force it again, or playback loops.
+            bestQualityForced = forceQualityForUrl != null && forceQualityForUrl.equals(mediaUrl);
             ExoPlayer created = new ExoPlayer.Builder(context, renderers)
                     .setTrackSelector(selector)
                     .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSource))
@@ -362,8 +376,10 @@ public final class PlayerController {
                     // sees as being thrown back to the home screen. Retrying once with the software
                     // decoder is what makes such streams playable at all.
                     if (isDecoderFailure(failure) && retriedWithSoftware < 1
+                            && restartsForUrl < MAX_RESTARTS_PER_MEDIA
                             && !DecoderPreference.prefersSoftware(context)) {
                         retriedWithSoftware++;
+                        restartsForUrl++;
                         DecoderPreference.preferSoftware(context);
                         int position = mirroredPositionMs;
                         AppLog.w("播放器", "硬件解码失败，改用软件解码重试："
@@ -372,10 +388,14 @@ public final class PlayerController {
                         startPlayer(context, currentUrl, currentTitle, currentHeaders, position);
                         return;
                     }
-                    if (isDecoderFailure(failure) && bestQualityForced) {
+                    if (isDecoderFailure(failure) && bestQualityForced
+                            && restartsForUrl < MAX_RESTARTS_PER_MEDIA) {
                         // The best variant needs more than this decoder can do: go back to automatic
-                        // selection so the user gets a picture rather than an error.
+                        // selection so the user gets a picture rather than an error. Forcing stays off
+                        // for this media, which is what stops the retry from looping.
                         bestQualityForced = false;
+                        forceQualityForUrl = null;
+                        restartsForUrl++;
                         forcedGroup = null;
                         forcedTrack = -1;
                         if (trackSelector != null) {
@@ -384,6 +404,18 @@ public final class PlayerController {
                         }
                         AppLog.w("播放器", "最高画质无法解码，改回自动选择清晰度（" + description + "）");
                         releasePlayer("retrying-quality");
+                        startPlayer(context, currentUrl, currentTitle, currentHeaders, 0);
+                        return;
+                    }
+                    if (isDecoderFailure(failure) && !preferLowestVariant
+                            && restartsForUrl < MAX_RESTARTS_PER_MEDIA) {
+                        // Both decoders refused the stream. An adaptive playlist may still offer a
+                        // variant small enough for this device, which is worth one more attempt: it is
+                        // the difference between "看不了" and a softer picture.
+                        preferLowestVariant = true;
+                        restartsForUrl++;
+                        AppLog.w("播放器", "解码器无法处理该清晰度，改试最低清晰度（" + description + "）");
+                        releasePlayer("retrying-lowest");
                         startPlayer(context, currentUrl, currentTitle, currentHeaders, 0);
                         return;
                     }
@@ -423,11 +455,13 @@ public final class PlayerController {
      */
     private void forceBestVideoTrack(com.google.android.exoplayer2.Tracks tracks) {
         DefaultTrackSelector selector = trackSelector;
-        if (!bestQualityForced || selector == null || tracks == null) return;
+        if ((!bestQualityForced && !preferLowestVariant) || selector == null || tracks == null) return;
+        boolean wantLowest = preferLowestVariant && !bestQualityForced;
         com.google.android.exoplayer2.source.TrackGroup bestGroup = null;
         int bestTrack = -1;
         int bestPixels = 0;
         int bestBitrate = 0;
+        boolean bestSupported = false;
         for (com.google.android.exoplayer2.Tracks.Group group : tracks.getGroups()) {
             if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
             for (int i = 0; i < group.length; i++) {
@@ -435,13 +469,29 @@ public final class PlayerController {
                 if (format.width <= 0 || format.height <= 0) continue;
                 int pixels = format.width * format.height;
                 int bitrate = format.bitrate == Format.NO_VALUE ? 0 : format.bitrate;
-                if (pixels <= bestPixels && !(pixels == bestPixels && bitrate > bestBitrate)) continue;
                 // Only variants this device can actually decode. Without this check a 1080p variant
                 // was forced on a decoder limited to 720p and playback simply buffered forever
                 // instead of reporting an error.
-                if (!decoderSupports(format)) continue;
+                boolean supported = decoderSupports(format);
+                if (wantLowest) {
+                    boolean better = bestGroup == null
+                            || (supported && !bestSupported)
+                            || (supported == bestSupported
+                                    && (pixels < bestPixels
+                                            || (pixels == bestPixels && bitrate < bestBitrate)));
+                    if (!better) continue;
+                    bestPixels = pixels;
+                    bestBitrate = bitrate;
+                    bestSupported = supported;
+                    bestGroup = group.getMediaTrackGroup();
+                    bestTrack = i;
+                    continue;
+                }
+                if (!supported) continue;
+                if (pixels <= bestPixels && !(pixels == bestPixels && bitrate > bestBitrate)) continue;
                 bestPixels = pixels;
                 bestBitrate = bitrate;
+                bestSupported = true;
                 bestGroup = group.getMediaTrackGroup();
                 bestTrack = i;
             }
@@ -457,7 +507,8 @@ public final class PlayerController {
                     .build());
             forcedGroup = bestGroup;
             forcedTrack = bestTrack;
-            AppLog.i("播放器", "已选择最高画质轨道：" + bestPixels + " 像素");
+            AppLog.i("播放器", (wantLowest ? "已选择最低画质轨道：" : "已选择最高画质轨道：")
+                    + bestPixels + " 像素");
         } catch (Throwable error) {
             AppLog.d("播放器", "固定最高画质失败，保持自适应：" + error.getClass().getSimpleName());
         }
@@ -513,6 +564,7 @@ public final class PlayerController {
             }
             AppLog.w("播放器", "最高画质长时间无画面，改回自动选择清晰度");
             bestQualityForced = false;
+            forceQualityForUrl = null;
             forcedGroup = null;
             forcedTrack = -1;
             if (trackSelector != null) {

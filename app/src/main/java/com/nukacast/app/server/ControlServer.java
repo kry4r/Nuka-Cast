@@ -1108,20 +1108,16 @@ public final class ControlServer extends NanoHTTPD {
     }
 
     /** User playlists plus the live sources that come from TVBox configs, marked for the UI. */
+    /**
+     * One row per playable live source.
+     *
+     * <p>Playlists added by the user and playlists inherited from a config used to be listed as
+     * separate rows even when they pointed at the same URL, so the console (and the TV page) showed
+     * the same source two or three times. {@link com.nukacast.app.live.LiveService#sources()} is now
+     * the single, de-duplicated source of truth.
+     */
     private List<Map<String, Object>> liveSources() {
         List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
-        for (com.nukacast.app.tvbox.model.LivePlaylist playlist : runtime.getTvBoxRepository()
-                .getLiveSourceStore().all()) {
-            Map<String, Object> row = new HashMap<String, Object>();
-            row.put("id", playlist.id);
-            row.put("name", playlist.name);
-            row.put("url", playlist.url);
-            row.put("enabled", playlist.enabled);
-            row.put("error", playlist.error);
-            row.put("updatedAt", playlist.updatedAt);
-            row.put("user", true);
-            result.add(row);
-        }
         for (com.nukacast.app.live.model.LiveSourceInfo info : runtime.getLiveService().sources()) {
             Map<String, Object> row = new HashMap<String, Object>();
             row.put("id", info.id);

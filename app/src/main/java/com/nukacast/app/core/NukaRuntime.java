@@ -65,6 +65,10 @@ public final class NukaRuntime {
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
             @Override public void onProgress(int positionMs, int durationMs) {
                 mediaLibrary.updateActiveProgress(positionMs, durationMs);
+                // The activity watches this tick to react to a live stream that died mid-playback;
+                // a failed channel must be replaced, not left spinning.
+                com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+                if (activity != null) activity.onPlaybackTick(positionMs, durationMs);
             }
         });
         airPlayReceiver = new AirPlayReceiver(this.context, state, new Runnable() {

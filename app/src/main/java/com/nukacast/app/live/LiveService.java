@@ -67,7 +67,17 @@ public final class LiveService {
             }
         }
         for (TvBoxConfig.LiveSource source : repository.getLiveSources()) {
-            result.add(info(source));
+            LiveSourceInfo candidate = info(source);
+            // The repository already re-exports user playlists, so the same playlist could be listed
+            // twice - once as a stored playlist and once as a config source. One entry per URL.
+            boolean duplicate = false;
+            for (LiveSourceInfo existing : result) {
+                if (existing.url != null && existing.url.equalsIgnoreCase(candidate.url)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) result.add(candidate);
         }
         return result;
     }
@@ -126,8 +136,8 @@ public final class LiveService {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("节目单 HTTP " + response.code());
             }
-            return EpgParser.parse(ResponseBodies.string(
-                    response.body(), MAX_LIVE_BYTES, UTF_8), channel.epgId, date);
+            return EpgParser.parse(ResponseBodies.text(
+                    response.body(), MAX_LIVE_BYTES), channel.epgId, date);
         }
     }
 
@@ -146,8 +156,8 @@ public final class LiveService {
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IllegalStateException("直播清单 HTTP " + response.code());
             }
-            return LivePlaylistParser.parse(ResponseBodies.string(
-                    response.body(), MAX_LIVE_BYTES, UTF_8));
+            return LivePlaylistParser.parse(ResponseBodies.text(
+                    response.body(), MAX_LIVE_BYTES));
         }
     }
 
