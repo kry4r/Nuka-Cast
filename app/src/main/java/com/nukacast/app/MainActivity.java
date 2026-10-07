@@ -349,8 +349,93 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
     }
 
+    /** Digits typed on the live page, waiting to be turned into a channel number. */
+    private String liveJumpDigits = "";
+    private final Handler liveJumpHandler = new Handler();
+
+    private final Runnable commitLiveJump = new Runnable() {
+        @Override public void run() {
+            jumpToLiveChannel(liveJumpDigits);
+        }
+    };
+
+    private static boolean isDigitKey(int keyCode) {
+        return (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9)
+                || (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9);
+    }
+
+    private static String digitOf(int keyCode) {
+        if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) {
+            return String.valueOf(keyCode - KeyEvent.KEYCODE_NUMPAD_0);
+        }
+        return String.valueOf(keyCode - KeyEvent.KEYCODE_0);
+    }
+
+    /**
+     * Jumps to the n-th channel of the list being shown (the number keys on a TV remote).
+     *
+     * <p>Waiting briefly for more digits means 1 3 reaches channel 13 rather than channel 1 followed by
+     * channel 3 — the same behaviour a set-top box has.
+     */
+    private boolean handleLiveDigits(int keyCode) {
+        // Works on the live page and while a channel is playing: a set-top box lets you type a channel
+        // number at any time, and that is exactly when the numbers are reached for.
+        if (!PAGE_LIVE.equals(currentPage) && livePlayingIndex < 0) return false;
+        if (keyCode == KeyEvent.KEYCODE_DEL) {
+            liveJumpHandler.removeCallbacks(commitLiveJump);
+            liveJumpDigits = "";
+            showLiveJumpNotice("");
+            return true;
+        }
+        if (!isDigitKey(keyCode)) return false;
+        if (liveJumpDigits.length() >= 4) liveJumpDigits = "";
+        liveJumpDigits = liveJumpDigits + digitOf(keyCode);
+        showLiveJumpNotice("跳到频道：" + liveJumpDigits);
+        liveJumpHandler.removeCallbacks(commitLiveJump);
+        liveJumpHandler.postDelayed(commitLiveJump, 1500L);
+        return true;
+    }
+
+    /** Number feedback: on screen while watching, on the list otherwise. */
+    private void showLiveJumpNotice(String text) {
+        if (isFullScreenMedia() && playerHud != null) {
+            if (text.isEmpty()) playerHud.setSubtitle("");
+            else playerHud.showSeek(text);
+            return;
+        }
+        if (liveEpgLine != null) liveEpgLine.setText(text);
+    }
+
+    /** Selects a 1-based position in the visible channel list and starts playing it. */
+    private void jumpToLiveChannel(String digits) {
+        liveJumpHandler.removeCallbacks(commitLiveJump);
+        liveJumpDigits = "";
+        if (digits == null || digits.isEmpty()) return;
+        int number;
+        try {
+            number = Integer.parseInt(digits);
+        } catch (NumberFormatException error) {
+            return;
+        }
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels = visibleChannelList();
+        if (channels.isEmpty()) {
+            showLiveJumpNotice("先选一个直播源");
+            return;
+        }
+        if (number < 1 || number > channels.size()) {
+            String message = "没有第 " + number + " 个频道（当前 " + channels.size() + " 个）";
+            showLiveJumpNotice(message);
+            if (!isFullScreenMedia()) {
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+        playLiveChannel(channels.get(number - 1));
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (handleLiveDigits(keyCode)) return true;
         if (isFullScreenMedia()) {
             // Any key brings the HUD back; it fades by itself so the picture stays clean.
             if (playerHud != null) playerHud.reveal();
@@ -1733,8 +1818,49 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
     }
 
+    /** Channels watched recently on this source, newest first (Fongmi-style 常看). */
+    private List<com.nukacast.app.live.model.LiveCatalog.Channel> recentLiveChannels() {
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> result =
+                new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Channel>();
+        if (liveCatalog == null) return result;
+        for (String id : com.nukacast.app.live.RecentChannels.list(livePrefs(), liveSourceId)) {
+            for (com.nukacast.app.live.model.LiveCatalog.Group group : liveCatalog.groups) {
+                boolean found = false;
+                for (com.nukacast.app.live.model.LiveCatalog.Channel channel : group.channels) {
+                    if (channel.id.equals(id)) {
+                        result.add(channel);
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+        }
+        return result;
+    }
+
+    private static final String LIVE_GROUP_RECENT = "常看";
+
+    private android.content.SharedPreferences livePrefs() {
+        return getSharedPreferences("live_page", MODE_PRIVATE);
+    }
+
     private void renderLiveGroups() {
         liveGroupRow.removeAllViews();
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> recent = recentLiveChannels();
+        if (!recent.isEmpty()) {
+            Button chip = actionButton(LIVE_GROUP_RECENT + " (" + recent.size() + ")", 0);
+            chip.setSelected(LIVE_GROUP_RECENT.equals(liveGroupName));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    liveGroupName = LIVE_GROUP_RECENT;
+                    liveChannelPage = 0;
+                    renderLiveGroups();
+                    renderLiveChannels();
+                }
+            });
+            liveGroupRow.addView(chip);
+        }
         for (final com.nukacast.app.live.model.LiveCatalog.Group group : liveCatalog.groups) {
             Button chip = actionButton(group.name + " (" + group.channels.size() + ")", 0);
             chip.setSelected(group.name.equals(liveGroupName));
@@ -1755,6 +1881,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void renderLiveChannels() {
         if (liveSearching) {
             renderLiveSearchResults();
+            return;
+        }
+        if (LIVE_GROUP_RECENT.equals(liveGroupName)) {
+            List<com.nukacast.app.live.model.LiveCatalog.Channel> recent = recentLiveChannels();
+            liveStatus.setText(liveCatalog.sourceName + " · 常看 · " + recent.size() + " 个频道");
+            liveFocusedChannelId = "";
+            if (liveEpgLine != null) liveEpgLine.setText("");
+            renderLiveChannelList(recent, false);
             return;
         }
         com.nukacast.app.live.model.LiveCatalog.Group group = null;
@@ -1933,6 +2067,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
+        com.nukacast.app.live.RecentChannels.remember(livePrefs(), liveSourceId, channel.id);
+        // The 常看 chip is part of the group row, so it has to be rebuilt or the channel just watched
+        // would not show up there until the page was reloaded.
+        if (liveCatalog != null) renderLiveGroups();
         runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
         render();
         if (playerHud != null) {
@@ -2042,6 +2180,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * list. The retry chain and the line switch run first; this only reports what is left.
      */
     private void reportPlaybackFailure() {
+        // Live has its own wording and its own recovery (up/down zaps on, and the next channel is tried
+        // automatically); the on-demand message would otherwise sit on screen while that happens.
+        if (livePlayingIndex >= 0) return;
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
         if (playback.notice != null && !playback.notice.isEmpty()) {

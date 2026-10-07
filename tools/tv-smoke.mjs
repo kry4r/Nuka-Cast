@@ -277,6 +277,29 @@ async function main() {
     await favourite();
   }
 
+  // Live TV: number keys jump to a channel, and the ones watched appear under 常看.
+  const liveSourcesNow = await call("GET", "/api/live/sources").then((r) => r.data);
+  const liveList = Array.isArray(liveSourcesNow) ? liveSourcesNow : liveSourcesNow.sources || [];
+  const liveSource = liveList[0];
+  if (liveSource) {
+    const live = (await call("GET", `/api/live/catalog?sourceId=${encodeURIComponent(liveSource.id)}`)).data;
+    const group = (live.groups || [])[0];
+    const channelNames = ((group && group.channels) || []).map((c) => c.name);
+    await call("GET", "/api/debug/navigate?page=live");
+    await new Promise((r) => setTimeout(r, 1500));
+    await key(7 + 3); // 数字键 3
+    await new Promise((r) => setTimeout(r, 3000));
+    const watched = (await call("GET", "/api/player")).data;
+    check("number keys jump to a channel", watched.title === channelNames[2],
+      `数字键 3 → ${watched.title}（列表第 3 个是 ${channelNames[2]}）`);
+    await call("GET", "/api/debug/key?code=4"); // BACK leaves the live player
+    await new Promise((r) => setTimeout(r, 2000));
+    const layout = (await call("GET", "/api/debug/layout")).data;
+    const texts = (layout.views || []).map((v) => String(v.text || ""));
+    check("watched channels are listed under 常看", texts.some((t) => t.startsWith("常看")),
+      texts.filter((t) => t.startsWith("常看")).join(" / ") || "没有常看分组");
+  }
+
   // DLNA: the TV must advertise itself and accept a cast over SOAP.
   const dlna = (await call("GET", "/api/debug/dlna?probe=1")).data;
   check("DLNA renders as a media renderer", Boolean(dlna.running) && Boolean(dlna.ssdpAnswered),
