@@ -182,7 +182,12 @@ public final class NukaRuntime {
         }
         return activity.onUiThreadNow(new java.util.concurrent.Callable<java.util.Map<String, Object>>() {
             @Override public java.util.Map<String, Object> call() {
-                android.view.View decor = activity.getWindow().getDecorView();
+                // A modal (detail screen, programme guide) is what the viewer is looking at, so its
+                // layout is what gets inspected; the page behind it would report no problems at all.
+                android.view.View decor = activity.inspectableRootForDebug();
+                if (decor == null) {
+                    decor = activity.getWindow().getDecorView();
+                }
                 android.util.DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
                 java.util.Map<String, Object> report = com.nukacast.app.diagnostics.LayoutInspector
                         .report(decor, metrics.widthPixels, metrics.heightPixels);

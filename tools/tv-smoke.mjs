@@ -240,6 +240,28 @@ async function main() {
   check("detail with playable lines", lines.length > 0 && episodes > 0,
     `${lines.length} lines, first line “${lines[0]?.name}” with ${episodes} episodes`);
 
+  // The detail page on the TV itself: the episode grid was once unreadable (huge type, everything
+  // overlapping), so its layout is inspected rather than assumed.
+  const opened = (await call("GET", `/api/debug/open?sourceId=${encodeURIComponent(first.sourceId)}` +
+    `&siteKey=${encodeURIComponent(first.siteKey)}&vodId=${encodeURIComponent(first.vodId)}`)).data;
+  await new Promise((r) => setTimeout(r, 4000));
+  const detailLayout = (await call("GET", "/api/debug/layout")).data;
+  const detailProblems = detailLayout.problems || [];
+  // The detail screen is a modal, so everything in the report belongs to it: line chips look like
+  // "36 集 · gsyun" and every other button is an episode chip.
+  const dialogButtons = (detailLayout.views || [])
+    .filter((v) => String(v.view || "").startsWith("Button["))
+    .map((v) => String(v.text || ""));
+  const lineChips = dialogButtons.filter((t) => /\d+\s*集\s*·/.test(t));
+  const episodeChips = dialogButtons.filter((t) => !/\d+\s*集\s*·/.test(t));
+  check("detail page layout is clean",
+    !!opened.opened && detailProblems.length === 0 && lineChips.length > 0 && episodeChips.length > 0,
+    `打开“${opened.opened || "?"}”，线路 ${lineChips.length} 条、集数按钮 ${episodeChips.length} 个` +
+    `（${episodeChips.slice(0, 3).join(",")}），布局问题 ${detailProblems.length}` +
+    (detailProblems.length ? `（${String(detailProblems[0]).slice(0, 70)}）` : ""));
+  await call("GET", "/api/debug/key?code=4"); // BACK leaves the detail page
+  await new Promise((r) => setTimeout(r, 2000));
+
   // Playback resolution must return a usable address (or an explained failure).
   if (lines.length > 0 && episodes > 0) {
     const started = Date.now();

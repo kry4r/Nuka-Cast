@@ -1020,6 +1020,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         dialog.show();
     }
 
+    /** The window the debug layout reader should inspect: the modal when one is up, else the page. */
+    public android.view.View inspectableRootForDebug() {
+        AlertDialog dialog = activeDialog;
+        if (dialog != null && dialog.isShowing() && dialog.getWindow() != null
+                && dialog.getWindow().getDecorView() != null) {
+            return dialog.getWindow().getDecorView();
+        }
+        return getWindow() == null ? null : getWindow().getDecorView();
+    }
+
     /** Closes the dialog on screen, if there is one (debug API). */
     public boolean closeTopDialogForDebug() {
         AlertDialog dialog = activeDialog;
@@ -3416,7 +3426,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         scroll.addView(dialog, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         holder[0] = new AlertDialog.Builder(this).setView(scroll).create();
-        holder[0].show();
+        showDialog(holder[0]);
         Window window = holder[0].getWindow();
         if (window != null) {
             window.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.62f),
