@@ -44,11 +44,25 @@ public final class SpiderManager {
     private final Map<String, SpiderSession> sessions = new HashMap<String, SpiderSession>();
     private final Map<String, Long> sessionUsedAt = new HashMap<String, Long>();
     private final Map<String, LoadedJar> loadedJars = new HashMap<String, LoadedJar>();
+    /**
+     * Failed JAR loads, keyed the same way as {@link #loadedJars}. Six sites sharing one JAR used to
+     * download and re-validate it six times per refresh, and a JAR with a stale MD5 failed on every
+     * one of them.
+     */
+    private final Map<String, JarFailure> jarFailures = new HashMap<String, JarFailure>();
     private final Map<String, Spider> siteSpiders = new HashMap<String, Spider>();
     private final Map<String, LoadedJar> siteJars = new HashMap<String, LoadedJar>();
     private final ExecutorService calls = Executors.newFixedThreadPool(4);
     private LoadedJar recentJar;
     private Spider recentSpider;
+
+    private final com.nukacast.app.tvbox.SiteCompatibilityStore compatibility =
+            new com.nukacast.app.tvbox.SiteCompatibilityStore();
+
+    /** Sites known to be unusable here, so search and home can skip them with a reason. */
+    public com.nukacast.app.tvbox.SiteCompatibilityStore compatibility() {
+        return compatibility;
+    }
 
     public SpiderManager(Context context) {
         this.context = context.getApplicationContext();
@@ -107,6 +121,10 @@ public final class SpiderManager {
         });
     }
 
+    public synchronized void clearCompatibility() {
+        compatibility.clearAll();
+    }
+
     public synchronized void destroy() {
         for (SpiderSession session : sessions.values()) {
             try {
@@ -118,6 +136,8 @@ public final class SpiderManager {
         siteSpiders.clear();
         siteJars.clear();
         loadedJars.clear();
+        jarFailures.clear();
+        compatibility.clearAll();
         recentJar = null;
         recentSpider = null;
         calls.shutdownNow();
@@ -133,6 +153,27 @@ public final class SpiderManager {
             }
         }
         for (String spec : specs) forgetJar(spec);
+    }
+
+    /** Key that ignores site-specific extension parameters: the same URL must load once. */
+    private static String jarKey(JarSpec spec) {
+        return spec.url + "|" + spec.expectedHash + "|" + spec.algorithm;
+    }
+
+    private static final long JAR_FAILURE_RETRY_MS = 10 * 60 * 1000L;
+
+    private static final class JarFailure {
+        final String message;
+        final long at;
+
+        JarFailure(String message) {
+            this.message = message;
+            this.at = System.currentTimeMillis();
+        }
+
+        boolean fresh() {
+            return System.currentTimeMillis() - at < JAR_FAILURE_RETRY_MS;
+        }
     }
 
     private void forgetJar(String spec) {
@@ -161,6 +202,7 @@ public final class SpiderManager {
             iterator.remove();
         }
         LoadedJar removed = loadedJars.remove(spec);
+        jarFailures.remove(spec);
         Iterator<Map.Entry<String, LoadedJar>> jars = siteJars.entrySet().iterator();
         while (jars.hasNext()) if (jars.next().getValue() == removed) jars.remove();
         if (recentJar == removed) recentJar = null;
@@ -219,7 +261,30 @@ public final class SpiderManager {
             return created;
         } catch (Throwable error) {
             trace.failure(error);
+            recordIfUnusable(site, error);
             throw error;
+        }
+    }
+
+    /**
+     * Turns a plugin load failure into a recorded verdict. A Dalvik verifier rejection or a JAR
+     * hash mismatch cannot be fixed by retrying, and retrying it on every home load floods the log
+     * while never succeeding.
+     */
+    private void recordIfUnusable(TvBoxConfig.Site site, Throwable error) {
+        if (site == null || error == null) return;
+        String name = error.getClass().getName();
+        boolean permanent = name.endsWith("VerifyError")
+                || name.endsWith("IncompatibleClassChangeError")
+                || name.endsWith("NoClassDefFoundError");
+        boolean jarProblem = error instanceof SecurityException
+                || (error.getMessage() != null && error.getMessage().contains("Spider JAR"));
+        if (!permanent && !jarProblem) return;
+        boolean first = !compatibility.isUnsupported(site);
+        String reason = com.nukacast.app.tvbox.SiteCompatibilityStore.describe(error);
+        compatibility.record(site, reason, permanent);
+        if (first) {
+            AppLog.w("Spider", "站点不可用 [" + safe(site.name) + "]：" + reason);
         }
     }
 
@@ -281,9 +346,23 @@ public final class SpiderManager {
     }
 
     private LoadedJar loadedJar(String jarSpec) throws Exception {
-        LoadedJar existing = loadedJars.get(jarSpec);
+        JarSpec parsed = JarSpec.parse(jarSpec);
+        String key = jarKey(parsed);
+        LoadedJar existing = loadedJars.get(key);
         if (existing != null) return existing;
-        File jar = obtainJar(jarSpec);
+        JarFailure previous = jarFailures.get(key);
+        if (previous != null && previous.fresh()) {
+            // Same JAR, same verdict: fail fast instead of downloading it again for every site.
+            throw new SecurityException(previous.message);
+        }
+        File jar;
+        try {
+            jar = obtainJar(jarSpec);
+        } catch (Exception error) {
+            jarFailures.put(key, new JarFailure(error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage()));
+            throw error;
+        }
         AppLog.i("Spider", "Spider JAR 已就绪");
         if (!jar.setReadOnly() && jar.canWrite()) {
             throw new IOException("无法保护 Spider JAR");
@@ -304,7 +383,8 @@ public final class SpiderManager {
         } catch (NoSuchMethodException ignored) {
         }
         LoadedJar loaded = new LoadedJar(loader, proxy);
-        loadedJars.put(jarSpec, loaded);
+        loadedJars.put(key, loaded);
+        jarFailures.remove(key);
         return loaded;
     }
 

@@ -394,11 +394,49 @@ public final class ControlServer extends NanoHTTPD {
         result.put("homeErrors", runtime.getContentService().homeFailures());
         result.put("drama", runtime.getDramaService().diagnostics());
         result.put("stages", StageTrace.snapshot());
+        result.put("siteIssues", runtime.getSpiderManager().compatibility().snapshot());
+        result.put("lastRun", lastRunSummary());
         Map<String, Object> httpStack = new HashMap<String, Object>();
         httpStack.put("degraded", HttpStack.degraded());
         httpStack.put("initError", HttpStack.initError());
         result.put("httpStack", httpStack);
         return result;
+    }
+
+    /**
+     * How the previous process ended, with the memory curve that led there. This is what answers
+     * "it crashes after a while" when the platform kills the process for memory and no crash
+     * handler ever runs.
+     */
+    private Map<String, Object> lastRunSummary() {
+        com.nukacast.app.diagnostics.SessionMarker.Run run =
+                com.nukacast.app.diagnostics.SessionMarker.interruptedRun();
+        if (run == null) return null;
+        Map<String, Object> summary = new LinkedHashMap<String, Object>();
+        summary.put("startedAt", run.startedAt);
+        summary.put("endedAt", run.endedAt);
+        summary.put("endedCleanly", run.endedCleanly);
+        summary.put("durationMs", run.durationMs());
+        summary.put("device", run.device);
+        summary.put("version", run.version);
+        summary.put("peakHeapPercent", run.peakHeapPercent());
+        com.nukacast.app.diagnostics.SessionMarker.Sample last = run.lastSample();
+        summary.put("lastStage", last == null ? "" : last.stage);
+        summary.put("lastHeapPercent", last == null ? 0 : last.heapPercent());
+        summary.put("lastAvailableMemoryBytes", last == null ? 0L : last.availableMemoryBytes);
+        List<Map<String, Object>> samples = new ArrayList<Map<String, Object>>();
+        for (com.nukacast.app.diagnostics.SessionMarker.Sample sample : run.samples) {
+            Map<String, Object> row = new HashMap<String, Object>();
+            row.put("at", sample.at);
+            row.put("heapPercent", sample.heapPercent());
+            row.put("heapUsedBytes", sample.heapUsedBytes);
+            row.put("nativeHeapBytes", sample.nativeHeapBytes);
+            row.put("availableMemoryBytes", sample.availableMemoryBytes);
+            row.put("stage", sample.stage);
+            samples.add(row);
+        }
+        summary.put("samples", samples);
+        return summary;
     }
 
     private Response serveStorageMedia(IHTTPSession session, String id) throws Exception {
@@ -578,7 +616,7 @@ public final class ControlServer extends NanoHTTPD {
             row.put("enabled", true);
             row.put("error", "");
             row.put("updatedAt", 0L);
-            row.put("user", info.sourceId != null && info.sourceId.startsWith("user:"));
+            row.put("user", com.nukacast.app.live.LiveService.isUserSource(info.id));
             result.add(row);
         }
         return result;

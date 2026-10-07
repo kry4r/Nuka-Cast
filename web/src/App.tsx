@@ -328,6 +328,16 @@ function levelDot(level: LogLevel): string {
   return "bg-emerald-400/70"
 }
 
+function formatDuration(milliseconds: number): string {
+  const total = Math.max(0, Math.round(milliseconds / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`
+  return `${seconds} 秒`
+}
+
 function clockOf(timestamp: number): string {
   const date = new Date(timestamp)
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`
@@ -1568,6 +1578,71 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
           </div>
         </SectionCard>
 
+        <SectionCard
+          className="mt-4"
+          title="上次运行"
+          description="进程被系统结束（例如内存不足）时不会有 Java 闪退记录，这里保存了上一次运行的内存曲线与最后阶段。"
+          badges={diagnostics?.lastRun
+            ? <Badge variant={diagnostics.lastRun.endedCleanly ? "outline" : "destructive"}>
+                {diagnostics.lastRun.endedCleanly ? "正常退出" : "被外部结束"}
+              </Badge>
+            : <Badge variant="outline">无记录</Badge>}
+        >
+          {!diagnostics?.lastRun && <div className="text-sm text-muted-foreground">还没有可用的运行记录。</div>}
+          {diagnostics?.lastRun && (
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <DiagnosticFact label="运行时长" value={formatDuration(diagnostics.lastRun.durationMs)} />
+                <DiagnosticFact label="内存峰值" value={`${diagnostics.lastRun.peakHeapPercent}% · 最后 ${diagnostics.lastRun.lastHeapPercent}%`} />
+                <DiagnosticFact label="最后阶段" value={diagnostics.lastRun.lastStage || "启动阶段"} />
+              </div>
+              {diagnostics.lastRun.samples.length > 1 && (
+                <div className="rounded-lg border bg-background/40 p-3">
+                  <div className="mb-2 text-xs text-muted-foreground">内存占用（{diagnostics.lastRun.samples.length} 次采样，每 30 秒一次）</div>
+                  <div className="flex h-16 items-end gap-1">
+                    {diagnostics.lastRun.samples.map((sample) => (
+                      <div key={sample.at}
+                        className={`flex-1 rounded-t ${sample.heapPercent >= 80 ? "bg-rose-400/70" : sample.heapPercent >= 60 ? "bg-amber-400/70" : "bg-primary/60"}`}
+                        style={{ height: `${Math.max(8, Math.round(sample.heapPercent * 100 / Math.max(10, diagnostics.lastRun!.peakHeapPercent)))}%` }}
+                        title={`${new Date(sample.at).toLocaleTimeString()} · 堆 ${sample.heapPercent}% · 系统可用 ${formatBytes(sample.availableMemoryBytes)}${sample.stage ? ` · ${sample.stage}` : ""}`} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!diagnostics.lastRun.endedCleanly && (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  没有走正常退出流程，说明进程是被系统或系统策略结束的（内存、后台限制或强制停止）。若内存峰值接近 100%，
+                  可在下次投屏时留意设备页的实时内存与解码计数。
+                </p>
+              )}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          className="mt-4"
+          title="本机不支持的站点"
+          description="插件需要更高版本 Android、或配置里的 JAR 校验值不匹配的站点会被跳过，不再反复请求。"
+          badges={<Badge variant={(diagnostics?.siteIssues?.length ?? 0) > 0 ? "destructive" : "outline"}>
+            {diagnostics?.siteIssues?.length ?? 0} 个
+          </Badge>}
+        >
+          {(diagnostics?.siteIssues?.length ?? 0) === 0
+            ? <div className="text-sm text-muted-foreground">没有记录到不兼容站点。</div>
+            : (
+              <div className="space-y-1.5">
+                {diagnostics?.siteIssues?.map((issue) => (
+                  <div key={issue.siteKey} className="grid gap-1 rounded-lg border bg-background/40 px-3 py-2 sm:grid-cols-[180px_1fr]">
+                    <span className="truncate text-sm font-medium">{issue.siteName}</span>
+                    <span className="text-xs leading-5 text-muted-foreground">
+                      {issue.reason}{issue.permanent ? "（本次运行不再重试）" : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </SectionCard>
+
         <SectionCard title="上次 Java 闪退记录" description="闪退发生时保存的堆栈，用于判断是插件、verifier 还是原生库导致的。">
           {diagnostics?.javaCrash
             ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border bg-background/60 p-3 text-xs leading-5 text-rose-300">{diagnostics.javaCrash}</pre>
@@ -1679,6 +1754,9 @@ function LogView({ setError }: { setError: (value: string) => void }) {
                 <Badge variant={entry.level === "ERROR" ? "destructive" : entry.level === "WARN" ? "outline" : "secondary"}>{logLevelLabel(entry.level)}</Badge>
               </div>
               <div className="break-words text-sm leading-6">{entry.message}</div>
+              {entry.repeats && entry.repeats > 1 && (
+                <Badge variant="outline" className="mt-1">重复 {entry.repeats} 次</Badge>
+              )}
               {entry.trace && (
                 <details className="mt-2">
                   <summary className="cursor-pointer text-xs text-muted-foreground">调用栈</summary>

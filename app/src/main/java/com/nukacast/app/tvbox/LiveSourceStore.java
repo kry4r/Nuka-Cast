@@ -61,6 +61,11 @@ public final class LiveSourceStore {
         if (!candidate.looksLikePlaylist()) {
             throw new IllegalArgumentException("直播源必须是 http 或 https 地址");
         }
+        try {
+            candidate.url = com.nukacast.app.net.UrlNormalizer.normalize(candidate.url);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException(error.getMessage());
+        }
         List<LivePlaylist> playlists = all();
         for (LivePlaylist existing : playlists) {
             if (existing.url.equalsIgnoreCase(candidate.url)) return existing;

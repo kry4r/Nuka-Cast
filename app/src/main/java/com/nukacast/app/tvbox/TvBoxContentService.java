@@ -72,10 +72,18 @@ public final class TvBoxContentService {
 
     public List<SearchItem> home(int maxSites, int maxItems) throws InterruptedException {
         List<TvBoxConfig.Site> selected = new ArrayList<TvBoxConfig.Site>();
+        int skipped = 0;
         for (TvBoxConfig.Site site : repository.getEnabledSites()) {
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
+            if (site.type == 3 && spiders.compatibility().isUnsupported(site)) {
+                skipped++;
+                continue;
+            }
             selected.add(site);
             if (selected.size() >= Math.max(1, maxSites)) break;
+        }
+        if (skipped > 0) {
+            AppLog.i("片源", "首页跳过 " + skipped + " 个本机不支持的站点（详见设备页诊断）");
         }
 
         List<Callable<List<SearchItem>>> calls = new ArrayList<Callable<List<SearchItem>>>();
@@ -96,9 +104,14 @@ public final class TvBoxContentService {
                         homeFailures.success(site);
                         return result;
                     } catch (Throwable error) {
+                        if (SearchEngine.isCancellation(error)) {
+                            homeFailures.failure(site, "首页请求超时");
+                            AppLog.d("片源", "首页站点超时 [" + safe(site.name) + "]");
+                            return Collections.emptyList();
+                        }
                         homeFailures.failure(site, error);
-                        AppLog.w("片源", "首页站点失败 [" + safe(site.name) + "]："
-                                + message(error), error);
+                        AppLog.d("片源", "首页站点失败 [" + safe(site.name) + "]："
+                                + message(error));
                         return Collections.emptyList();
                     }
                 }
@@ -107,20 +120,29 @@ public final class TvBoxContentService {
 
         List<List<SearchItem>> groups = new ArrayList<List<SearchItem>>();
         List<Future<List<SearchItem>>> futures = homeExecutor.invokeAll(calls, 10, TimeUnit.SECONDS);
+        int timedOut = 0;
+        int failed = 0;
         for (int i = 0; i < futures.size(); i++) {
             Future<List<SearchItem>> future = futures.get(i);
             if (future.isCancelled()) {
+                timedOut++;
                 homeFailures.failure(selected.get(i), "首页请求超时");
-                AppLog.w("片源", "首页站点超时 [" + safe(selected.get(i).name) + "]");
+                AppLog.d("片源", "首页站点超时 [" + safe(selected.get(i).name) + "]");
                 continue;
             }
             try {
                 groups.add(future.get());
             } catch (Exception error) {
+                failed++;
                 homeFailures.failure(selected.get(i), error);
-                AppLog.w("片源", "首页站点失败 [" + safe(selected.get(i).name) + "]："
-                        + message(error), error);
+                AppLog.d("片源", "首页站点失败 [" + safe(selected.get(i).name) + "]："
+                        + message(error));
             }
+        }
+        if (!selected.isEmpty() && (timedOut > 0 || failed > 0)) {
+            AppLog.i("片源", "首页加载：" + selected.size() + " 个站点 → "
+                    + (selected.size() - timedOut - failed) + " 成功 / " + timedOut
+                    + " 超时 / " + failed + " 失败");
         }
         return SearchResultMerger.merge(groups, Math.max(1, maxItems));
     }

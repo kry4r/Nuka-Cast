@@ -215,6 +215,7 @@ public final class DramaCatalogRegistry {
         if (!value.startsWith("http://") && !value.startsWith("https://")) {
             throw new IllegalArgumentException("目录地址必须使用 http 或 https");
         }
+        value = com.nukacast.app.net.UrlNormalizer.normalize(value);
         HttpUrl parsed = HttpUrl.parse(value);
         if (parsed == null) throw new IllegalArgumentException("目录地址无效");
         if (parsed.username().length() > 0 || parsed.password().length() > 0) {

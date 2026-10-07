@@ -22,6 +22,15 @@ import java.util.concurrent.atomic.AtomicLong;
 final class H264VideoRenderer {
     private static final int QUEUE_CAPACITY = 8;
     private static final int MAX_DECODER_RESTARTS = 3;
+    /**
+     * Hard cap on how many MediaCodec instances may be created for one received stream. A surface or
+     * config reset must not be able to restart the create/crash cycle forever: on a real Android 4.4
+     * TV the unbounded version produced around six codec instances per second, which is the most
+     * plausible cause of the process being killed after a while.
+     */
+    private static final int MAX_DECODER_CREATIONS = 6;
+    private static final long MIN_CREATION_INTERVAL_MS = 400L;
+    private static final long MAX_CREATION_INTERVAL_MS = 4000L;
     private static final long SOFTWARE_NO_OUTPUT_MS = 4000L;
     private final ArrayBlockingQueue<Frame> queue = new ArrayBlockingQueue<Frame>(QUEUE_CAPACITY);
     private final AtomicLong received = new AtomicLong();
@@ -54,6 +63,10 @@ final class H264VideoRenderer {
     private long decoderOutputsAtStart;
     private boolean waitingForKeyFrame = true;
     private ByteBuffer[] legacyInputBuffers;
+    private int decoderCreations;
+    private long creationBackoffMs = MIN_CREATION_INTERVAL_MS;
+    private long lastCreationAtMs;
+    private String lastDecoderLog = "";
 
     H264VideoRenderer() {
         thread = new Thread(new Runnable() {
@@ -64,6 +77,8 @@ final class H264VideoRenderer {
 
     void setSurface(Surface value) {
         surface = value;
+        // Releasing and rebuilding on every surface change is how the retry storm started: the
+        // blocked state and the creation budget stay intact, only the frames are refilled below.
         decoderResetRequested = true;
         Frame pending = retainedKeyFrame;
         if (value != null && value.isValid() && pending != null) {
@@ -90,6 +105,10 @@ final class H264VideoRenderer {
                 decoderBlocked = false;
                 decoderRestarts = 0;
                 softwareTimedOut = false;
+                // A new stream configuration legitimately needs a fresh decoder budget.
+                decoderCreations = 0;
+                creationBackoffMs = MIN_CREATION_INTERVAL_MS;
+                lastCreationAtMs = 0L;
                 queue.clear();
                 decoderResetRequested = true;
                 StageTrace.component("airplay", "video", "codec_config", true, "");
@@ -126,6 +145,10 @@ final class H264VideoRenderer {
         error = "";
         videoWidth = 0;
         videoHeight = 0;
+        decoderCreations = 0;
+        creationBackoffMs = MIN_CREATION_INTERVAL_MS;
+        lastCreationAtMs = 0L;
+        lastDecoderLog = "";
         decoderResetRequested = true;
         thread.interrupt();
     }
@@ -158,7 +181,6 @@ final class H264VideoRenderer {
                         decoderResetRequested = false;
                         releaseDecoder();
                         waitingForKeyFrame = true;
-                        decoderBlocked = false;
                     }
                     Frame frame = queue.poll(10, TimeUnit.MILLISECONDS);
                     if (frame == null) {
@@ -192,11 +214,9 @@ final class H264VideoRenderer {
                     releaseDecoder();
                     waitingForKeyFrame = true;
                     decoderRestarts++;
+                    creationBackoffMs = Math.min(MAX_CREATION_INTERVAL_MS, creationBackoffMs * 2);
                     if (decoderRestarts > MAX_DECODER_RESTARTS) {
-                        this.error = "解码器持续异常，已停止重建（" + reason + "）";
-                        decoderBlocked = true;
-                        queue.clear();
-                        AppLog.w("AirPlay 视频", this.error);
+                        blockDecoder("解码器持续异常，已停止重建（" + reason + "）");
                         continue;
                     }
                     this.error = reason;
@@ -216,6 +236,16 @@ final class H264VideoRenderer {
         Surface target = surface;
         byte[] config = codecConfig;
         if (target == null || !target.isValid() || config == null) return false;
+        if (decoderCreations >= MAX_DECODER_CREATIONS) {
+            blockDecoder("H.264 解码器反复失败，已停止重建（本次投屏共创建 "
+                    + decoderCreations + " 个）");
+            return false;
+        }
+        long wait = lastCreationAtMs == 0L
+                ? 0L : creationBackoffMs - (System.currentTimeMillis() - lastCreationAtMs);
+        if (wait > 0L) return false;
+        decoderCreations++;
+        lastCreationAtMs = System.currentTimeMillis();
         Exception lastFailure = null;
         try {
             byte[] sps = parameterSet(config, 7);
@@ -252,7 +282,7 @@ final class H264VideoRenderer {
                     decoderInputsAtStart = decoderInputs.get();
                     decoderOutputsAtStart = decoderOutputs.get();
                     error = "";
-                    AppLog.i("AirPlay 视频", "使用 " + candidateName + " 解码 "
+                    logDecoderOnce("使用 " + candidateName + " 解码 "
                             + dimensions.width + "x" + dimensions.height
                             + (softwareFallback ? "（软件）" : "（硬件）"));
                     return true;
@@ -281,7 +311,15 @@ final class H264VideoRenderer {
     private void queueInput(Frame frame) {
         MediaCodec active = decoder;
         if (active == null) return;
-        int index = active.dequeueInputBuffer(2000);
+        int index;
+        try {
+            index = active.dequeueInputBuffer(2000);
+        } catch (IllegalStateException gone) {
+            // The codec died underneath us; report it as a decoder failure so the bounded retry
+            // logic applies instead of throwing out of the loop on every frame.
+            throw new IllegalStateException("输入缓冲区不可用："
+                    + gone.getClass().getSimpleName());
+        }
         if (index < 0) {
             dropped.incrementAndGet();
             return;
@@ -365,6 +403,26 @@ final class H264VideoRenderer {
         AppLog.w("AirPlay 视频", error);
         StageTrace.componentFailure("airplay", "video", "software_no_output",
                 new IllegalStateException(error));
+    }
+
+    /** Enters the blocked state once, with a single log line instead of one per frame. */
+    private void blockDecoder(String reason) {
+        boolean first = !decoderBlocked;
+        decoderBlocked = true;
+        this.error = reason;
+        queue.clear();
+        if (first) {
+            AppLog.w("AirPlay 视频", reason);
+            StageTrace.componentFailure("airplay", "video", "decoder_blocked",
+                    new IllegalStateException(reason));
+        }
+    }
+
+    /** Logs decoder changes once per distinct line, so a retry loop cannot flood the log buffer. */
+    private void logDecoderOnce(String message) {
+        if (message.equals(lastDecoderLog)) return;
+        lastDecoderLog = message;
+        AppLog.i("AirPlay 视频", message);
     }
 
     private String decoderLabel() {

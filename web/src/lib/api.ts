@@ -87,6 +87,10 @@ export type Diagnostics = {
   homeErrors: { sourceId: string; siteKey: string; siteName: string; error: string; updatedAt: number }[]
   httpStack: { degraded: boolean; initError: string }
   stages: StageRecord[]
+  /** Sites whose plugin cannot run on this device, with the reason (skipped during search). */
+  siteIssues: SiteIssue[]
+  /** How the previous process ended; null when nothing was recorded. */
+  lastRun: LastRun | null
 }
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR"
@@ -97,6 +101,39 @@ export type LogEntry = {
   component: string
   message: string
   trace: string
+  /** Identical consecutive lines are folded into one entry with a repeat count. */
+  repeats?: number
+}
+
+export type SiteIssue = {
+  siteKey: string
+  siteName: string
+  reason: string
+  permanent: boolean
+  updatedAt: number
+}
+
+export type RunSample = {
+  at: number
+  heapPercent: number
+  heapUsedBytes: number
+  nativeHeapBytes: number
+  availableMemoryBytes: number
+  stage: string
+}
+
+export type LastRun = {
+  startedAt: number
+  endedAt: number
+  endedCleanly: boolean
+  durationMs: number
+  device: string
+  version: string
+  peakHeapPercent: number
+  lastStage: string
+  lastHeapPercent: number
+  lastAvailableMemoryBytes: number
+  samples: RunSample[]
 }
 
 export type SearchItem = {

@@ -137,17 +137,38 @@ public final class HttpStack {
         return trustManager(null);
     }
 
+    /**
+     * Trust anchors used in addition to the platform store on Android 4.x.
+     *
+     * <p>A single DigiCert root was not enough in practice: sites served by Let's Encrypt, Sectigo,
+     * GlobalSign or Google Trust Services failed with {@code Trust anchor for certification path not
+     * found} even though the certificates were perfectly valid. The bundle is Mozilla's CA set plus
+     * the roots that the app shipped with, and it is refreshed with
+     * {@code node tools/update-ca-bundle.mjs}. Certificate and hostname validation stay enabled.
+     */
     static X509TrustManager bundledTrustManager() throws Exception {
-        InputStream input = HttpStack.class.getResourceAsStream(
-                "/com/nukacast/app/net/digicert_global_root_g2.pem");
-        if (input == null) throw new IOException("缺少 DigiCert Global Root G2 证书资源");
+        KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
+        store.load(null, null);
+        int loaded = 0;
+        loaded += loadCertificates(store, "/com/nukacast/app/net/mozilla_ca_bundle.pem", "mozilla");
+        loaded += loadCertificates(store, "/com/nukacast/app/net/digicert_global_root_g2.pem", "digicert");
+        if (loaded == 0) throw new IOException("缺少内置根证书资源");
+        return trustManager(store);
+    }
+
+    private static int loadCertificates(KeyStore store, String resource, String prefix)
+            throws Exception {
+        InputStream input = HttpStack.class.getResourceAsStream(resource);
+        if (input == null) return 0;
         try {
-            Certificate certificate = CertificateFactory.getInstance("X.509")
-                    .generateCertificate(input);
-            KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
-            store.load(null, null);
-            store.setCertificateEntry("digicert-global-root-g2", certificate);
-            return trustManager(store);
+            java.util.Collection<? extends Certificate> certificates =
+                    CertificateFactory.getInstance("X.509").generateCertificates(input);
+            int index = 0;
+            for (Certificate certificate : certificates) {
+                store.setCertificateEntry(prefix + "-" + index, certificate);
+                index++;
+            }
+            return index;
         } finally {
             input.close();
         }

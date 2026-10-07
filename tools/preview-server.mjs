@@ -121,6 +121,8 @@ const api = {
     { level: "INFO", tag: "片源", message: "配置刷新成功 [PyramidStore 单仓]：23 个站点", timestamp: now - 20000 },
     { level: "WARN", tag: "短剧", message: "目录详情失败：目录 HTTP 502（api.ffzyapi.com）", timestamp: now - 60000 },
     { level: "INFO", tag: "AirPlay", message: "接收器已发布，可被 iOS 发现，端口 7000", timestamp: now - 120000 },
+    { level: "ERROR", tag: "AirPlay 视频", message: "解码循环异常：IllegalStateException", timestamp: now - 200000, repeats: 63 },
+    { level: "WARN", tag: "片源", message: "首页加载：12 个站点 → 4 成功 / 5 超时 / 3 失败", timestamp: now - 240000 },
     { level: "ERROR", tag: "网页服务", message: "请求处理失败 [/api/drama/search]", timestamp: now - 180000 },
   ],
   "/api/diagnostics": {
@@ -138,6 +140,17 @@ const api = {
       { scope: "airplay", subject: "video", stage: "first_output", result: "ok", startedAt: now - 30000, updatedAt: now - 30000, elapsedMs: 240, detail: "OMX.hisi.video.decoder.avc 1920x1080", errorCode: "", rootCauseClass: "", generation: 11 },
       { scope: "spider", subject: "src-1|ffzy", stage: "plugin_init", result: "failed", startedAt: now - 60000, updatedAt: now - 59000, elapsedMs: 1200, detail: "dalvik verifier rejected class", errorCode: "linkage_error", rootCauseClass: "java.lang.VerifyError", generation: 10 },
     ],
+    siteIssues: [
+      { siteKey: "kua-fu", siteName: "☀️┆夸父┆4K", reason: "该站点的 Spider 需要 Android 5.0 以上，当前设备无法运行", permanent: true, updatedAt: now - 3600000 },
+      { siteKey: "ting-feng", siteName: "☘️┆听风┆知秋", reason: "配置里的 Spider JAR 校验值与下载内容不一致，已拒绝加载", permanent: false, updatedAt: now - 1800000 },
+    ],
+    lastRun: {
+      startedAt: now - 11400000, endedAt: now - 10500000, endedCleanly: false,
+      durationMs: 900000, device: "Sharp SHARP-TVC", version: "0.3.7",
+      peakHeapPercent: 84, lastStage: "airplay/video/codec_config", lastHeapPercent: 84,
+      lastAvailableMemoryBytes: 96000000,
+      samples: [{ "at": 1750000000000, "heapPercent": 22, "heapUsedBytes": 42240000, "nativeHeapBytes": 6600000, "availableMemoryBytes": 227000000, "stage": "startup" },{ "at": 1750000030000, "heapPercent": 24, "heapUsedBytes": 46080000, "nativeHeapBytes": 7200000, "availableMemoryBytes": 224000000, "stage": "source/PyramidStore/persist" },{ "at": 1750000060000, "heapPercent": 31, "heapUsedBytes": 59520000, "nativeHeapBytes": 9300000, "availableMemoryBytes": 213500000, "stage": "search" },{ "at": 1750000090000, "heapPercent": 38, "heapUsedBytes": 72960000, "nativeHeapBytes": 11400000, "availableMemoryBytes": 203000000, "stage": "airplay/video/native_listen" },{ "at": 1750000120000, "heapPercent": 52, "heapUsedBytes": 99840000, "nativeHeapBytes": 15600000, "availableMemoryBytes": 182000000, "stage": "airplay/video/codec_config" },{ "at": 1750000150000, "heapPercent": 61, "heapUsedBytes": 117120000, "nativeHeapBytes": 18300000, "availableMemoryBytes": 168500000, "stage": "airplay/video/first_output" },{ "at": 1750000180000, "heapPercent": 70, "heapUsedBytes": 134400000, "nativeHeapBytes": 21000000, "availableMemoryBytes": 155000000, "stage": "airplay/video/codec_config" },{ "at": 1750000210000, "heapPercent": 78, "heapUsedBytes": 149760000, "nativeHeapBytes": 23400000, "availableMemoryBytes": 143000000, "stage": "airplay/video/codec_config" },{ "at": 1750000240000, "heapPercent": 84, "heapUsedBytes": 161280000, "nativeHeapBytes": 25200000, "availableMemoryBytes": 134000000, "stage": "airplay/video/codec_config" }],
+    },
   },
   "/api/recommended": {
     verifiedAt: "2026-10-07",

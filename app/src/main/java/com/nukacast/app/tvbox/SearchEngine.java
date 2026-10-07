@@ -27,6 +27,7 @@ public final class SearchEngine {
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     private final SpiderSiteSearcher spiderSearcher;
+    private final SpiderManager spiderManager;
     private final StorageLibrary storageLibrary;
 
     public SearchEngine(Context context, TvBoxRepository repository) {
@@ -40,6 +41,7 @@ public final class SearchEngine {
     public SearchEngine(Context context, TvBoxRepository repository, SpiderManager spiderManager,
                         StorageLibrary storageLibrary) {
         this.repository = repository;
+        this.spiderManager = spiderManager;
         this.spiderSearcher = new SpiderSiteSearcher(spiderManager);
         this.storageLibrary = storageLibrary;
     }
@@ -70,6 +72,8 @@ public final class SearchEngine {
         response.keyword = query.keyword;
         response.searchedSites = sites.size();
         int successfulSiteCount = 0;
+        int timedOutSites = 0;
+        int failedSites = 0;
         List<List<SearchItem>> successfulItems = new ArrayList<List<SearchItem>>();
         if (storageLibrary != null && (query.sourceId == null || query.sourceId.isEmpty()
                 || query.sourceId.startsWith("storage:"))) {
@@ -79,7 +83,9 @@ public final class SearchEngine {
             Future<SiteOutcome> future = futures.get(i);
             if (future.isCancelled()) {
                 TvBoxConfig.Site site = sites.get(i);
-                AppLog.w("搜索", "站点搜索超时 [" + site.name + "]");
+                // A cancelled task is the deadline doing its job, not a site error worth a stack.
+                timedOutSites++;
+                AppLog.d("搜索", "站点搜索超时 [" + site.name + "]");
                 response.failedSites++;
                 response.partial = true;
                 response.errors.add(new SearchResponse.SiteError(site.key, site.name, "搜索超时"));
@@ -88,8 +94,20 @@ public final class SearchEngine {
             try {
                 SiteOutcome outcome = future.get();
                 if (outcome.error != null) {
-                    AppLog.w("搜索", "站点搜索失败 [" + outcome.site.name + "]："
-                            + message(outcome.error), outcome.error);
+                    if (isCancellation(outcome.error)) {
+                        timedOutSites++;
+                        AppLog.d("搜索", "站点搜索超时 [" + outcome.site.name + "]");
+                        response.errors.add(new SearchResponse.SiteError(
+                                outcome.site.key, outcome.site.name, "搜索超时"));
+                        response.failedSites++;
+                        response.partial = true;
+                        continue;
+                    }
+                    failedSites++;
+                    // Per-site detail stays at debug level: the summary below and the diagnostics
+                    // payload carry the same information without flooding the log with 100 lines.
+                    AppLog.d("搜索", "站点搜索失败 [" + outcome.site.name + "]："
+                            + message(outcome.error));
                     response.failedSites++;
                     response.errors.add(new SearchResponse.SiteError(
                             outcome.site.key, outcome.site.name, message(outcome.error)));
@@ -98,10 +116,17 @@ public final class SearchEngine {
                 successfulItems.add(outcome.items);
                 successfulSiteCount++;
             } catch (Exception error) {
-                AppLog.w("搜索", "搜索任务失败：" + message(error), error);
+                failedSites++;
+                AppLog.d("搜索", "搜索任务失败：" + message(error));
                 response.failedSites++;
                 response.partial = true;
             }
+        }
+        if (!sites.isEmpty()) {
+            AppLog.i("搜索", "搜索完成 [" + query.keyword + "]：" + sites.size() + " 个站点 → "
+                    + successfulSiteCount + " 成功 / " + timedOutSites + " 超时 / "
+                    + failedSites + " 失败 · "
+                    + (System.currentTimeMillis() - startedAt) + " ms");
         }
         response.items.addAll(SearchResultMerger.merge(successfulItems, query.pageSize));
         response.elapsedMs = System.currentTimeMillis() - startedAt;
@@ -118,8 +143,26 @@ public final class SearchEngine {
         executor.shutdownNow();
     }
 
+    /** True when the failure is the deadline cancelling work rather than a site defect. */
+    static boolean isCancellation(Throwable error) {
+        if (error instanceof InterruptedException) return true;
+        if (error instanceof java.io.InterruptedIOException) return true;
+        String name = error == null ? "" : error.getClass().getName();
+        return name.endsWith("InterruptedException") || name.endsWith("CancellationException")
+                || name.endsWith("InterruptedIOException");
+    }
+
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
-        return selectSites(repository.getEnabledSites(), query);
+        List<TvBoxConfig.Site> sites = selectSites(repository.getEnabledSites(), query);
+        if (spiderManager == null) return sites;
+        List<TvBoxConfig.Site> usable = new ArrayList<TvBoxConfig.Site>();
+        for (TvBoxConfig.Site site : sites) {
+            // Sites whose plugin cannot load here (Dalvik verifier, JAR hash mismatch) are skipped
+            // instead of failing again on every search; the device page lists them with a reason.
+            if (site.type == 3 && spiderManager.compatibility().isUnsupported(site)) continue;
+            usable.add(site);
+        }
+        return usable;
     }
 
     static List<TvBoxConfig.Site> selectSites(List<TvBoxConfig.Site> available,

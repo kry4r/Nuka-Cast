@@ -51,7 +51,7 @@ public final class NukaRuntime {
         storageLibrary = new StorageLibrary(this.context);
         searchEngine = new SearchEngine(this.context, tvBoxRepository, spiderManager, storageLibrary);
         contentService = new TvBoxContentService(tvBoxRepository, spiderManager, storageLibrary);
-        liveService = new LiveService(tvBoxRepository);
+        liveService = new LiveService(tvBoxRepository, tvBoxRepository.getLiveSourceStore());
         mediaLibrary = new MediaLibraryStore(this.context);
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
             @Override public void onProgress(int positionMs, int durationMs) {
@@ -109,6 +109,18 @@ public final class NukaRuntime {
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }
     public PlayerController getPlayerController() { return playerController; }
     public AirPlayReceiver getAirPlayReceiver() { return airPlayReceiver; }
+
+    /**
+     * Releases everything that can be rebuilt: playlist catalogs, spider sessions and decoded
+     * configuration payloads. Called when the platform reports critical memory pressure, which is
+     * the situation that used to end with the process being killed on a 1.5 GB TV.
+     */
+    public void trimCaches() {
+        // Playlist catalogs are the biggest rebuildable structure the app holds; the web console
+        // simply re-downloads them when a source is opened again.
+        try { liveService.clearCache(); } catch (RuntimeException ignored) {}
+        try { spiderManager.clearCompatibility(); } catch (RuntimeException ignored) {}
+    }
 
     public void contentChanged() {
         liveService.clearCache();

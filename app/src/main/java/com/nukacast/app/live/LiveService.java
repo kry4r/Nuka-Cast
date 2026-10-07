@@ -8,7 +8,9 @@ import com.nukacast.app.live.model.EpgSchedule;
 import com.nukacast.app.live.model.LiveSourceInfo;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
+import com.nukacast.app.tvbox.LiveSourceStore;
 import com.nukacast.app.tvbox.TvBoxRepository;
+import com.nukacast.app.tvbox.model.LivePlaylist;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
 
@@ -30,19 +32,49 @@ public final class LiveService {
     private static final Charset UTF_8 = Charset.forName("UTF-8");
     private static final int MAX_LIVE_BYTES = 4 * 1024 * 1024;
     private static final long CACHE_MS = 10L * 60L * 1000L;
+    private static final String USER_PREFIX = "user:";
     private final TvBoxRepository repository;
+    private final LiveSourceStore userPlaylists;
     private final Map<String, CacheEntry> cache = new HashMap<String, CacheEntry>();
 
     public LiveService(TvBoxRepository repository) {
-        this.repository = repository;
+        this(repository, null);
     }
 
+    public LiveService(TvBoxRepository repository, LiveSourceStore userPlaylists) {
+        this.repository = repository;
+        this.userPlaylists = userPlaylists;
+    }
+
+    /**
+     * User playlists come first: they are the ones added from the web console, so they must be
+     * reachable through the same {@code /api/live/catalog} call as config-provided sources. Before
+     * this they were listed but unknown to {@link #catalog(String)}, so every click failed.
+     */
     public List<LiveSourceInfo> sources() {
         List<LiveSourceInfo> result = new ArrayList<LiveSourceInfo>();
+        if (userPlaylists != null) {
+            for (LivePlaylist playlist : userPlaylists.enabled()) {
+                LiveSourceInfo info = new LiveSourceInfo();
+                info.id = USER_PREFIX + playlist.id;
+                info.sourceId = USER_PREFIX + playlist.id;
+                info.name = playlist.name == null || playlist.name.isEmpty()
+                        ? playlist.host() : playlist.name;
+                info.url = playlist.url == null ? "" : playlist.url;
+                info.epg = playlist.epg == null ? "" : playlist.epg;
+                info.logo = playlist.logo == null ? "" : playlist.logo;
+                result.add(info);
+            }
+        }
         for (TvBoxConfig.LiveSource source : repository.getLiveSources()) {
             result.add(info(source));
         }
         return result;
+    }
+
+    /** True when this id belongs to a playlist added by the user (not to a TVBox config). */
+    public static boolean isUserSource(String id) {
+        return id != null && id.startsWith(USER_PREFIX);
     }
 
     public synchronized LiveCatalog catalog(String id) throws Exception {
@@ -193,10 +225,27 @@ public final class LiveService {
     }
 
     private TvBoxConfig.LiveSource findSource(String id) {
+        if (isUserSource(id)) {
+            if (userPlaylists == null) throw new IllegalArgumentException("用户直播源不可用");
+            String playlistId = id.substring(USER_PREFIX.length());
+            for (LivePlaylist playlist : userPlaylists.all()) {
+                if (!playlist.id.equals(playlistId)) continue;
+                TvBoxConfig.LiveSource source = new TvBoxConfig.LiveSource();
+                source.sourceId = USER_PREFIX + playlist.id;
+                source.name = playlist.name == null || playlist.name.isEmpty()
+                        ? playlist.host() : playlist.name;
+                source.url = playlist.url;
+                // m3u/txt playlists are plain text; a browser-ish UA keeps common CDNs happy.
+                source.ua = "NukaCast/0.1 Live";
+                if (playlist.epg != null && !playlist.epg.isEmpty()) source.epg = playlist.epg;
+                return source;
+            }
+            throw new IllegalArgumentException("直播源已删除，请刷新列表");
+        }
         for (TvBoxConfig.LiveSource source : repository.getLiveSources()) {
             if (info(source).id.equals(id)) return source;
         }
-        throw new IllegalArgumentException("找不到直播源");
+        throw new IllegalArgumentException("找不到直播源 " + id);
     }
 
     private static LiveSourceInfo info(TvBoxConfig.LiveSource source) {

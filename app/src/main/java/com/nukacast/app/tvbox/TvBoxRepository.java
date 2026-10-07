@@ -260,8 +260,7 @@ public final class TvBoxRepository {
             source.updatedAt = System.currentTimeMillis();
             source.latencyMs = Math.max(1L, source.updatedAt - startedAt);
             sourceStore.update(source);
-            AppLog.w("片源", "配置刷新失败 [" + safe(source.name) + "]："
-                    + source.error, error);
+            AppLog.w("片源", "配置刷新失败 [" + safe(source.name) + "]：" + source.error);
             if (error instanceof IOException) throw (IOException) error;
             throw new IOException(source.error, error);
         }
@@ -302,15 +301,32 @@ public final class TvBoxRepository {
         }
     }
 
+    /** Turns a bare status code into something a user can act on. */
+    static String describeHttpFailure(int code) {
+        if (code == 401 || code == 403) {
+            return "HTTP " + code + "：该配置需要授权，请更换可公开访问的地址";
+        }
+        if (code == 404) return "HTTP 404：地址不存在，配置可能已下线";
+        if (code == 429) return "HTTP 429：请求过于频繁，请稍后再试";
+        if (code >= 500) return "HTTP " + code + "：对方服务异常";
+        return "HTTP " + code;
+    }
+
     private ConfigPayloadResolver.Payload fetchConfig(String url) throws IOException {
+        String normalized;
+        try {
+            normalized = com.nukacast.app.net.UrlNormalizer.normalize(url);
+        } catch (IllegalArgumentException error) {
+            throw new IOException("配置地址无效：" + error.getMessage(), error);
+        }
         Request request = new Request.Builder()
-                .url(url)
+                .url(normalized)
                 .header("User-Agent", "NukaCast/" + BuildConfig.VERSION_NAME + " TVBox/API17")
                 .header("Accept", "application/json,text/plain,text/html,*/*")
                 .build();
         try (Response response = HttpStack.client().newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
-                throw new IOException("HTTP " + response.code());
+                throw new IOException(describeHttpFailure(response.code()));
             }
             String contentType = response.header("Content-Type", "");
             byte[] bytes = ResponseBodies.bytes(response.body(), MAX_CONFIG_BYTES);

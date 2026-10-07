@@ -47,8 +47,10 @@ public final class SourceStore {
     }
 
     public synchronized ConfigSource add(String name, String url) {
-        if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
-            throw new IllegalArgumentException("配置地址必须使用 http 或 https");
+        try {
+            url = com.nukacast.app.net.UrlNormalizer.normalize(url);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException(error.getMessage());
         }
         List<ConfigSource> sources = getSources();
         for (ConfigSource source : sources) {
