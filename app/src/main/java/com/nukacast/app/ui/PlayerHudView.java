@@ -47,6 +47,11 @@ public final class PlayerHudView extends FrameLayout {
     private final ProgressBar progress;
     private final TextView errorView;
     private final LinearLayout actionRow;
+    /** 快进/快退/倍速的短暂提示，显示在画面中部。 */
+    private final TextView seekView;
+    /** How long the seek notice stays on screen. */
+    private static final long SEEK_NOTICE_MS = 1200L;
+
     private final Runnable hide = new Runnable() {
         @Override public void run() {
             animate().alpha(0f).setDuration(220L).withEndAction(new Runnable() {
@@ -82,6 +87,14 @@ public final class PlayerHudView extends FrameLayout {
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         actionParams.bottomMargin = dp(56);
         addView(actionRow, actionParams);
+
+        seekView = text(16, true, 0.95f);
+        seekView.setBackgroundColor(Color.parseColor("#B3000000"));
+        seekView.setPadding(dp(16), dp(8), dp(16), dp(8));
+        seekView.setVisibility(GONE);
+        LayoutParams seekParams = new LayoutParams(LayoutParams.WRAP_CONTENT,
+                LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        addView(seekView, seekParams);
 
         errorView = text(14, false, 0.95f);
         errorView.setTextColor(Color.parseColor("#FFB4B4"));
@@ -218,6 +231,28 @@ public final class PlayerHudView extends FrameLayout {
             durationView.setText("");
         }
     }
+
+    /**
+     * Shows what a seek key just did, the way mainstream players do.
+     *
+     * <p>Without it a viewer pressing 快进 has no idea whether the key registered or how far it jumped;
+     * the text disappears on its own after a moment.
+     */
+    public void showSeek(String text) {
+        seekView.setText(text == null ? "" : text);
+        seekView.setVisibility(text == null || text.isEmpty() ? GONE : VISIBLE);
+        if (text != null && !text.isEmpty()) {
+            handler.removeCallbacks(hideSeek);
+            handler.postDelayed(hideSeek, SEEK_NOTICE_MS);
+        }
+        reveal();
+    }
+
+    private final Runnable hideSeek = new Runnable() {
+        @Override public void run() {
+            if (seekView != null) seekView.setVisibility(GONE);
+        }
+    };
 
     public void setSubtitle(String subtitle) {
         subtitleView.setText(subtitle == null ? "" : subtitle);

@@ -246,6 +246,33 @@ public final class ControlServer extends NanoHTTPD {
                 return json(Response.Status.OK, errorPayload(message(error)));
             }
         }
+        if ("/api/debug/key".equals(path)) {
+            // Sends a key the way a remote does: through the activity's own dispatch, so the checks
+            // cover the key handling (seek, play/pause, menu, back, channel zap) rather than bypassing it.
+            final int code = debugIntParam(session, "code", -1);
+            final int repeat = debugIntParam(session, "repeat", 1);
+            if (code < 0) throw new IllegalArgumentException("缺少 code（Android keyCode）");
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            Boolean handled = activity.onUiThreadNow(new java.util.concurrent.Callable<Boolean>() {
+                @Override public Boolean call() {
+                    boolean any = false;
+                    for (int i = 0; i < Math.max(1, Math.min(20, repeat)); i++) {
+                        long now = android.os.SystemClock.uptimeMillis();
+                        any |= activity.dispatchKeyEvent(new android.view.KeyEvent(
+                                android.view.KeyEvent.ACTION_DOWN, code));
+                        any |= activity.dispatchKeyEvent(new android.view.KeyEvent(
+                                android.view.KeyEvent.ACTION_UP, code));
+                    }
+                    return any;
+                }
+            });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("handled", handled);
+            payload.put("player", runtime.getPlayerController().snapshot());
+            payload.put("activeMedia", runtime.getState().getActiveMedia());
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/player/action".equals(path)) {
             // Drives the same code path as the player menu (speed, aspect, episode stepping), so the
             // menu can be exercised without a remote control in hand.
@@ -761,6 +788,9 @@ public final class ControlServer extends NanoHTTPD {
         // Probe first: a URL that answers 403/404 explains a black screen long before the player
         // reports "source error", and that response is the exact condition that used to crash the app.
         payload.put("probe", ProbeTool.run(url, "GET"));
+        // Playing has to leave the app in the same state the UI does, otherwise the remote keys that
+        // only act during full-screen playback (seek, up/down zapping) cannot be exercised from here.
+        runtime.getState().updateActiveMedia(title);
         runtime.getPlayerController().play(runtime.getContext(), url, title, headers);
         payload.put("player", runtime.getPlayerController().snapshot());
         return payload;

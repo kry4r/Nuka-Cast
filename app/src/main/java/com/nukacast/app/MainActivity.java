@@ -370,13 +370,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
                     || keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) {
-                runtime.getPlayerController().seekBy(30000);
+                seekFromKey(30000);
                 refreshPlayerHud();
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT
                     || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND) {
-                runtime.getPlayerController().seekBy(-10000);
+                seekFromKey(-10000);
                 refreshPlayerHud();
                 return true;
             }
@@ -595,6 +595,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     com.nukacast.app.player.PlaybackSettings.qualityLabel(playbackSettings().quality()),
                     getString(software ? R.string.decoder_software : R.string.decoder_auto)));
         }
+    }
+
+    /**
+     * Seeks by {@code offsetMs} and says so on screen.
+     *
+     * <p>Mainstream players show the jump and the resulting time; without it a press on 快进 is
+     * indistinguishable from a key that did nothing.
+     */
+    private void seekFromKey(int offsetMs) {
+        runtime.getPlayerController().seekBy(offsetMs);
+        com.nukacast.app.player.PlayerController.Snapshot playback =
+                runtime.getPlayerController().snapshot();
+        long target = playback.positionMs + offsetMs;
+        if (playback.durationMs > 0) target = Math.min(target, playback.durationMs);
+        target = Math.max(0, target);
+        String label = (offsetMs >= 0 ? "快进 " : "快退 ")
+                + Math.abs(offsetMs / 1000) + " 秒"
+                + (playback.durationMs > 0
+                        ? "　" + com.nukacast.app.ui.PlayerHudView.formatTime(target)
+                          + " / " + com.nukacast.app.ui.PlayerHudView.formatTime(playback.durationMs)
+                        : "");
+        if (playerHud != null) playerHud.showSeek(label);
     }
 
     /** Re-renders the settings page after a change made from the web console. */
@@ -3747,6 +3769,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void showPreviousCrash() {
         final String report = CrashReporter.read(this);
         if (report.isEmpty()) return;
+        // Once per distinct crash: repeating it on every start blocks the screen and swallows the
+        // remote's keys until someone dismisses the dialog. The text stays for the diagnostics export.
+        if (!com.nukacast.app.diagnostics.CrashPrompt.shouldPrompt(report, crashPromptSignature())) {
+            return;
+        }
+        markCrashPrompted(report);
         new AlertDialog.Builder(this)
                 .setTitle("检测到上次崩溃")
                 .setMessage(report)
@@ -3757,6 +3785,21 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 })
                 .setNegativeButton("保留", null)
                 .show();
+    }
+
+    private static final String CRASH_PROMPT_PREFS = "crash_prompt";
+    private static final String CRASH_PROMPT_KEY = "shownSignature";
+
+    private String crashPromptSignature() {
+        return getSharedPreferences(CRASH_PROMPT_PREFS, MODE_PRIVATE)
+                .getString(CRASH_PROMPT_KEY, "");
+    }
+
+    private void markCrashPrompted(String report) {
+        getSharedPreferences(CRASH_PROMPT_PREFS, MODE_PRIVATE).edit()
+                .putString(CRASH_PROMPT_KEY,
+                        com.nukacast.app.diagnostics.CrashPrompt.signature(report))
+                .apply();
     }
 
     private int dp(int value) {

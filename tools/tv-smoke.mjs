@@ -224,6 +224,26 @@ async function main() {
   const speedAction = (await call("GET", "/api/debug/player/action?name=speed")).data;
   const aspectAction = (await call("GET", "/api/debug/player/action?name=aspect")).data;
   const afterSpeed = (await call("GET", "/api/debug/player/action?name=speed")).data;
+  // Remote keys through the app's own key handling: seek and play/pause are the two that matter most.
+  const key = (code, repeat = 1) => call("GET", `/api/debug/key?code=${code}&repeat=${repeat}`).then((r) => r.data);
+  const before = (await call("GET", "/api/player")).data;
+  await key(22); // DPAD_RIGHT → 快进 30 秒
+  await new Promise((r) => setTimeout(r, 1500));
+  const afterSeek = (await call("GET", "/api/player")).data;
+  check("remote 快进键 moves the position", afterSeek.positionMs - before.positionMs >= 25000,
+    `${before.positionMs}ms → ${afterSeek.positionMs}ms`);
+  await key(21); // DPAD_LEFT → 快退 10 秒
+  await new Promise((r) => setTimeout(r, 1500));
+  const afterBack = (await call("GET", "/api/player")).data;
+  check("remote 快退键 moves back", afterBack.positionMs < afterSeek.positionMs,
+    `${afterSeek.positionMs}ms → ${afterBack.positionMs}ms`);
+  await key(23); // DPAD_CENTER → 暂停
+  await new Promise((r) => setTimeout(r, 1200));
+  const paused = (await call("GET", "/api/player")).data;
+  check("remote 确定键 pauses", paused.state === "paused", `state = ${paused.state}`);
+  await key(23); // …and plays again
+  await new Promise((r) => setTimeout(r, 1200));
+
   check("player menu changes speed", Number(afterSpeed.speed) !== Number(speedAction.speed),
     `${speedAction.speed} → ${afterSpeed.speed}`);
   check("player menu cycles aspect", Number(aspectAction.aspect) !== Number(beforeSpeed),
