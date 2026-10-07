@@ -36,6 +36,7 @@ import { hostOf, kindTone, probeDotClass, probeState } from "@/lib/kind"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
 import { RecommendedShelf } from "@/components/source-shelf"
+import { SiteHealthCard } from "@/components/site-health"
 import { ViewBoundary } from "@/components/view-boundary"
 import { EmptyState, PageHeader, RowSkeletons, SectionCard, Skeleton, StatusDot } from "@/components/ui/primitives"
 import { Badge } from "@/components/ui/badge"
@@ -1324,6 +1325,8 @@ function SourcesView({ contentVersion, onChanged, setError }: { contentVersion: 
             <Button disabled={busy || !url.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
           </form>
         </SectionCard>
+
+        <SiteHealthCard contentVersion={contentVersion} setError={setError} />
 
         <SectionCard title="已添加的源" badges={<Badge variant="outline">{orderedSources.length}</Badge>}>
           <div className="divide-y">

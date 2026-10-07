@@ -1,156 +1,32 @@
 {
-  "version": 1,
   "verifiedAt": "2026-10-07",
-  "note": "前七条是内置的精简配置：实测可用的 CMS 站点，无插件 JAR，添加后即可搜索播放；其余为公开源，2026-10-07 由本地实测确认。公开源随时可能失效，页面上的“重新检测”会用你的网络再确认一次。",
+  "note": "每条都经过实测；检测按钮会用本机网络重新确认。",
   "items": [
     {
-      "id": "vod-starter",
+      "id": "vod-fantuan",
       "kind": "vod",
       "group": "点播",
-      "name": "NukaCast 精简片源（推荐）",
-      "url": "asset://sources/starter.json",
-      "note": "内置 7 个实测站点：光速、豪华、量子、非凡、电影天堂、好剧、暴风。都是 JSON 接口、无插件，打开快且不占内存"
+      "name": "饭太硬（小盒子镜像）",
+      "url": "http://xhztv.top/dc/饭太硬/api.json",
+      "note": "饭太硬线路，53 个站点 + 3 个直播源"
     },
     {
-      "id": "live-bestk",
-      "kind": "live",
-      "group": "直播",
-      "name": "IPTV 综合（央视+卫视）",
-      "url": "https://cdn.jsdelivr.net/gh/bestK/iptv@main/iptv.m3u",
-      "note": "540 个频道，每 6 小时自动更新，jsdelivr 镜像通常比 raw 更稳"
-    },
-    {
-      "id": "live-bestk-gh",
-      "kind": "live",
-      "group": "直播",
-      "name": "IPTV 综合（GitHub 镜像）",
-      "url": "https://gh-proxy.com/raw.githubusercontent.com/bestK/iptv/main/iptv.m3u",
-      "note": "同一份列表的 gh-proxy 镜像"
-    },
-    {
-      "id": "live-guovin",
-      "kind": "live",
-      "group": "直播",
-      "name": "IPTV API 精选（Guovin）",
-      "url": "https://gh-proxy.com/raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u",
-      "note": "473 个频道，项目每日自动检测可用性"
-    },
-    {
-      "id": "live-yang",
-      "kind": "live",
-      "group": "直播",
-      "name": "YanG 精选直播源",
-      "url": "https://gh-proxy.com/raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
-      "note": "123 个频道，体积小、加载快"
-    },
-    {
-      "id": "live-iptvorg",
-      "kind": "live",
-      "group": "直播",
-      "name": "iptv-org 中国频道",
-      "url": "https://iptv-org.github.io/iptv/countries/cn.m3u",
-      "note": "146 个频道，国际开源项目，含少量境外中文频道"
-    },
-    {
-      "id": "live-bestfan",
-      "kind": "live",
-      "group": "直播",
-      "name": "中国电视直播源（含分区）",
-      "url": "https://gh-proxy.com/raw.githubusercontent.com/best-fan/iptv-sources/main/cn_all.m3u8",
-      "note": "203 个频道，每日自动采集校验"
-    },
-    {
-      "id": "live-suxuang",
-      "kind": "live",
-      "group": "直播",
-      "name": "典藏版直播源（频道最全）",
-      "url": "https://gh-proxy.com/raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u",
-      "note": "1273 个频道，含地方台与港澳台，体积较大"
-    },
-    {
-      "id": "vod-pyramid",
+      "id": "vod-wex",
       "kind": "vod",
       "group": "点播",
-      "name": "PyramidStore 单仓",
-      "url": "https://cdn.jsdelivr.net/gh/UndCover/PyramidStore@main/py.json",
-      "note": "23 个站点 + 1 个直播源，长期维护，jsdelivr 镜像"
-    },
-    {
-      "id": "vod-noimank",
-      "kind": "vod",
-      "group": "点播",
-      "name": "多仓合集（noimank）",
-      "url": "https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json",
-      "note": "多仓，内含 14 个单仓，需要 APP 支持多仓"
-    },
-    {
-      "id": "vod-xhztv",
-      "kind": "vod",
-      "group": "点播",
-      "name": "小盒子多仓",
-      "url": "http://xhztv.top/dc",
-      "note": "多仓入口，包含小盒子、肥猫等多条线路"
-    },
-    {
-      "id": "vod-shiguang",
-      "kind": "vod",
-      "group": "点播",
-      "name": "拾光仓库",
-      "url": "http://xmbjm.fh4u.org/ck.txt",
-      "note": "仓库链接（storeHouse），需要 APP 支持仓库"
-    },
-    {
-      "id": "vod-wuxie",
-      "kind": "vod",
-      "group": "点播",
-      "name": "无邪多仓",
-      "url": "https://gh-proxy.com/https://raw.githubusercontent.com/wxrjck/-YSC-/refs/heads/main/wx.json",
-      "note": "仓库链接，聚合多个常用线路"
+      "name": "王二小",
+      "url": "https://9280.kstore.vip/newwex.json",
+      "note": "96 个站点 + 2 个直播源（备用地址：tvbox.王二小放牛娃.top）"
     },
     {
       "id": "drama-ffzy",
       "kind": "drama",
       "group": "短剧",
-      "name": "非凡资源·短剧",
+      "name": "非凡资源 · 短剧",
       "url": "https://api.ffzyapi.com/api.php/provide/vod",
       "categoryId": "36",
-      "note": "短剧分类约 1.9 万部，直连 m3u8，可在 APP 内直接播放"
-    },
-    {
-      "id": "drama-bfzy",
-      "kind": "drama",
-      "group": "短剧",
-      "name": "暴风资源·短剧大全",
-      "url": "https://bfzyapi.com/api.php/provide/vod",
-      "categoryId": "58",
-      "note": "短剧分类约 1.2 万部，直连 m3u8"
-    },
-    {
-      "id": "drama-lzi",
-      "kind": "drama",
-      "group": "短剧",
-      "name": "量子资源·短剧",
-      "url": "https://cj.lziapi.com/api.php/provide/vod",
-      "categoryId": "46",
-      "note": "短剧分类约 2.36 万部，直连 m3u8"
-    },
-    {
-      "id": "drama-dytt",
-      "kind": "drama",
-      "group": "短剧",
-      "name": "电影天堂·短剧",
-      "url": "https://caiji.dyttzyapi.com/api.php/provide/vod",
-      "categoryId": "36",
-      "note": "短剧分类约 2.22 万部，直连 m3u8"
-    },
-    {
-      "id": "drama-wujin",
-      "kind": "drama",
-      "group": "短剧",
-      "name": "无金资源·短剧",
-      "url": "https://api.wujinapi.me/api.php/provide/vod/from/wjm3u8/",
-      "categoryId": "41",
-      "note": "短剧分类约 1000 部，直连 m3u8；该站另有不适分类，已固定只取“短剧”"
+      "kindHint": "cms.drama",
+      "note": "短剧约 1.99 万部；剧集页会自动解析成 m3u8 后再播放"
     }
   ]
 }

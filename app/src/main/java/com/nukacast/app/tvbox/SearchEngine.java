@@ -14,6 +14,7 @@ import com.nukacast.app.tvbox.search.SiteSearcher;
 import com.nukacast.app.tvbox.search.SpiderSiteSearcher;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -23,14 +24,17 @@ import java.util.concurrent.TimeUnit;
 
 public final class SearchEngine {
     /** Upper bound on sites searched in one request when the caller did not name sites. */
-    static final int MAX_SEARCH_SITES = 24;
+    public static final int MAX_SEARCH_SITES = 24;
     private static final long SEARCH_DEADLINE_SECONDS = 10;
     private final TvBoxRepository repository;
-    private final ExecutorService executor = Executors.newFixedThreadPool(4);
+    /** Site tasks run in parallel; the count also tells whether the pool is still busy. */
+    private static final int SEARCH_POOL_SIZE = 4;
+    private final ExecutorService executor = Executors.newFixedThreadPool(SEARCH_POOL_SIZE);
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     private final SpiderSiteSearcher spiderSearcher;
     private final SpiderManager spiderManager;
     private final StorageLibrary storageLibrary;
+    private SiteHealthStore healthStore;
 
     public SearchEngine(Context context, TvBoxRepository repository) {
         this(context, repository, new SpiderManager(context), null);
@@ -59,11 +63,14 @@ public final class SearchEngine {
         for (final TvBoxConfig.Site site : sites) {
             calls.add(new Callable<SiteOutcome>() {
                 @Override public SiteOutcome call() {
+                    inFlight.incrementAndGet();
                     try {
                         SiteSearcher searcher = site.type == 3 ? spiderSearcher : cmsSearcher;
                         return SiteOutcome.success(site, searcher.search(site, query));
                     } catch (Throwable error) {
                         return SiteOutcome.failure(site, error);
+                    } finally {
+                        inFlight.decrementAndGet();
                     }
                 }
             });
@@ -141,6 +148,11 @@ public final class SearchEngine {
         return response;
     }
 
+    /** Recorded verdicts decide which sites are worth the budget; absent data means "try it". */
+    public void useHealthStore(SiteHealthStore store) {
+        this.healthStore = store;
+    }
+
     public void shutdown() {
         executor.shutdownNow();
     }
@@ -154,22 +166,67 @@ public final class SearchEngine {
                 || name.endsWith("InterruptedIOException");
     }
 
+    /**
+     * Counts site tasks that have not returned yet. Plugin calls run inside a JS runtime or a
+     * dex-loaded spider and cannot be interrupted, so a batch that overruns its deadline leaves its
+     * threads behind. Once the pool is full of those, a new search would only queue behind them and
+     * look like it hung forever, which is exactly what "一直显示搜索中" was.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger inFlight =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** True when every search thread is still busy with an earlier batch. */
+    boolean poolSaturated() {
+        return inFlight.get() >= SEARCH_POOL_SIZE;
+    }
+
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
         List<TvBoxConfig.Site> sites = selectSites(repository.getEnabledSites(), query);
-        if (spiderManager != null) {
-            List<TvBoxConfig.Site> usable = new ArrayList<TvBoxConfig.Site>();
-            boolean paused = spiderManager.pausedForMemory();
-            for (TvBoxConfig.Site site : sites) {
-                // Plugin sites are dropped entirely while the app is shedding memory, and skipped
-                // when their plugin cannot load here (Dalvik verifier, JAR hash mismatch).
-                if (site.type == 3 && (paused || spiderManager.compatibility().isUnsupported(site))) {
-                    continue;
-                }
-                usable.add(site);
+        boolean saturated = poolSaturated();
+        List<TvBoxConfig.Site> usable = new ArrayList<TvBoxConfig.Site>();
+        boolean paused = spiderManager != null && spiderManager.pausedForMemory();
+        int skippedBroken = 0;
+        int skippedUnhealthy = 0;
+        for (TvBoxConfig.Site site : sites) {
+            // Plugin sites are dropped entirely while the app is shedding memory, and skipped when
+            // their plugin cannot load here (Dalvik verifier, JAR hash mismatch).
+            if (spiderManager != null && site.type == 3
+                    && (paused || saturated || spiderManager.compatibility().isUnsupported(site))) {
+                skippedBroken++;
+                continue;
             }
-            sites = usable;
+            if (!query.forceSites && healthStore != null && healthStore.isKnownBad(site)) {
+                // Measured as unusable minutes ago: searching it again spends the deadline and a
+                // plugin runtime on a site that will not answer.
+                skippedUnhealthy++;
+                continue;
+            }
+            usable.add(site);
         }
-        return limitFanOut(sites, query);
+        if (skippedUnhealthy > 0 || skippedBroken > 0) {
+            AppLog.i("搜索", "跳过站点：体检不可用 " + skippedUnhealthy + " · 本机不支持或线程已占满 "
+                    + skippedBroken + (saturated ? "（上一次搜索仍有站点未返回）" : ""));
+        }
+        List<TvBoxConfig.Site> limited = limitFanOut(usable, query);
+        if (!query.forceSites && healthStore != null && limited.size() > 1) {
+            // Sites already known to answer go first, so a deadline that cuts the batch short is
+            // spent on sites that produce results.
+            final List<String> good = new ArrayList<String>();
+            for (TvBoxConfig.Site site : limited) {
+                if (healthStore.isKnownGood(site)) good.add(site.key);
+            }
+            if (!good.isEmpty() && good.size() < limited.size()) {
+                Collections.sort(limited, new java.util.Comparator<TvBoxConfig.Site>() {
+                    @Override public int compare(TvBoxConfig.Site left, TvBoxConfig.Site right) {
+                        boolean leftGood = good.contains(left.key);
+                        boolean rightGood = good.contains(right.key);
+                        if (leftGood == rightGood) return 0;
+                        return leftGood ? -1 : 1;
+                    }
+                });
+            }
+        }
+        return limited;
     }
 
     /**

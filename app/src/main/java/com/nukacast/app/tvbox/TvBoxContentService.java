@@ -8,6 +8,7 @@ import com.google.gson.JsonParser;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.tvbox.SiteHealthStore;
 import com.nukacast.app.spider.SpiderManager;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.tvbox.model.MediaDetail;
@@ -43,6 +44,12 @@ public final class TvBoxContentService {
     private final TvBoxRepository repository;
     private final SpiderManager spiders;
     private final StorageLibrary storageLibrary;
+    private SiteHealthStore healthStore;
+
+    /** Sites a measured sweep found working get priority on the home screen. */
+    public void useHealthStore(SiteHealthStore store) {
+        this.healthStore = store;
+    }
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
     /**
      * Two threads, not four: each home site can start a QuickJS runtime or a dex-loaded spider, and
@@ -79,13 +86,15 @@ public final class TvBoxContentService {
      * DexClassLoader spider instance in native memory, which is what makes a low-end TV kill the
      * process a minute after startup. Plain CMS sites (type 0/1) are cheap and come first.
      */
-    private static final int MAX_PLUGIN_HOME_SITES = 2;
+    public static final int MAX_PLUGIN_HOME_SITES = 2;
 
     public List<SearchItem> home(int maxSites, int maxItems) throws InterruptedException {
         List<TvBoxConfig.Site> pluginSites = new ArrayList<TvBoxConfig.Site>();
         List<TvBoxConfig.Site> selected = new ArrayList<TvBoxConfig.Site>();
         int skipped = 0;
         int quota = Math.max(1, maxSites);
+        List<TvBoxConfig.Site> unknown = new ArrayList<TvBoxConfig.Site>();
+        List<TvBoxConfig.Site> cmsSites = new ArrayList<TvBoxConfig.Site>();
         for (TvBoxConfig.Site site : repository.getEnabledSites()) {
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
             if (site.type == 3) {
@@ -96,7 +105,18 @@ public final class TvBoxContentService {
                 pluginSites.add(site);
                 continue;
             }
-            if (selected.size() >= quota) continue;
+            if (healthStore != null && healthStore.isKnownBad(site)) {
+                skipped++;
+                continue;
+            }
+            // CMS sites that a sweep already saw answering come first: on a 1.5 GB TV the home
+            // screen only has room for a handful, and an unmeasured site is a coin flip.
+            if (healthStore != null && healthStore.isKnownGood(site)) cmsSites.add(site);
+            else unknown.add(site);
+        }
+        selected.addAll(cmsSites);
+        for (TvBoxConfig.Site site : unknown) {
+            if (selected.size() >= quota) break;
             selected.add(site);
         }
         // Only fill the remaining slots with plugins, and never more than a couple of them.
@@ -206,6 +226,18 @@ public final class TvBoxContentService {
                 info.error = "播放地址需要通过 Spider 代理页嗅探";
             } else {
                 resolveWithConfiguredParsers(site, info);
+            }
+        }
+        if (!info.url.isEmpty()) {
+            // Several CMS back ends publish an HTML player page instead of media; playing it gives a
+            // black screen. Resolve it to the real media URL so ordinary playback works.
+            String media = MaccmsShareResolver.resolve(info.url, info.headers.get("Referer"));
+            if (media != null && !media.equals(info.url)) {
+                info.url = media;
+                info.direct = true;
+                info.error = "";
+            } else if (MaccmsShareResolver.looksLikeSharePage(info.url)) {
+                info.error = "该线路返回的是播放页，未解析出可直接播放的地址";
             }
         }
         return info;

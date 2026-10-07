@@ -44,7 +44,20 @@ public final class MediaCardView extends LinearLayout {
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
         artwork.addView(poster, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        images.load(item.poster, poster);
+
+        // Placeholder sits under the poster: while the image loads (or when it fails) the tile shows
+        // the title's first character instead of an empty grey rectangle.
+        TextView placeholder = text(34, TvTheme.secondary(context));
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setAlpha(0.55f);
+        placeholder.setText(safe(item.name).isEmpty() ? "?" : safe(item.name).substring(0, 1));
+        artwork.addView(placeholder, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        // Many CMS hosts reject image requests without a matching Referer, which looks exactly like
+        // "the home screen has no thumbnails". The poster's own host is the right referer far more
+        // often than not, and costs nothing when a host does not care.
+        images.load(item.poster, poster, origin(item.poster));
 
         if (!safe(item.remarks).isEmpty()) {
             TextView badge = text(11, Color.WHITE);
@@ -119,6 +132,15 @@ public final class MediaCardView extends LinearLayout {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /** {@code https://host/} of an image URL, used as the Referer for hotlink-protected hosts. */
+    private static String origin(String url) {
+        if (url == null) return "";
+        int scheme = url.indexOf("://");
+        if (scheme < 0) return "";
+        int slash = url.indexOf('/', scheme + 3);
+        return slash < 0 ? url : url.substring(0, slash + 1);
     }
 
     private static String safe(String value) { return value == null ? "" : value; }

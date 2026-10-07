@@ -137,6 +137,27 @@ const api = {
       return lines.join("\n")
     },
   },
+  "/api/debug/ping": { app: "NukaCast（预览）", time: now, pid: 1 },
+  "/api/debug/snapshot": {
+    generatedAt: now,
+    status: { serviceState: "ready", message: "运行中（预览）", sourceCount: 3, siteCount: 41 },
+    get device() { return api["/api/device"] },
+    memory: { heapUsedBytes: 8_000_000, heapMaxBytes: 268_000_000, rssBytes: 45_000_000, threads: 36, pluginBudgetBytes: 201_000_000 },
+    airPlay: { state: "ready", port: 7000 },
+    sites: { enabledSites: 41, pluginSites: 39, cmsSites: 2, searchSiteLimit: 24, homePluginLimit: 2 },
+    sources: { sources: [] },
+    health: { knownGood: 5, knownBad: 36, sweep: { running: false, total: 41, done: 41, ok: 5, failed: 36 } },
+    player: { state: "idle" },
+  },
+  "/api/debug/sites": { enabledSites: 41, pluginSites: 39, cmsSites: 2, searchSiteLimit: 24, homePluginLimit: 2, sites: [] },
+  "/api/debug/sources": { sources: [], liveSources: [] },
+  "/api/debug/health": {
+    sweep: { running: false, cancelled: false, total: 41, done: 41, ok: 5, failed: 36, keyword: "庆余年", results: [] },
+    knownGood: 5,
+    knownBad: 36,
+    verdicts: [],
+  },
+  "/api/debug/player": { state: "idle", title: "", url: "" },
   "/api/logs": [
     { level: "INFO", tag: "片源", message: "配置刷新成功 [PyramidStore 单仓]：23 个站点", timestamp: now - 20000 },
     { level: "WARN", tag: "短剧", message: "目录详情失败：目录 HTTP 502（api.ffzyapi.com）", timestamp: now - 60000 },
@@ -174,16 +195,11 @@ const api = {
   },
   "/api/recommended": {
     verifiedAt: "2026-10-07",
-    note: "均为公开可直连的源，2026-10-07 由本地实测确认可达。",
+    note: "每条都经过实测；检测按钮会用本机网络重新确认。",
     items: [
-      { id: "live-bestk", kind: "live", group: "直播", name: "IPTV 综合（央视+卫视）", url: "https://cdn.jsdelivr.net/gh/bestK/iptv@main/iptv.m3u", note: "540 个频道，每 6 小时自动更新，jsdelivr 镜像通常比 raw 更稳", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "live-bestk", ok: true, httpStatus: 200, latencyMs: 320, bytes: 268000, detail: "540 个频道", errorCode: "", error: "", checkedAt: now - 60000 } },
-      { id: "live-guovin", kind: "live", group: "直播", name: "IPTV API 精选（Guovin）", url: "https://gh-proxy.com/raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u", note: "473 个频道，项目每日自动检测可用性", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: { id: "live-guovin", ok: true, httpStatus: 200, latencyMs: 1180, bytes: 210000, detail: "473 个频道", errorCode: "", error: "", checkedAt: now - 120000 } },
-      { id: "live-suxuang", kind: "live", group: "直播", name: "典藏版直播源（频道最全）", url: "https://gh-proxy.com/raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u", note: "1273 个频道，含地方台与港澳台", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: { id: "live-suxuang", ok: false, httpStatus: 0, latencyMs: 25000, bytes: 0, detail: "", errorCode: "timeout", error: "read timed out", checkedAt: now - 5000 } },
-      { id: "vod-pyramid", kind: "vod", group: "点播", name: "PyramidStore 单仓", url: "https://cdn.jsdelivr.net/gh/UndCover/PyramidStore@main/py.json", note: "23 个站点 + 1 个直播源，长期维护", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "vod-pyramid", ok: true, httpStatus: 200, latencyMs: 640, bytes: 11386, detail: "23 个站点，1 个直播源", errorCode: "", error: "", checkedAt: now - 90000 } },
-      { id: "vod-noimank", kind: "vod", group: "点播", name: "多仓合集（noimank）", url: "https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json", note: "多仓，内含 14 个单仓", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: null },
-      { id: "drama-vote", kind: "drama", group: "短剧", name: "红果短剧榜（资料目录）", url: "https://vote.252035.xyz", note: "按剧名搜索剧目资料与相关推荐", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "drama-vote", ok: true, httpStatus: 200, latencyMs: 420, bytes: 3000, detail: "共 213 条", errorCode: "", error: "", checkedAt: now - 30000 } },
-      { id: "drama-ffzy", kind: "drama", group: "短剧", name: "非凡资源·短剧", url: "https://api.ffzyapi.com/api.php/provide/vod", categoryId: "36", note: "短剧分类约 1.9 万部，直连 m3u8", verifiedAt: "2026-10-07", added: false, probe: { id: "drama-ffzy", ok: true, httpStatus: 200, latencyMs: 890, bytes: 42000, detail: "共 19874 部", errorCode: "", error: "", checkedAt: now - 45000 } },
-      { id: "drama-bfzy", kind: "drama", group: "短剧", name: "暴风资源·短剧大全", url: "https://bfzyapi.com/api.php/provide/vod", categoryId: "58", note: "短剧分类约 1.2 万部，直连 m3u8", verifiedAt: "2026-10-07", added: false, probe: null },
+      { id: "vod-fantuan", kind: "vod", group: "点播", name: "饭太硬（小盒子镜像）", url: "http://xhztv.top/dc/饭太硬/api.json", note: "饭太硬线路，53 个站点 + 3 个直播源", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "vod-fantuan", ok: true, httpStatus: 200, latencyMs: 523, bytes: 15000, detail: "sites=53 lives=3", errorCode: "", error: "", checkedAt: now - 60000 } },
+      { id: "vod-wex", kind: "vod", group: "点播", name: "王二小", url: "https://9280.kstore.vip/newwex.json", note: "96 个站点 + 2 个直播源（备用地址：tvbox.王二小放牛娃.top）", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: { id: "vod-wex", ok: true, httpStatus: 200, latencyMs: 118, bytes: 42000, detail: "sites=96 lives=2", errorCode: "", error: "", checkedAt: now - 90000 } },
+      { id: "drama-ffzy", kind: "drama", group: "短剧", name: "非凡资源 · 短剧", url: "https://api.ffzyapi.com/api.php/provide/vod", categoryId: "36", note: "短剧约 1.99 万部；剧集页会自动解析成 m3u8 后再播放", verifiedAt: "2026-10-07", added: false, probe: { id: "drama-ffzy", ok: true, httpStatus: 200, latencyMs: 890, bytes: 42000, detail: "共 19874 条剧目", errorCode: "", error: "", checkedAt: now - 45000 } },
     ],
   },
   "/api/drama/providers": {

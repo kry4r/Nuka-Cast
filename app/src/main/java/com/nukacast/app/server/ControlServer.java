@@ -4,11 +4,16 @@ import android.content.Context;
 import android.content.res.AssetManager;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.nukacast.app.BuildConfig;
 import com.nukacast.app.CrashReporter;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.PostMortemLog;
+import com.nukacast.app.diagnostics.ProcessMemory;
+import com.nukacast.app.diagnostics.SessionMarker;
 import com.nukacast.app.diagnostics.StageTrace;
 import com.nukacast.app.drama.DramaService;
 import com.nukacast.app.drama.model.DramaLineResult;
@@ -16,11 +21,19 @@ import com.nukacast.app.drama.model.DramaProviderConfig;
 import com.nukacast.app.drama.model.DramaSearchResult;
 import com.nukacast.app.live.model.LiveCatalog;
 import com.nukacast.app.net.HttpStack;
+import com.nukacast.app.net.ProbeTool;
 import com.nukacast.app.player.PlayerController;
 import com.nukacast.app.storage.StorageLibrary;
 import com.nukacast.app.storage.model.StorageMount;
+import com.nukacast.app.tvbox.SearchEngine;
+import com.nukacast.app.tvbox.SiteHealthSweep;
+import com.nukacast.app.tvbox.SiteHealthStore;
+import com.nukacast.app.tvbox.TvBoxContentService;
+import com.nukacast.app.tvbox.TvBoxRepository;
 import com.nukacast.app.tvbox.model.ConfigSource;
+import com.nukacast.app.tvbox.model.MediaDetail;
 import com.nukacast.app.tvbox.model.PlaybackInfo;
+import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.tvbox.model.SearchQuery;
 import com.nukacast.app.tvbox.model.SearchResponse;
 
@@ -30,6 +43,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -82,7 +97,378 @@ public final class ControlServer extends NanoHTTPD {
         }
     }
 
+    /**
+     * Machine-facing endpoints used by the debug CLI / MCP server while diagnosing a real TV.
+     *
+     * <p>They exist because the interesting details (which site answers, what a stream URL returns
+     * from the device's own network, whether the decoder accepted a format) are only observable on
+     * the device itself. Everything here answers JSON so tooling can compare runs.
+     */
+    private Response serveDebug(IHTTPSession session, String path) throws Exception {
+        if ("/api/debug/ping".equals(path)) {
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("app", "NukaCast");
+            payload.put("time", System.currentTimeMillis());
+            payload.put("pid", android.os.Process.myPid());
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/snapshot".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugSnapshot(true));
+        }
+        if ("/api/debug/sites".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugSites());
+        }
+        if ("/api/debug/sources".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugSources());
+        }
+        if ("/api/debug/sources/refresh".equals(path) && Method.POST.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugRefreshSources());
+        }
+        if ("/api/debug/site/test".equals(path) && Method.POST.equals(session.getMethod())) {
+            DebugSiteRequest request = body(session, DebugSiteRequest.class);
+            return json(Response.Status.OK, debugSiteTest(request));
+        }
+        if ("/api/debug/search".equals(path) && Method.POST.equals(session.getMethod())) {
+            DebugSearchRequest request = body(session, DebugSearchRequest.class);
+            return json(Response.Status.OK, debugSearch(request));
+        }
+        if ("/api/debug/health".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugHealth());
+        }
+        if ("/api/debug/health/run".equals(path) && Method.POST.equals(session.getMethod())) {
+            DebugHealthRequest request = body(session, DebugHealthRequest.class);
+            runtime.getSiteHealthSweep().start(request.limit, request.keyword,
+                    request.pluginsOnly, request.failedOnly);
+            return json(Response.Status.ACCEPTED, debugHealth());
+        }
+        if ("/api/debug/health/stop".equals(path) && Method.POST.equals(session.getMethod())) {
+            boolean stopped = runtime.getSiteHealthSweep().stop();
+            return json(Response.Status.OK, Collections.singletonMap("stopped", stopped));
+        }
+        if ("/api/debug/health/clear".equals(path) && Method.POST.equals(session.getMethod())) {
+            runtime.getSiteHealthStore().clear();
+            return json(Response.Status.OK, Collections.singletonMap("cleared", true));
+        }
+        if ("/api/debug/probe".equals(path) && Method.POST.equals(session.getMethod())) {
+            return json(Response.Status.OK, debugProbe(session));
+        }
+        if ("/api/debug/play".equals(path) && Method.POST.equals(session.getMethod())) {
+            DebugPlayRequest request = body(session, DebugPlayRequest.class);
+            return json(Response.Status.OK, debugPlay(request));
+        }
+        if ("/api/debug/player".equals(path) && Method.GET.equals(session.getMethod())) {
+            return json(Response.Status.OK, runtime.getPlayerController().snapshot());
+        }
+        if ("/api/debug/logs".equals(path) && Method.GET.equals(session.getMethod())) {
+            String level = session.getParms().get("level");
+            int limit = debugIntParam(session, "limit", 80);
+            AppLog.Level wanted = level == null || level.isEmpty() || "all".equalsIgnoreCase(level)
+                    ? null : AppLog.Level.valueOf(level.toUpperCase(Locale.ROOT));
+            List<AppLog.Entry> entries = AppLog.snapshot(wanted);
+            if (entries.size() > limit) {
+                entries = entries.subList(entries.size() - limit, entries.size());
+            }
+            return json(Response.Status.OK, entries);
+        }
+        if ("/api/debug/logs/clear".equals(path) && Method.POST.equals(session.getMethod())) {
+            AppLog.clear();
+            return json(Response.Status.OK, Collections.singletonMap("cleared", true));
+        }
+        if ("/api/debug/export".equals(path) && Method.GET.equals(session.getMethod())) {
+            return diagnosticExport(session);
+        }
+        return json(Response.Status.NOT_FOUND, error("未知调试接口：" + path));
+    }
+
+    private Map<String, Object> debugSnapshot(boolean withLogs) {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("generatedAt", System.currentTimeMillis());
+        payload.put("status", status());
+        payload.put("device", runtime.getDeviceProfile());
+        payload.put("memory", memorySnapshot());
+        payload.put("airPlay", runtime.getAirPlayReceiver().snapshot());
+        payload.put("httpStack", httpStackSnapshot());
+        payload.put("stages", StageTrace.snapshot());
+        payload.put("runSession", SessionMarker.interruptedRun());
+        payload.put("postMortem", PostMortemLog.read(runtime.getContext()));
+        payload.put("sites", debugSites());
+        payload.put("sources", debugSources());
+        payload.put("health", debugHealth());
+        payload.put("player", runtime.getPlayerController().snapshot());
+        if (withLogs) {
+            List<AppLog.Entry> entries = AppLog.snapshot(null);
+            int from = Math.max(0, entries.size() - 60);
+            payload.put("logs", entries.subList(from, entries.size()));
+        }
+        return payload;
+    }
+
+    /** The HTTP stack only exposes the frozen boot state; the debug API wants it named. */
+    private Map<String, Object> httpStackSnapshot() {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("degraded", HttpStack.degraded());
+        payload.put("initError", HttpStack.initError());
+        return payload;
+    }
+
+    /** Device, budget and current usage in one place: the numbers a crash report needs. */
+    private Map<String, Object> memorySnapshot() {
+        Map<String, Object> memory = new LinkedHashMap<String, Object>();
+        Context context = runtime.getContext();
+        Runtime java = Runtime.getRuntime();
+        memory.put("heapUsedBytes", java.totalMemory() - java.freeMemory());
+        memory.put("heapMaxBytes", java.maxMemory());
+        memory.put("rssBytes", ProcessMemory.rssBytes());
+        memory.put("vmSizeBytes", ProcessMemory.vmSizeBytes());
+        memory.put("threads", ProcessMemory.threadCount());
+        memory.put("oomScoreAdj", ProcessMemory.oomScoreAdj());
+        memory.put("pssBytes", ProcessMemory.totalPssBytes(context));
+        memory.put("totalRamBytes", ProcessMemory.totalRamBytes(context));
+        memory.put("pluginBudgetBytes", ProcessMemory.pluginBudgetBytes(context));
+        memory.put("pluginPausedForMemory", runtime.getSpiderManager().pausedForMemory());
+        memory.put("pluginSessions", runtime.getSpiderManager().sessionDetail());
+        memory.put("unsupportedSites", runtime.getSpiderManager().compatibilitySnapshot());
+        memory.put("stageTraces", StageTrace.snapshot().size());
+        memory.put("logEntries", AppLog.snapshot(null).size());
+        return memory;
+    }
+
+    private Map<String, Object> debugSites() {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        List<TvBoxConfig.Site> sites = runtime.getTvBoxRepository().getEnabledSites();
+        int plugins = 0;
+        for (TvBoxConfig.Site site : sites) {
+            if (site.type == 3) plugins++;
+        }
+        payload.put("enabledSites", sites.size());
+        payload.put("pluginSites", plugins);
+        payload.put("cmsSites", sites.size() - plugins);
+        payload.put("searchSiteLimit", SearchEngine.MAX_SEARCH_SITES);
+        payload.put("homePluginLimit", TvBoxContentService.MAX_PLUGIN_HOME_SITES);
+        payload.put("sites", sites);
+        return payload;
+    }
+
+    private Map<String, Object> debugSources() {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        List<Map<String, Object>> rows = new ArrayList<Map<String, Object>>();
+        for (ConfigSource source : runtime.getSourceStore().getSources()) {
+            Map<String, Object> row = new LinkedHashMap<String, Object>();
+            row.put("id", source.id);
+            row.put("name", source.name);
+            row.put("url", source.url);
+            row.put("enabled", source.enabled);
+            row.put("siteCount", source.siteCount);
+            row.put("latencyMs", source.latencyMs);
+            row.put("error", source.error);
+            row.put("updatedAt", source.updatedAt);
+            rows.add(row);
+        }
+        payload.put("sources", rows);
+        payload.put("liveSources", runtime.getTvBoxRepository().getLiveSourceStore().all());
+        return payload;
+    }
+
+    private Map<String, Object> debugRefreshSources() {
+        final CountDownLatch done = new CountDownLatch(1);
+        runtime.getTvBoxRepository().refreshAllAsync(new TvBoxRepository.RefreshListener() {
+            @Override public void onSourceRefreshed(int sources, int sites) { }
+
+            @Override public void onRefreshComplete(int sources, int sites) {
+                done.countDown();
+            }
+        });
+        try {
+            done.await(45, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        return debugSources();
+    }
+
+    private Map<String, Object> debugHealth() {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        SiteHealthSweep.Job job = runtime.getSiteHealthSweep().status();
+        Map<String, Object> status = new LinkedHashMap<String, Object>();
+        status.put("running", job.running);
+        status.put("cancelled", job.cancelled);
+        status.put("startedAt", job.startedAt);
+        status.put("finishedAt", job.finishedAt);
+        status.put("total", job.total);
+        status.put("done", job.done);
+        status.put("ok", job.ok);
+        status.put("failed", job.failed);
+        status.put("keyword", job.keyword);
+        status.put("currentSite", job.currentSite);
+        status.put("error", job.error);
+        status.put("results", job.results);
+        payload.put("sweep", status);
+        SiteHealthStore store = runtime.getSiteHealthStore();
+        int[] counts = store.counts();
+        payload.put("knownGood", counts[0]);
+        payload.put("knownBad", counts[1]);
+        payload.put("lastCheckedAt", store.lastCheckedAt());
+        payload.put("verdicts", store.snapshot());
+        return payload;
+    }
+
+    private Map<String, Object> debugSiteTest(DebugSiteRequest request) throws Exception {
+        if (request == null || request.siteKey == null || request.siteKey.isEmpty()) {
+            throw new IllegalArgumentException("siteKey 必填");
+        }
+        TvBoxConfig.Site target = null;
+        for (TvBoxConfig.Site site : runtime.getTvBoxRepository().getEnabledSites()) {
+            if (request.siteKey.equals(site.key)) {
+                target = site;
+                break;
+            }
+        }
+        if (target == null) throw new IllegalArgumentException("站点不存在：" + request.siteKey);
+        long startedAt = System.currentTimeMillis();
+        SiteHealthSweep.Result result = runtime.getSiteHealthSweep().test(target, request.keyword);
+        runtime.getSiteHealthStore().record(target, result.ok, result.itemCount,
+                result.latencyMs, result.reason);
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("site", target);
+        payload.put("ok", result.ok);
+        payload.put("itemCount", result.itemCount);
+        payload.put("latencyMs", result.latencyMs);
+        payload.put("reason", result.reason);
+        payload.put("elapsedMs", System.currentTimeMillis() - startedAt);
+        return payload;
+    }
+
+    private Map<String, Object> debugSearch(DebugSearchRequest request) throws Exception {
+        if (request == null || request.keyword == null || request.keyword.trim().isEmpty()) {
+            throw new IllegalArgumentException("keyword 必填");
+        }
+        SearchQuery query = new SearchQuery();
+        query.keyword = request.keyword.trim();
+        query.sourceId = request.sourceId == null ? "" : request.sourceId;
+        query.page = Math.max(1, request.page);
+        query.pageSize = request.pageSize <= 0 ? 40 : request.pageSize;
+        query.forceSites = request.forceSites;
+        if (request.siteKeys != null) query.siteKeys.addAll(request.siteKeys);
+        long startedAt = System.currentTimeMillis();
+        SearchResponse response = runtime.getSearchEngine().search(query);
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        payload.put("keyword", query.keyword);
+        payload.put("searchedSites", response.searchedSites);
+        payload.put("failedSites", response.failedSites);
+        payload.put("partial", response.partial);
+        payload.put("errors", response.errors);
+        payload.put("items", response.items);
+        payload.put("elapsedMs", response.elapsedMs);
+        payload.put("wallMs", System.currentTimeMillis() - startedAt);
+        return payload;
+    }
+
+    /** Fetches a URL from the device, which is the network that actually matters. */
+    private Map<String, Object> debugProbe(IHTTPSession session) throws Exception {
+        Map<String, String> parsed = new HashMap<String, String>();
+        session.parseBody(parsed);
+        String raw = parsed.get("postData");
+        String url = null;
+        String method = "GET";
+        if (raw != null && raw.trim().startsWith("{")) {
+            JsonObject object = JsonParser.parseString(raw.trim()).getAsJsonObject();
+            if (object.has("url")) url = object.get("url").getAsString();
+            if (object.has("method")) method = object.get("method").getAsString().toUpperCase(Locale.ROOT);
+        } else {
+            url = session.getParms().get("url");
+        }
+        if (url == null || url.trim().isEmpty()) throw new IllegalArgumentException("url 必填");
+        return ProbeTool.run(url.trim(), method);
+    }
+
+    private Map<String, Object> debugPlay(DebugPlayRequest request) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<String, Object>();
+        String url = request == null ? null : request.url;
+        String title = request == null || request.title == null ? "" : request.title;
+        Map<String, String> headers = new HashMap<String, String>();
+        if (url == null || url.trim().isEmpty()) {
+            if (request == null || request.siteKey == null || request.vodId == null) {
+                throw new IllegalArgumentException("需要 url，或 siteKey + vodId");
+            }
+            TvBoxConfig.Site site = null;
+            for (TvBoxConfig.Site candidate : runtime.getTvBoxRepository().getEnabledSites()) {
+                if (request.siteKey.equals(candidate.key)) {
+                    site = candidate;
+                    break;
+                }
+            }
+            if (site == null) throw new IllegalArgumentException("站点不存在：" + request.siteKey);
+            MediaDetail detail = runtime.getContentService().detail(
+                    site.sourceId, site.key, request.vodId);
+            if (detail == null || detail.playSources.isEmpty()) {
+                throw new IllegalArgumentException("该条目没有播放地址");
+            }
+            MediaDetail.PlaySource source = detail.playSources.get(0);
+            if (source.episodes.isEmpty()) throw new IllegalArgumentException("该线路没有剧集");
+            int index = Math.max(0, Math.min(source.episodes.size() - 1, request.episodeIndex));
+            MediaDetail.Episode episode = source.episodes.get(index);
+            PlaybackInfo info = runtime.getContentService().resolve(site.sourceId, site.key,
+                    source.name, episode.id, episode.name);
+            url = info.url;
+            title = info.title == null || info.title.isEmpty() ? detail.name : info.title;
+            headers.putAll(info.headers);
+            payload.put("resolvedFrom", site.name + " / " + request.vodId);
+        }
+        if (url == null || url.trim().isEmpty()) throw new IllegalArgumentException("解析出的播放地址为空");
+        payload.put("url", url);
+        payload.put("title", title);
+        // Probe first: a URL that answers 403/404 explains a black screen long before the player
+        // reports "source error", and that response is the exact condition that used to crash the app.
+        payload.put("probe", ProbeTool.run(url, "GET"));
+        runtime.getPlayerController().play(runtime.getContext(), title, url, headers);
+        payload.put("player", runtime.getPlayerController().snapshot());
+        return payload;
+    }
+
+    private static final class DebugSiteRequest {
+        String siteKey;
+        String keyword;
+    }
+
+    /** Reads an integer query parameter, falling back when it is missing or malformed. */
+    private static int debugIntParam(IHTTPSession session, String name, int fallback) {
+        String raw = session.getParms().get(name);
+        if (raw == null || raw.isEmpty()) return fallback;
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException error) {
+            return fallback;
+        }
+    }
+
+    private static final class DebugHealthRequest {
+        int limit;
+        String keyword;
+        boolean pluginsOnly;
+        boolean failedOnly;
+    }
+
+    private static final class DebugPlayRequest {
+        String url;
+        String title;
+        String siteKey;
+        String vodId;
+        int episodeIndex;
+    }
+
+    private static final class DebugSearchRequest {
+        String keyword;
+        String sourceId;
+        List<String> siteKeys;
+        int page = 1;
+        int pageSize;
+        boolean forceSites;
+    }
+
     private Response serveApi(IHTTPSession session, String path) throws Exception {
+        if (path.startsWith("/api/debug")) {
+            return serveDebug(session, path);
+        }
         if ("/api/status".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, status());
         }
@@ -215,6 +601,19 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/drama/play".equals(path) && Method.POST.equals(session.getMethod())) {
             DramaPlayRequest request = body(session, DramaPlayRequest.class);
+            // Resolve through DramaService rather than sending the stored episode URL straight to the
+            // player: several CMS back ends publish a player page, and "cannot play" has to come back
+            // as an explained 400 instead of a generic request failure.
+            com.nukacast.app.drama.model.DramaPlayResult resolved;
+            try {
+                resolved = runtime.getDramaService().play(
+                        request.providerId, request.dramaId, request.index);
+            } catch (com.nukacast.app.drama.DramaException dramaError) {
+                Map<String, Object> failure = new LinkedHashMap<String, Object>();
+                failure.put("error", dramaError.getMessage());
+                failure.put("code", dramaError.code);
+                return json(Response.Status.BAD_REQUEST, failure);
+            }
             com.nukacast.app.drama.model.DramaEpisode episode = runtime.getDramaService()
                     .episode(request.providerId, request.dramaId, request.index);
             com.nukacast.app.tvbox.model.SearchItem item =
@@ -228,15 +627,15 @@ public final class ControlServer extends NanoHTTPD {
             item.remarks = episode.name;
             runtime.getMediaLibrary().start(item, "drama", String.valueOf(episode.index),
                     episode.name);
-            String title = safe(request.title).isEmpty()
-                    ? episode.name : request.title + " · " + episode.name;
-            runtime.getPlayerController().play(context, episode.playUrl, title, episode.headers);
-            Map<String, Object> payload = new HashMap<String, Object>();
+            String title = resolved.title == null || resolved.title.isEmpty()
+                    ? episode.name : resolved.title;
+            runtime.getPlayerController().play(context, resolved.url, title, resolved.headers);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
             payload.put("title", title);
-            payload.put("url", episode.playUrl);
+            payload.put("url", resolved.url);
             payload.put("index", episode.index);
             payload.put("episodeName", episode.name);
-            payload.put("headers", episode.headers);
+            payload.put("headers", resolved.headers);
             return json(Response.Status.ACCEPTED, payload);
         }
         if ("/api/sources".equals(path) && Method.POST.equals(session.getMethod())) {

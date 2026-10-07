@@ -10,9 +10,9 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
-import com.google.android.exoplayer2.ext.okhttp.OkHttpDataSource;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
+import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.net.HttpStack;
@@ -174,9 +174,18 @@ public final class PlayerController {
             AppLog.i("播放器", "开始播放：" + (title.isEmpty() ? "未命名媒体" : title));
             appState.updateActiveMedia(title);
 
-            OkHttpDataSource.Factory http = new OkHttpDataSource.Factory(httpClient())
+            // DefaultHttpDataSource instead of extension-okhttp: that extension is pinned to 2.14.2
+            // (the last release supporting API 19) while core/hls/dash are 2.18.5, and its error
+            // path calls a constructor that no longer exists. Whenever a CDN answered 403/404, the
+            // OkHttp data source raised java.lang.NoSuchMethodError from an ExoPlayer loader thread,
+            // which is an uncaught exception and therefore killed the process — the "看一会就闪退"
+            // that no retry could survive.
+            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                     .setUserAgent(header(headers, "User-Agent", "NukaCast/0.1 ExoPlayer"))
-                    .setDefaultRequestProperties(new LinkedHashMap<String, String>(headers));
+                    .setDefaultRequestProperties(new LinkedHashMap<String, String>(headers))
+                    .setConnectTimeoutMs(15_000)
+                    .setReadTimeoutMs(20_000)
+                    .setAllowCrossProtocolRedirects(true);
             DefaultDataSource.Factory dataSource = new DefaultDataSource.Factory(context, http);
             ExoPlayer created = new ExoPlayer.Builder(context)
                     .setMediaSourceFactory(new DefaultMediaSourceFactory(dataSource))

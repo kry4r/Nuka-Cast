@@ -26,7 +26,21 @@ public final class PosterImageLoader {
     private final Handler main = new Handler(Looper.getMainLooper());
 
     public void load(final String url, final ImageView target) {
-        if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) return;
+        load(url, target, null);
+    }
+
+    /**
+     * Loads a poster, optionally with the page that owns it as Referer.
+     *
+     * <p>Many CMS hosts refuse image requests without one (hotlink protection), which shows up as a
+     * grid of empty tiles even though the API returned picture URLs. A failed load also notifies
+     * the caller so the card can draw a placeholder instead of leaving a blank rectangle.
+     */
+    public void load(final String url, final ImageView target, final String referer) {
+        if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+            if (fallback != null) fallback.onFailed(url, target);
+            return;
+        }
         target.setTag(url);
         Bitmap cached = cache.get(url);
         if (cached != null) {
@@ -35,8 +49,17 @@ public final class PosterImageLoader {
         }
         executor.execute(new Runnable() {
             @Override public void run() {
-                Bitmap bitmap = download(url);
-                if (bitmap == null) return;
+                Bitmap bitmap = download(url, referer);
+                if (bitmap == null) {
+                    if (fallback != null) {
+                        main.post(new Runnable() {
+                            @Override public void run() {
+                                if (url.equals(target.getTag())) fallback.onFailed(url, target);
+                            }
+                        });
+                    }
+                    return;
+                }
                 cache.put(url, bitmap);
                 main.post(new Runnable() {
                     @Override public void run() {
@@ -47,12 +70,22 @@ public final class PosterImageLoader {
         });
     }
 
+    /** Notified when a poster could not be loaded, so cards can show a placeholder. */
+    public interface Fallback {
+        void onFailed(String url, ImageView target);
+    }
+
+    private Fallback fallback;
+
+    public void setFallback(Fallback value) { this.fallback = value; }
+
     public void shutdown() { executor.shutdownNow(); }
 
-    private static Bitmap download(String url) {
-        Request request = new Request.Builder().url(url)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.2.2; NukaCast)")
-                .build();
+    private static Bitmap download(String url, String referer) {
+        Request.Builder builder = new Request.Builder().url(url)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.2.2; NukaCast)");
+        if (referer != null && !referer.isEmpty()) builder.header("Referer", referer);
+        Request request = builder.build();
         try (Response response = HttpStack.client().newCall(request).execute()) {
             if (!response.isSuccessful() || response.body() == null) return null;
             byte[] bytes = ResponseBodies.bytes(response.body(), MAX_IMAGE_BYTES);

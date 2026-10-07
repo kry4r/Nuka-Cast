@@ -277,6 +277,42 @@ export type DramaProviders = {
   providers: DramaProvider[]
 }
 
+/** One site's result from a sweep, and the verdict stored from it. */
+export type SiteHealthResult = {
+  siteKey: string
+  siteName: string
+  sourceId: string
+  type: number
+  ok: boolean
+  itemCount: number
+  latencyMs: number
+  reason: string
+  at: number
+}
+
+export type SiteHealthVerdict = SiteHealthResult & { checkedAt: number }
+
+export type SiteHealth = {
+  sweep: {
+    running: boolean
+    cancelled: boolean
+    startedAt: number
+    finishedAt: number
+    total: number
+    done: number
+    ok: number
+    failed: number
+    keyword: string
+    currentSite: string
+    error: string
+    results: SiteHealthResult[]
+  }
+  knownGood: number
+  knownBad: number
+  lastCheckedAt: number
+  verdicts: SiteHealthVerdict[]
+}
+
 export type SourceProbe = {
   id: string
   ok: boolean
@@ -517,4 +553,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ enabled }),
     }),
+  siteHealth: () => request<SiteHealth>("/api/debug/health"),
+  runSiteSweep: (options: { limit?: number; keyword?: string; failedOnly?: boolean; pluginsOnly?: boolean } = {}) =>
+    request<SiteHealth>("/api/debug/health/run", { method: "POST", body: JSON.stringify(options) }),
+  stopSiteSweep: () => request<{ stopped: boolean }>("/api/debug/health/stop", { method: "POST" }),
 }

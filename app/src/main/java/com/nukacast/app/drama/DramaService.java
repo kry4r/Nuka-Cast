@@ -245,6 +245,13 @@ public final class DramaService {
         } else if (!config.referer.isEmpty()) {
             result.headers.put("Referer", config.referer);
         }
+        // Short-drama CMS back ends (非凡 / 电影天堂 and clones) publish player pages, not media: the
+        // episode URL points at /share/<hash>. Resolve it, otherwise every episode fails to play.
+        String media = com.nukacast.app.tvbox.MaccmsShareResolver.resolve(
+                result.url, result.headers.get("Referer"));
+        if (media != null) {
+            result.url = media;
+        }
         if (!result.isPlayable()) {
             throw new DramaException("play_not_found",
                     "该剧集没有可直接播放的地址，请改用播放线路");

@@ -558,7 +558,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         featuredMeta.setText(joinMeta(item.typeName, item.year, item.area, item.remarks));
         featuredPlot.setText(safe(item.plot));
         featuredPoster.setImageDrawable(null);
-        images.load(item.poster, featuredPoster);
+        // Referer matters on hotlink-protected CDNs, same as the grid cards.
+        images.load(item.poster, featuredPoster, refererOf(item.poster));
         featuredPanel.animate().cancel();
         featuredPanel.setAlpha(0.78f);
         featuredPanel.animate().alpha(1f).setDuration(150L).start();
@@ -661,6 +662,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return;
         }
         appendGrid(moviesContent, items, gridColumns());
+    }
+
+    private static String refererOf(String url) {
+        if (url == null) return "";
+        int scheme = url.indexOf("://");
+        if (scheme < 0) return "";
+        int slash = url.indexOf('/', scheme + 3);
+        return slash < 0 ? url : url.substring(0, slash + 1);
     }
 
     private void appendGrid(LinearLayout target, List<SearchItem> items, int columns) {
@@ -778,6 +787,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         final int generation = ++searchGeneration;
         searchResults.removeAllViews();
         searchStatus.setText(getString(R.string.search_in_progress, query.keyword));
+        // A site task stuck in a plugin runtime can outlive the engine's own deadline. The status
+        // line therefore has its own guard: the page says what is happening instead of claiming to
+        // search forever, whatever the network is doing.
+        searchResults.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (generation != searchGeneration) return;
+                searchStatus.setText("搜索仍在进行，慢站点较多（" + query.keyword + "）…");
+            }
+        }, 12_000L);
         io.execute(new Runnable() {
             @Override public void run() {
                 try {

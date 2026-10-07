@@ -17,6 +17,8 @@ import com.nukacast.app.tvbox.TvBoxContentService;
 import com.nukacast.app.tvbox.TvBoxRepository;
 
 import java.util.List;
+import com.nukacast.app.tvbox.SiteHealthStore;
+import com.nukacast.app.tvbox.SiteHealthSweep;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 
 public final class NukaRuntime {
@@ -32,6 +34,8 @@ public final class NukaRuntime {
     private final RecommendedSources recommendedSources;
     private final StorageLibrary storageLibrary;
     private final SearchEngine searchEngine;
+    private final SiteHealthStore siteHealthStore;
+    private final SiteHealthSweep siteHealthSweep;
     private final TvBoxContentService contentService;
     private final LiveService liveService;
     private final MediaLibraryStore mediaLibrary;
@@ -50,7 +54,11 @@ public final class NukaRuntime {
                 tvBoxRepository.getLiveSourceStore(), dramaService.registry());
         storageLibrary = new StorageLibrary(this.context);
         searchEngine = new SearchEngine(this.context, tvBoxRepository, spiderManager, storageLibrary);
+        siteHealthStore = new SiteHealthStore(this.context);
+        siteHealthSweep = new SiteHealthSweep(tvBoxRepository, searchEngine, siteHealthStore);
+        searchEngine.useHealthStore(siteHealthStore);
         contentService = new TvBoxContentService(tvBoxRepository, spiderManager, storageLibrary);
+        contentService.useHealthStore(siteHealthStore);
         liveService = new LiveService(tvBoxRepository, tvBoxRepository.getLiveSourceStore());
         mediaLibrary = new MediaLibraryStore(this.context);
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
@@ -102,6 +110,8 @@ public final class NukaRuntime {
     public SearchEngine getSearchEngine() { return searchEngine; }
     public TvBoxContentService getContentService() { return contentService; }
     public SpiderManager getSpiderManager() { return spiderManager; }
+    public SiteHealthStore getSiteHealthStore() { return siteHealthStore; }
+    public SiteHealthSweep getSiteHealthSweep() { return siteHealthSweep; }
     public DramaService getDramaService() { return dramaService; }
     public RecommendedSources getRecommendedSources() { return recommendedSources; }
     public StorageLibrary getStorageLibrary() { return storageLibrary; }

@@ -103,3 +103,66 @@ cd web && npm run dev                  # 指向该服务，即可用浏览器查
 ```
 
 预览服务的数据明确是示例（`tools/preview-server.mjs`），只用于界面开发与截图，不参与发布产物。
+
+## 8. v0.4.0：来自真机日志的两个确定性问题
+
+### 8.1 闪退根因：ExoPlayer 扩展与核心版本不匹配
+
+真机截图给出的堆栈是决定性的：
+
+```
+java.lang.NoSuchMethodError:
+com.google.android.exoplayer2.upstream.HttpDataSource$InvalidResponseCodeException.<init>
+    at ...ext.okhttp.OkHttpDataSource.open(OkHttpDataSource.java:324)
+```
+
+`extension-okhttp` 只发布到 2.14.2（最后一个支持 API 19 的版本），而 core/hls/dash 是 2.18.5。
+该扩展的错误路径调用了 2.18 已不存在的构造函数，于是**只要 CDN 返回 403/404，播放线程就抛
+NoSuchMethodError**——未捕获的 Error 直接杀进程，日志里什么都留不下，看起来就是"看一会就闪退"。
+
+修复：改用 `DefaultHttpDataSource`（core 自带，同一版本线），删除该扩展依赖。
+新增插桩测试 `PlaybackDataSourceApi19Test`：起一个只回 403 的本地 HTTP 服务，断言数据源抛出
+`InvalidResponseCodeException` 而不是 `NoSuchMethodError`——这个回归被永久锁住。
+
+### 8.2 短剧与部分点播"看不了"：CMS 发布的是播放页而不是媒体
+
+实测（2026-10-07）：
+
+| 站点 | 短剧数量 | 剧集地址形态 | 直接可播 |
+| --- | --- | --- | --- |
+| 非凡资源 | 19874 | `https://vip.ffzy-play9.com/share/<hash>` | ✗（HTML 页面）|
+| 电影天堂 | 22242 | `https://vip.dytt-network.com/share/<hash>` | ✗（HTML 页面）|
+| 量子资源 | — | 分类 ID 已变化，需按 class 列表探测 | — |
+
+`/share/<hash>` 返回 1KB HTML，真正的地址在脚本里：
+
+```html
+<script>const url = "/20260918/49391_69162221/index.m3u8?sign=...";</script>
+```
+
+把这个 HTML 交给播放器就是黑屏（`/api/drama/play` 也直接报错）。新增 `MaccmsShareResolver`：
+识别 `/share/`、`/play/`、`.html` 形态的地址，抓取页面并按三种脚本写法提取媒体地址
+（`url=` 赋值、`player_aaaa` JSON、页面内绝对链接），相对路径按页面来源补全，结果缓存 10 分钟。
+点播（`TvBoxContentService.resolve`）与短剧（`DramaService.play`）都走这一步；解析失败时
+`/api/drama/play` 返回带错误码的 400，网页显示原因而不是"请求处理失败"。
+
+### 8.3 站点体检（针对"源太多、大多不可用"）
+
+新增 `SiteHealthStore`（磁盘持久化，可用 6 小时 / 不可用 30 分钟）与 `SiteHealthSweep`（逐个站点
+实测一次搜索，可中断、可续看进度，CMS 站点优先）。首页与搜索随即只使用能用的站点，插件站点在
+线程池被占用时直接跳过；网页"源管理"页有体检卡片（进度、可用/不可用、明细、重测失败）。
+
+### 8.4 调试接口与 MCP
+
+新增 `/api/debug/*`（设备侧真实网络为准）：`snapshot / sites / sources / sources/refresh /
+site/test / search / health{,/run,/stop,/clear} / probe / play / player / logs{,/clear} / export`。
+`tools/nukacast-mcp.mjs` 把它们包装成 14 个 MCP 工具，配置 `NUKACAST_HOST=<电视IP>:9978` 即可远程
+调试真机；`tools/probe-tvbox-config.mjs` 用于在电脑上判断一个 TVBox 配置里有多少站点是插件、
+能否被 Android 4.4 使用。
+
+诊断包新增"控制地址"，因此闪退后不必再从电视屏幕上抄 IP。
+
+### 8.5 推荐源收敛
+
+按要求只保留：点播 **饭太硬（小盒子镜像，53 站点）**、**王二小（96 站点）**，短剧
+**非凡资源·短剧（1.99 万部）**，另有随包内置的 `starter.json`（7 个纯 JSON 接口站点，无插件）。

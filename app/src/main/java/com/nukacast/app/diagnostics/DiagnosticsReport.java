@@ -165,6 +165,22 @@ public final class DiagnosticsReport {
         }
         report.append("状态：").append(runtime.getState().getServiceState())
                 .append(" · ").append(runtime.getState().getStatusMessage()).append('\n');
+        // The LAN address belongs in the report: it is what a debug session (or MCP client) needs to
+        // talk to the device, and typing it off a TV screen by hand is not reasonable.
+        report.append("控制地址：").append(runtime.getWebAddress())
+                .append(" · 调试接口 /api/debug/*\n");
+        report.append("启用站点：").append(runtime.getTvBoxRepository().getEnabledSites().size())
+                .append(" 个 · 搜索上限 ").append(com.nukacast.app.tvbox.SearchEngine.MAX_SEARCH_SITES)
+                .append(" 个/次 · 首页插件站点上限 ")
+                .append(com.nukacast.app.tvbox.TvBoxContentService.MAX_PLUGIN_HOME_SITES)
+                .append(" 个\n");
+        com.nukacast.app.tvbox.SiteHealthStore health = runtime.getSiteHealthStore();
+        int[] healthCounts = health.counts();
+        if (healthCounts[0] + healthCounts[1] > 0) {
+            report.append("站点体检：可用 ").append(healthCounts[0])
+                    .append(" / 不可用 ").append(healthCounts[1]).append('\n');
+        }
+        report.append("插件会话：").append(runtime.getSpiderManager().sessionSummary()).append('\n');
         for (ConfigSource source : runtime.getSourceStore().getSources()) {
             report.append("配置 [").append(source.name).append("] ")
                     .append(source.url).append('\n');

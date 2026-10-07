@@ -10,6 +10,9 @@ import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.diagnostics.ProcessMemory;
 import com.nukacast.app.diagnostics.SessionMarker;
 import com.nukacast.app.diagnostics.StageTrace;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
 
@@ -82,6 +85,38 @@ public final class SpiderManager {
     /** Sites known to be unusable here, so search and home can skip them with a reason. */
     public com.nukacast.app.tvbox.SiteCompatibilityStore compatibility() {
         return compatibility;
+    }
+
+    /** Structured session counts for the debug API; {@link #sessionSummary()} is the UI text. */
+    public Map<String, Object> sessionDetail() {
+        Map<String, Object> summary = new LinkedHashMap<String, Object>();
+        synchronized (this) {
+            long now = System.currentTimeMillis();
+            int jar = 0;
+            int js = 0;
+            int idle = 0;
+            for (Map.Entry<String, SpiderSession> entry : sessions.entrySet()) {
+                if (entry.getValue() instanceof JavaSpiderSession) jar++;
+                else js++;
+                Long usedAt = sessionUsedAt.get(entry.getKey());
+                if (usedAt != null && now - usedAt > SESSION_IDLE_MS) idle++;
+            }
+            summary.put("total", sessions.size());
+            summary.put("jarSessions", jar);
+            summary.put("jsSessions", js);
+            summary.put("idleSessions", idle);
+            summary.put("maxSessions", maxSessions);
+            summary.put("maxJsSessions", maxJsSessions);
+            summary.put("pausedForMemory", pausedForMemory());
+            summary.put("downloadedJars", loadedJars.size());
+            summary.put("failedJars", jarFailures.size());
+        }
+        return summary;
+    }
+
+    /** Device-specific plugin failures (Dalvik verifier rejections, JAR hash mismatches). */
+    public List<com.nukacast.app.tvbox.SiteCompatibilityStore.Issue> compatibilitySnapshot() {
+        return compatibility.snapshot();
     }
 
     public SpiderManager(Context context) {
@@ -343,7 +378,7 @@ public final class SpiderManager {
     private void rememberSession(String key, SpiderSession session) {
         sessions.put(key, session);
         touch(key);
-        SessionMarker.publishPluginSessions(sessionSummary());
+        SessionMarker.publishPluginSessions("插件会话 " + sessions.size() + "/" + maxSessions);
     }
 
     /**
