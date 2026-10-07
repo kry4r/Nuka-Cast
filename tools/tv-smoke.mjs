@@ -145,6 +145,7 @@ async function main() {
   check("live sources present", live.length > 0, `${live.length} sources`);
 
   // Finding a channel in a playlist of thousands: by name and by pinyin initials.
+  await call("GET", "/api/debug/navigate?page=live");
   const byName = (await call("GET", "/api/debug/live?query=" + encodeURIComponent("湖南"))).data;
   const byInitials = (await call("GET", "/api/debug/live?query=hnws")).data;
   check("live channel search by name", Number(byName.hits) > 0,

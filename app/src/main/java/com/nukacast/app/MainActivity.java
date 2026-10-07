@@ -158,6 +158,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView liveSearchQuery;
     private String liveSearchText = "";
     private boolean liveSearching;
+    /** True while the live source list is being read, so the page does not start several loads. */
+    private boolean liveLoading;
     private long liveSwitchAt;
     /** When the source list was last read, so re-entering the page does not refetch constantly. */
     private long liveLoadedAt;
@@ -616,12 +618,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     public boolean liveCatalogReadyForDebug() {
-        if (PAGE_LIVE.equals(currentPage) && liveCatalog == null && liveSources.isEmpty()) {
-            loadLive();
+        if (liveSources.isEmpty()) {
+            if (!liveLoading) loadLive();
+            // Nothing to search until the source list arrives; the caller polls.
+            return false;
         }
-        return liveCatalog != null
-                || (liveStatus != null && "所有直播源都不可用".contentEquals(
-                        liveStatus.getText() == null ? "" : liveStatus.getText()));
+        return liveCatalog != null;
     }
 
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
@@ -1197,6 +1199,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             liveSourceId = "";
         }
         if (liveSources.isEmpty()) {
+            if (liveLoading) return;
+            liveLoading = true;
             liveStatus.setText("正在读取直播源…");
             liveIo.execute(new Runnable() {
                 @Override public void run() {
@@ -1209,6 +1213,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     }
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
+                            liveLoading = false;
                             liveSources.clear();
                             liveSources.addAll(found);
                             if (liveSources.isEmpty()) {
