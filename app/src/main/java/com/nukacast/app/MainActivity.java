@@ -134,8 +134,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private LinearLayout liveGroupRow;
     private LinearLayout liveChannelGrid;
     private TextView liveStatus;
+    /** Programme list line of the focused channel, on its own so nothing overwrites it. */
+    private TextView liveEpgLine;
     private final java.util.concurrent.ExecutorService liveIo =
             java.util.concurrent.Executors.newSingleThreadExecutor();
+    /** Programme lists are fetched on their own thread, one at a time. */
+    private final java.util.concurrent.ExecutorService epgIo =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    /** Channel keys whose programme list is already being fetched. */
+    private final java.util.Set<String> epgPending =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private final java.util.List<com.nukacast.app.live.model.LiveSourceInfo> liveSources =
             new java.util.ArrayList<com.nukacast.app.live.model.LiveSourceInfo>();
     private com.nukacast.app.live.model.LiveCatalog liveCatalog;
@@ -149,6 +157,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final int MAX_LINE_ATTEMPTS = 3;
     /** Channel pages are 120 entries: large playlists are far too big for one screen. */
     private int liveChannelPage;
+    /** EPG lines per channel, so walking up and down the list does not refetch constantly. */
+    private final java.util.Map<String, String> liveEpgLines = new java.util.HashMap<String, String>();
+    /** Channel the viewer is currently on, so a late EPG answer cannot label the wrong one. */
+    private String liveFocusedChannelId = "";
     /** Sources that failed this session, so the page can skip them. */
     private final java.util.Set<String> liveFailedSources = new java.util.HashSet<String>();
     private String liveLastError = "";
@@ -1361,6 +1373,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
         ScrollView channels = new ScrollView(this);
         channels.setVerticalScrollBarEnabled(false);
+        liveEpgLine = bodyText("");
+        liveEpgLine.setTextSize(13);
+        livePage.addView(liveEpgLine);
+
         liveChannelGrid = new LinearLayout(this);
         liveChannelGrid.setOrientation(LinearLayout.VERTICAL);
         channels.addView(liveChannelGrid, new ScrollView.LayoutParams(
@@ -1609,6 +1625,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (group == null) return;
         liveStatus.setText(liveCatalog.sourceName + " · " + group.name + " · "
                 + group.channels.size() + " 个频道");
+        // A new list means a new channel is about to be focused; the old line would otherwise sit
+        // there until the new EPG arrives.
+        liveFocusedChannelId = "";
+        if (liveEpgLine != null) liveEpgLine.setText("");
         renderLiveChannelList(group.channels, false);
     }
 
@@ -1655,6 +1675,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             button.setLayoutParams(params);
             button.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) { playLiveChannel(channel); }
+            });
+            // Walking the channels shows each one's EPG, which is how a viewer picks what to watch.
+            button.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override public void onFocusChange(View view, boolean focused) {
+                    // Rebuilding the grid removes the old buttons, and Android still reports a focus
+                    // change for those; acting on it labelled the new source with the previous
+                    // source's channel. Only a button that is actually on screen counts.
+                    // getWindowToken() is the API 17-safe way to ask whether the button is on screen.
+                    if (!focused || view.getWindowToken() == null || !view.isFocused()) return;
+                    showChannelEpg(channel);
+                }
             });
             row.addView(button);
         }
@@ -1703,6 +1734,47 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
         }
         return 1;
+    }
+
+    /** One line under the channel grid: what is on now and next. */
+    private void showChannelEpg(final com.nukacast.app.live.model.LiveCatalog.Channel channel) {
+        final String source = liveSourceId;
+        liveFocusedChannelId = channel.id;
+        final String cacheKey = source + "|" + channel.id;
+        String cached = liveEpgLines.get(cacheKey);
+        if (cached != null) {
+            liveEpgLine.setText(cached);
+            return;
+        }
+        liveEpgLine.setText(channel.name + "：正在读取节目单…");
+        // A slow programme list must not queue behind the channel that was looked at a second ago
+        // (nor behind a catalogue download), so EPG lookups get their own thread.
+        if (!epgPending.add(cacheKey)) return;
+        epgIo.execute(new Runnable() {
+            @Override public void run() {
+                String line = "";
+                try {
+                    com.nukacast.app.live.model.EpgSchedule schedule =
+                            runtime.getLiveService().epg(source, channel.id, "");
+                    line = com.nukacast.app.live.EpgNow.label(schedule, System.currentTimeMillis());
+                } catch (Throwable error) {
+                    line = "";
+                }
+                final String text = line.isEmpty()
+                        ? channel.name + "：这个源没有提供节目单" : channel.name + "　" + line;
+                epgPending.remove(cacheKey);
+                liveEpgLines.put(cacheKey, text);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        // A slow answer for a channel the viewer has already left must not overwrite
+                        // the line of the one being looked at (nor of another source entirely).
+                        if (!source.equals(liveSourceId)) return;
+                        if (!channel.id.equals(liveFocusedChannelId)) return;
+                        liveEpgLine.setText(text);
+                    }
+                });
+            }
+        });
     }
 
     private int liveColumns() {

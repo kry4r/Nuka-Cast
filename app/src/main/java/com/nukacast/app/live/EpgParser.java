@@ -39,7 +39,9 @@ public final class EpgParser {
             if (!item.isJsonObject()) continue;
             JsonObject object = item.getAsJsonObject();
             EpgSchedule.Program program = new EpgSchedule.Program();
-            program.title = string(object, "title", string(object, "name", "节目"));
+            // Free services append a watermark to every title ("… --免费使用"); it is noise on a
+            // one-line TV label.
+            program.title = cleanTitle(string(object, "title", string(object, "name", "节目")));
             program.start = string(object, "start", string(object, "startTime", ""));
             program.end = string(object, "end", string(object, "endTime", ""));
             program.description = string(object, "desc", string(object, "description", ""));
@@ -82,6 +84,18 @@ public final class EpgParser {
             }
         }
         return result;
+    }
+
+    /** Drops the trailing watermark some free EPG services append to every programme title. */
+    static String cleanTitle(String title) {
+        if (title == null) return "";
+        String value = title.replace("－", "-").replace("—", "-").trim();
+        String[] markers = { "--免费使用", "-免费使用", "免费使用", "--免费版", "-免费版" };
+        for (String marker : markers) {
+            int at = value.lastIndexOf(marker);
+            if (at > 0) value = value.substring(0, at).trim();
+        }
+        return value;
     }
 
     private static EpgSchedule schedule(String channel, String date) {

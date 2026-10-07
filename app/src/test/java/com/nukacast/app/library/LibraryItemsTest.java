@@ -33,6 +33,27 @@ public final class LibraryItemsTest {
         assertEquals(2, result.size());
     }
 
+
+    @Test
+    public void removesByVodIdNameOrStableKey() {
+        LibraryItem byId = item("source", "site", "42", 1);
+        byId.name = "影片甲";
+        LibraryItem byName = item("source", "site", "43", 2);
+        byName.name = "影片乙";
+        List<LibraryItem> items = Arrays.asList(byId, byName);
+
+        assertEquals(1, LibraryItems.countMatching(items, "42"));
+        assertEquals(1, LibraryItems.removeMatching(items, "42").size());
+        // The console may only know the title (drama episodes carry no site id).
+        assertEquals(1, LibraryItems.removeMatching(items, "影片乙").size());
+        assertEquals(1, LibraryItems.countMatching(items, byName.stableKey()));
+        // Nothing matches: the list must come back untouched.
+        assertEquals(2, LibraryItems.removeMatching(items, "nope").size());
+        assertEquals(0, LibraryItems.countMatching(items, ""));
+        assertEquals(0, LibraryItems.countMatching(items, null));
+        assertEquals(0, LibraryItems.removeMatching(null, "42").size());
+    }
+
     private static LibraryItem item(String source, String site, String vod, long updatedAt) {
         LibraryItem item = new LibraryItem();
         item.sourceId = source;

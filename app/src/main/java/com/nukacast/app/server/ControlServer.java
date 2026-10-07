@@ -282,6 +282,35 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("filter", label);
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/epg".equals(path)) {
+            // What the TV live page would show for a channel: fetched and parsed on the device.
+            String sourceId = session.getParms().get("sourceId");
+            String channelId = session.getParms().get("channelId");
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            try {
+                com.nukacast.app.live.model.EpgSchedule schedule =
+                        runtime.getLiveService().epg(sourceId, channelId, "");
+                long now = System.currentTimeMillis();
+                payload.put("channel", schedule.channel);
+                payload.put("programs", schedule.programs.size());
+                payload.put("label", com.nukacast.app.live.EpgNow.label(schedule, now));
+                com.nukacast.app.live.EpgNow.Slot current =
+                        com.nukacast.app.live.EpgNow.current(schedule, now);
+                com.nukacast.app.live.EpgNow.Slot next =
+                        com.nukacast.app.live.EpgNow.next(schedule, now);
+                payload.put("current", current == null ? "" : current.title);
+                payload.put("next", next == null ? "" : next.title);
+                if (!schedule.programs.isEmpty()) {
+                    com.nukacast.app.live.model.EpgSchedule.Program first = schedule.programs.get(0);
+                    payload.put("firstStart", first.start);
+                    payload.put("firstTitle", first.title);
+                }
+            } catch (Throwable error) {
+                payload.put("error", error.getMessage() == null
+                        ? error.getClass().getSimpleName() : error.getMessage());
+            }
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/type".equals(path)) {
             // Types into the TV's own on-screen keyboard (search or live channel search).
             final String target = session.getParms().containsKey("page")
@@ -338,11 +367,14 @@ public final class ControlServer extends NanoHTTPD {
                     break;
                 }
             }
-            Integer hits = activity.onUiThreadNow(new java.util.concurrent.Callable<Integer>() {
-                @Override public Integer call() {
-                    return activity.liveSearchForDebug(query);
-                }
-            });
+            // Without a query this only selects the source, leaving the channel grid focused, which
+            // is what a screenshot of the EPG line needs.
+            Integer hits = query == null ? null
+                    : activity.onUiThreadNow(new java.util.concurrent.Callable<Integer>() {
+                        @Override public Integer call() {
+                            return activity.liveSearchForDebug(query);
+                        }
+                    });
             List<String> names = activity.onUiThreadNow(
                     new java.util.concurrent.Callable<List<String>>() {
                         @Override public List<String> call() {

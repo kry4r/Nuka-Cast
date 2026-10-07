@@ -93,6 +93,24 @@ public final class LiveSourceStore {
         return removed;
     }
 
+    /**
+     * Sets a playlist's EPG template ({@code {name}} / {@code {date}} are substituted per channel).
+     *
+     * <p>Playlists rarely declare one, so without this the TV has no programme list at all; the value
+     * can also be empty to fall back to the built-in template.
+     */
+    public synchronized boolean setEpg(String id, String epg) {
+        List<LivePlaylist> playlists = all();
+        for (LivePlaylist playlist : playlists) {
+            if (!playlist.id.equals(id)) continue;
+            playlist.epg = epg == null ? "" : epg.trim();
+            playlist.updatedAt = System.currentTimeMillis();
+            save(playlists);
+            return true;
+        }
+        return false;
+    }
+
     public synchronized boolean setEnabled(String id, boolean enabled) {
         List<LivePlaylist> playlists = all();
         for (LivePlaylist playlist : playlists) {

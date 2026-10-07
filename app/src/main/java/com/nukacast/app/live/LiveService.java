@@ -119,27 +119,72 @@ public final class LiveService {
         String date = requestedDate == null || requestedDate.trim().isEmpty()
                 ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date())
                 : requestedDate.trim();
-        if (source.epg == null || source.epg.trim().isEmpty()) {
+        String template = source.epg == null || source.epg.trim().isEmpty()
+                ? DEFAULT_EPG_TEMPLATE : source.epg.trim();
+        EpgSchedule best = null;
+        // EPG services key channels on plain names, playlists decorate them, so every candidate is
+        // tried until one yields programmes (the first candidate is the name as written).
+        for (String candidate : EpgChannelId.candidates(channel.epgId)) {
+            EpgSchedule schedule = fetchEpg(template, candidate, date, source);
+            if (schedule == null || schedule.programs.isEmpty()) continue;
+            if (EpgNow.isPlaceholder(schedule)) {
+                // The service answered, but with "no guide information" slots for every channel.
+                if (best == null) best = schedule;
+                continue;
+            }
+            schedule.channel = channel.name;
+            return schedule;
+        }
+        if (best != null) {
+            // Only placeholder data: report an empty schedule so the page says so instead of showing a
+            // fake programme name.
             EpgSchedule empty = new EpgSchedule();
             empty.channel = channel.name;
             empty.date = date;
             return empty;
         }
-        String url = source.epg
-                .replace("{name}", URLEncoder.encode(channel.epgId, "UTF-8"))
-                .replace("{date}", URLEncoder.encode(date, "UTF-8"));
+        EpgSchedule empty = new EpgSchedule();
+        empty.channel = channel.name;
+        empty.date = date;
+        return empty;
+    }
+
+    /** One EPG request; null when the service did not answer usefully. */
+    private EpgSchedule fetchEpg(String template, String name, String date,
+                                 TvBoxConfig.LiveSource source) {
+        String encodedName;
+        String encodedDate;
+        try {
+            encodedName = URLEncoder.encode(name, "UTF-8");
+            encodedDate = URLEncoder.encode(date, "UTF-8");
+        } catch (java.io.UnsupportedEncodingException error) {
+            return null;
+        }
+        String url = template
+                .replace("{name}", encodedName)
+                .replace("{date}", encodedDate);
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return null;
         Request request = new Request.Builder().url(url)
                 .header("User-Agent", source.ua == null || source.ua.isEmpty()
                         ? "NukaCast/0.1 EPG" : source.ua)
                 .build();
         try (Response response = HttpStack.client().newCall(request).execute()) {
-            if (!response.isSuccessful() || response.body() == null) {
-                throw new IllegalStateException("节目单 HTTP " + response.code());
-            }
-            return EpgParser.parse(ResponseBodies.text(
-                    response.body(), MAX_LIVE_BYTES), channel.epgId, date);
+            if (!response.isSuccessful() || response.body() == null) return null;
+            return EpgParser.parse(ResponseBodies.text(response.body(), MAX_LIVE_BYTES), name, date);
+        } catch (Throwable error) {
+            // A missing programme list is not an error the viewer needs to see.
+            return null;
         }
     }
+
+    /**
+     * EPG service used when a playlist does not declare one.
+     *
+     * <p>Playlists in the wild almost never carry an {@code x-tvg-url}, so the TV would show no
+     * programme list at all; this one answers per channel name and date.
+     */
+    private static final String DEFAULT_EPG_TEMPLATE =
+            "http://epg.51zmt.top:8000/api/diyp/?ch={name}&date={date}";
 
     public synchronized void clearCache() {
         cache.clear();

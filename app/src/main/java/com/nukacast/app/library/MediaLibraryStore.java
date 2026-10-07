@@ -117,19 +117,19 @@ public final class MediaLibraryStore {
             return size;
         }
         if (key == null || key.isEmpty()) return 0;
-        List<LibraryItem> kept = new ArrayList<LibraryItem>();
-        int removed = 0;
-        for (LibraryItem item : items) {
-            boolean matches = key.equals(item.vodId) || key.equals(item.name)
-                    || key.equals(item.stableKey());
-            if (matches) {
-                removed++;
-                if (HISTORY.equals(store) && key.equals(activeKey)) clearActive();
-            } else {
-                kept.add(item);
+        int removed = LibraryItems.countMatching(items, key);
+        if (removed == 0) return 0;
+        write(store, LibraryItems.removeMatching(items, key));
+        if (HISTORY.equals(store) && removed > 0) {
+            // The entry being watched may have just been deleted; the progress ticker must stop
+            // writing to it.
+            for (LibraryItem item : items) {
+                if (LibraryItems.matches(item, key) && key.equals(activeKey)) {
+                    clearActive();
+                    break;
+                }
             }
         }
-        if (removed > 0) write(store, kept);
         return removed;
     }
 
