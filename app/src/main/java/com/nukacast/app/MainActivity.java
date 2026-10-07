@@ -527,6 +527,39 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         showDetail(detail);
     }
 
+    /**
+     * Starts an episode of {@code detail} on the given line, from any thread.
+     *
+     * <p>Used by the web console so its play button behaves exactly like picking an episode on the TV.
+     *
+     * @return true when playback was started (the episode exists), false otherwise.
+     */
+    public boolean playDetailEpisodeForDebug(final MediaDetail detail, final String lineName,
+                                             final String episodeId) {
+        if (detail == null) return false;
+        MediaDetail.PlaySource line =
+                com.nukacast.app.player.LinePicker.lineOf(detail, lineName);
+        if (line == null) return false;
+        MediaDetail.Episode episode = null;
+        for (MediaDetail.Episode candidate : line.episodes) {
+            if (candidate.id.equals(episodeId)) episode = candidate;
+        }
+        if (episode == null) {
+            episode = com.nukacast.app.player.LinePicker.episodeOf(line, episodeId);
+        }
+        if (episode == null) return false;
+        final MediaDetail.Episode chosen = episode;
+        final MediaDetail.PlaySource chosenLine = line;
+        onUiThreadNow(new java.util.concurrent.Callable<Boolean>() {
+            @Override public Boolean call() {
+                beginUserPlayback();
+                playEpisode(detail, chosenLine, chosen, 0);
+                return true;
+            }
+        });
+        return true;
+    }
+
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
     public String playerMenuActionForDebug(String action) {
         if (action == null) return "no-action";
@@ -1330,6 +1363,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
             return;
         }
+        beginUserPlayback();
         AppLog.i("播放器", "本集播完，自动播放下一集：" + next.name);
         if (playerHud != null) {
             playerHud.show(detail.name + " · " + next.name, "自动播放下一集", "按返回键退出", true);
@@ -1347,6 +1381,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 com.nukacast.app.player.LinePicker.stepEpisode(line, activeEpisodeId, delta);
         if (episode == null) return;
         if (playerHud != null) playerHud.hideActions();
+        beginUserPlayback();
         playEpisode(detail, line, episode, 0);
     }
 
@@ -1362,6 +1397,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void reportPlaybackFailure() {
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
+        if (playback.notice != null && !playback.notice.isEmpty()) {
+            // The player is retrying internally; say so rather than showing a black screen.
+            if (playerHud != null) playerHud.setSubtitle(playback.notice);
+            return;
+        }
         boolean failed = "error".equals(playback.state);
         if (!failed) {
             failureReported = false;
@@ -1415,6 +1455,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if ("playing".equals(playback.state)) lineAttempts = 0;
             return;
         }
+        if (playback.notice != null && !playback.notice.isEmpty()) return;
         final MediaDetail detail = activeDetail;
         MediaDetail.PlaySource next =
                 com.nukacast.app.player.LinePicker.next(detail, activeLineName);
@@ -2192,6 +2233,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
                 if (episode == null) return;
                 if (holder[0] != null) holder[0].dismiss();
+                beginUserPlayback();
                 playEpisode(detail, source, episode, 0);
             }
         };
@@ -2247,6 +2289,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         firstFocus[0] = null;
     }
 
+    /**
+     * Marks the start of a playback the viewer asked for.
+     *
+     * <p>Only here is the line-switching budget restored: resetting it on every internal restart made
+     * two dead lines alternate forever instead of giving up after a few attempts.
+     */
+    private void beginUserPlayback() {
+        lineAttempts = 0;
+        seriesFinished = false;
+    }
+
     /** What the player is showing, so a failed line can be replaced by another one. */
     private MediaDetail activeDetail;
     private String activeLineName = "";
@@ -2261,7 +2314,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         activeLineName = source == null ? "" : source.name;
         activeEpisodeId = episode == null ? "" : episode.id;
         activeEpisodeName = episode == null ? "" : episode.name;
-        lineAttempts = 0;
         lineSwitchAt = System.currentTimeMillis();
         Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
         io.execute(new Runnable() {

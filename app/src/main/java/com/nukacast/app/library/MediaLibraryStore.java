@@ -53,8 +53,23 @@ public final class MediaLibraryStore {
         write(HISTORY, LibraryItems.upsert(read(HISTORY), item, HISTORY_LIMIT));
     }
 
+    /** Position jumps smaller than this are not worth a disk write. */
+    private static final int PROGRESS_WRITE_STEP_MS = 5000;
+    private int lastWrittenPosition;
+
+    /**
+     * Records the position of the item being watched.
+     *
+     * <p>Called once a second, but only writes when the position moved by a few seconds: the rewrite
+     * used to happen on every call, i.e. a JSON file write per second for the whole session.
+     */
     public synchronized void updateActiveProgress(int positionMs, int durationMs) {
         if (activeKey.isEmpty()) return;
+        if (Math.abs(positionMs - lastWrittenPosition) < PROGRESS_WRITE_STEP_MS
+                && positionMs != 0 && positionMs < durationMs) {
+            return;
+        }
+        lastWrittenPosition = positionMs;
         List<LibraryItem> history = read(HISTORY);
         for (LibraryItem item : history) {
             if (!activeKey.equals(item.stableKey())) continue;

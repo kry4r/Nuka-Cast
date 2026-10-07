@@ -49,6 +49,8 @@ public final class PlayerController {
         public String videoMime = "";
         public String decoder = "";
         public float speed = 1f;
+        /** What the player is doing while it is not showing a picture (retry, alternative codec). */
+        public String notice = "";
         public boolean softwareDecoderPreferred;
         /** Selector parameters and the variants on offer, so a soft picture can be explained. */
         public String selectorParameters = "";
@@ -86,6 +88,8 @@ public final class PlayerController {
     private int retriedWithSoftware;
     /** Current playback speed; 1.0 is normal. */
     private float speedValue = 1f;
+    /** Human-readable note about an internal retry, surfaced by the on-screen HUD. */
+    private String notice = "";
     /** The URL whose play request may force the best variant; null disables forcing entirely. */
     private String forceQualityForUrl;
     /** Set when both decoders refused the stream: the smallest variant is tried before giving up. */
@@ -101,12 +105,12 @@ public final class PlayerController {
     private String videoMime = "";
     /** Variants offered by the current manifest, rebuilt once a second. */
     private String videoTracks = "";
-    private int tickCount;
-
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
             mirrorPlayerState();
-            if (++tickCount % TICKS_PER_PROGRESS_REPORT == 0) reportProgress();
+            // Every second: the activity's tick drives the live-channel switch, the automatic line
+            // switch and the failure notice, and it is cheap (it reads the mirrored snapshot).
+            reportProgress();
             synchronized (lock) {
                 if (player != null) mainHandler.postDelayed(this, MIRROR_INTERVAL_MS);
             }
@@ -116,7 +120,7 @@ public final class PlayerController {
     /** How often the main thread refreshes the readable player state. */
     private static final long MIRROR_INTERVAL_MS = 1000L;
     /** Progress callbacks are throttled: the library write must not happen every second. */
-    private static final int TICKS_PER_PROGRESS_REPORT = 20;
+    /** Ticks are one second apart; the disk write behind onProgress throttles itself. */
     /** How long the forced highest variant may stay without a picture before giving up. */
     private static final long QUALITY_WATCHDOG_MS = 8_000L;
 
@@ -153,6 +157,17 @@ public final class PlayerController {
         });
     }
 
+    /** Sets (or clears) the retry notice and pushes it to the tick listener at once. */
+    private void setNotice(String value) {
+        synchronized (lock) {
+            notice = value == null ? "" : value;
+        }
+        if (progressListener != null) {
+            Snapshot current = snapshot();
+            progressListener.onProgress(current.positionMs, current.durationMs);
+        }
+    }
+
     public void play(final Context context, final String mediaUrl, final String mediaTitle,
                      final Map<String, String> headers) {
         play(context, mediaUrl, mediaTitle, headers, 0);
@@ -170,6 +185,7 @@ public final class PlayerController {
                 // decoder-fallback retry.
                 forceQualityForUrl = mediaUrl;
                 restartsForUrl = 0;
+                setNotice("");
                 preferLowestVariant = false;
                 synchronized (lock) {
                     speedValue = 1f;
@@ -266,6 +282,7 @@ public final class PlayerController {
             snapshot.videoMime = videoMime;
             snapshot.decoder = decoderName;
             snapshot.speed = speedValue;
+            snapshot.notice = notice;
             DefaultTrackSelector selector = trackSelector;
             if (selector != null) {
                 snapshot.selectorParameters = "best=" + bestQualityForced
@@ -393,7 +410,15 @@ public final class PlayerController {
                     synchronized (lock) {
                         if (player == created && created.getPlaybackState() == Player.STATE_READY) {
                             state = isPlaying ? "playing" : "paused";
+                            if (isPlaying) notice = "";
                         }
+                    }
+                }
+
+                @Override public void onRenderedFirstFrame() {
+                    // A picture is on screen: whatever the retry notice said no longer applies.
+                    synchronized (lock) {
+                        if (player == created) notice = "";
                     }
                 }
 
@@ -416,6 +441,7 @@ public final class PlayerController {
                         restartsForUrl++;
                         DecoderPreference.preferSoftware(context);
                         int position = mirroredPositionMs;
+                        setNotice("正在改用软件解码…");
                         AppLog.w("播放器", "硬件解码失败，改用软件解码重试："
                                 + failure.getErrorCodeName(), failure);
                         releasePlayer("retrying");
@@ -436,6 +462,7 @@ public final class PlayerController {
                             trackSelector.setParameters(
                                     trackSelector.buildUponParameters().clearOverrides().build());
                         }
+                        setNotice("正在改用其它清晰度…");
                         AppLog.w("播放器", "最高画质无法解码，改回自动选择清晰度（" + description + "）");
                         releasePlayer("retrying-quality");
                         startPlayer(context, currentUrl, currentTitle, currentHeaders, 0);
@@ -448,6 +475,7 @@ public final class PlayerController {
                         // the difference between "看不了" and a softer picture.
                         preferLowestVariant = true;
                         restartsForUrl++;
+                        setNotice("正在改用最低清晰度…");
                         AppLog.w("播放器", "解码器无法处理该清晰度，改试最低清晰度（" + description + "）");
                         releasePlayer("retrying-lowest");
                         startPlayer(context, currentUrl, currentTitle, currentHeaders, 0);
@@ -457,6 +485,9 @@ public final class PlayerController {
                         if (player != created) return;
                         state = "error";
                         error = description;
+                        // The retry chain is over, so its progress note must not mask the outcome:
+                        // with a note still set, the UI keeps saying "正在改用…" and never reports why.
+                        notice = "";
                         AppLog.e("播放器", error, failure);
                         reportProgress();
                         // The media stays active on purpose. Clearing it here dropped the activity out

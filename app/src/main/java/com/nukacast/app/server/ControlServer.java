@@ -819,7 +819,21 @@ public final class ControlServer extends NanoHTTPD {
             item.year = safe(request.year);
             item.typeName = safe(request.typeName);
             runtime.getMediaLibrary().start(item, request.flag, request.episodeId, request.episodeName);
-            runtime.getPlayerController().play(context, info.url, info.title, info.headers);
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            boolean started = false;
+            if (activity != null) {
+                // Playing through the activity (rather than straight into the player) is what gives the
+                // web console's play button the same behaviour as the remote: auto next episode,
+                // automatic line switching, and the on-screen HUD.
+                final com.nukacast.app.tvbox.model.MediaDetail detail =
+                        runtime.getContentService().detail(request.sourceId, request.siteKey, request.vodId);
+                final String flag = safe(request.flag);
+                final String episodeId = safe(request.episodeId);
+                started = activity.playDetailEpisodeForDebug(detail, flag, episodeId);
+            }
+            if (!started) {
+                runtime.getPlayerController().play(context, info.url, info.title, info.headers);
+            }
             return json(Response.Status.ACCEPTED, info);
         }
         if ("/api/player".equals(path) && Method.GET.equals(session.getMethod())) {
