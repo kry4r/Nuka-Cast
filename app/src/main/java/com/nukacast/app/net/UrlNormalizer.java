@@ -28,6 +28,14 @@ public final class UrlNormalizer {
     public static String normalize(String raw) {
         String value = raw == null ? "" : raw.trim();
         if (value.isEmpty()) throw new InvalidUrlException("empty", "地址为空");
+        // Bundled configs are not network locations and must survive normalisation untouched.
+        if (com.nukacast.app.net.BundledAssets.isBundled(value)) {
+            String path = com.nukacast.app.net.BundledAssets.pathOf(value);
+            if (path.isEmpty()) {
+                throw new InvalidUrlException("host", "内置配置地址缺少文件名");
+            }
+            return com.nukacast.app.net.BundledAssets.SCHEME + path;
+        }
         value = firstUrlToken(value);
         // OkHttp canonicalises non-ASCII hosts to punycode itself, so the parsed form is returned
         // rather than the raw input: the rest of the app then deals with one representation.

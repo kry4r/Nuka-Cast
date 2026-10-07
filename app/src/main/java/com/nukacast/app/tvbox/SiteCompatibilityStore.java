@@ -21,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class SiteCompatibilityStore {
     /** A JAR compiled for a newer runtime can never load here; only a new build would change that. */
     private static final long PERMANENT_MS = 0L;
+    /** JAR hash mismatches are usually a truncated download, so they are retried hourly. */
+    private static final long JAR_MISMATCH_MS = 60 * 60 * 1000L;
 
     public static final class Issue {
         public final String siteKey;
@@ -53,7 +55,9 @@ public final class SiteCompatibilityStore {
         Issue issue = issues.get(safe(site.key));
         if (issue == null) return false;
         if (issue.permanent) return true;
-        return System.currentTimeMillis() - issue.updatedAt < 10 * 60 * 1000L;
+        long ttl = issue.reason != null && issue.reason.contains("校验值")
+                ? JAR_MISMATCH_MS : 10 * 60 * 1000L;
+        return System.currentTimeMillis() - issue.updatedAt < ttl;
     }
 
     public List<Issue> snapshot() {

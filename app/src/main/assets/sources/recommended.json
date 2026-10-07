@@ -1,8 +1,16 @@
 {
   "version": 1,
   "verifiedAt": "2026-10-07",
-  "note": "均为公开可直连的源，2026-10-07 由本地实测确认可达；公开源随时可能失效，页面上的“重新检测”会用你的网络再确认一次。",
+  "note": "前七条是内置的精简配置：实测可用的 CMS 站点，无插件 JAR，添加后即可搜索播放；其余为公开源，2026-10-07 由本地实测确认。公开源随时可能失效，页面上的“重新检测”会用你的网络再确认一次。",
   "items": [
+    {
+      "id": "vod-starter",
+      "kind": "vod",
+      "group": "点播",
+      "name": "NukaCast 精简片源（推荐）",
+      "url": "asset://sources/starter.json",
+      "note": "内置 7 个实测站点：光速、豪华、量子、非凡、电影天堂、好剧、暴风。都是 JSON 接口、无插件，打开快且不占内存"
+    },
     {
       "id": "live-bestk",
       "kind": "live",
@@ -100,14 +108,6 @@
       "note": "仓库链接，聚合多个常用线路"
     },
     {
-      "id": "drama-vote",
-      "kind": "drama",
-      "group": "短剧",
-      "name": "红果短剧榜（资料目录）",
-      "url": "https://vote.252035.xyz",
-      "note": "按剧名搜索剧目资料与相关推荐，播放需要配合“短剧资源站”"
-    },
-    {
       "id": "drama-ffzy",
       "kind": "drama",
       "group": "短剧",
@@ -124,6 +124,24 @@
       "url": "https://bfzyapi.com/api.php/provide/vod",
       "categoryId": "58",
       "note": "短剧分类约 1.2 万部，直连 m3u8"
+    },
+    {
+      "id": "drama-lzi",
+      "kind": "drama",
+      "group": "短剧",
+      "name": "量子资源·短剧",
+      "url": "https://cj.lziapi.com/api.php/provide/vod",
+      "categoryId": "46",
+      "note": "短剧分类约 2.36 万部，直连 m3u8"
+    },
+    {
+      "id": "drama-dytt",
+      "kind": "drama",
+      "group": "短剧",
+      "name": "电影天堂·短剧",
+      "url": "https://caiji.dyttzyapi.com/api.php/provide/vod",
+      "categoryId": "36",
+      "note": "短剧分类约 2.22 万部，直连 m3u8"
     },
     {
       "id": "drama-wujin",

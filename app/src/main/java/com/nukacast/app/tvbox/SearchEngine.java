@@ -22,6 +22,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 public final class SearchEngine {
+    /** Upper bound on sites searched in one request when the caller did not name sites. */
+    static final int MAX_SEARCH_SITES = 24;
     private static final long SEARCH_DEADLINE_SECONDS = 10;
     private final TvBoxRepository repository;
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -154,15 +156,44 @@ public final class SearchEngine {
 
     private List<TvBoxConfig.Site> selectedSites(SearchQuery query) {
         List<TvBoxConfig.Site> sites = selectSites(repository.getEnabledSites(), query);
-        if (spiderManager == null) return sites;
-        List<TvBoxConfig.Site> usable = new ArrayList<TvBoxConfig.Site>();
-        for (TvBoxConfig.Site site : sites) {
-            // Sites whose plugin cannot load here (Dalvik verifier, JAR hash mismatch) are skipped
-            // instead of failing again on every search; the device page lists them with a reason.
-            if (site.type == 3 && spiderManager.compatibility().isUnsupported(site)) continue;
-            usable.add(site);
+        if (spiderManager != null) {
+            List<TvBoxConfig.Site> usable = new ArrayList<TvBoxConfig.Site>();
+            boolean paused = spiderManager.pausedForMemory();
+            for (TvBoxConfig.Site site : sites) {
+                // Plugin sites are dropped entirely while the app is shedding memory, and skipped
+                // when their plugin cannot load here (Dalvik verifier, JAR hash mismatch).
+                if (site.type == 3 && (paused || spiderManager.compatibility().isUnsupported(site))) {
+                    continue;
+                }
+                usable.add(site);
+            }
+            sites = usable;
         }
-        return usable;
+        return limitFanOut(sites, query);
+    }
+
+    /**
+     * A config with 139 sites cannot be searched in full on a 1 GB TV: every plugin site costs a
+     * JS runtime or a spider instance in native memory, and the old behaviour spent the whole
+     * timeout budget creating sessions for sites that never answered. Cheap CMS sites go first, so
+     * a truncated search still returns the results users actually saw before.
+     */
+    static List<TvBoxConfig.Site> limitFanOut(List<TvBoxConfig.Site> sites, SearchQuery query) {
+        boolean explicit = query != null && !query.siteKeys.isEmpty();
+        if (explicit || sites.size() <= MAX_SEARCH_SITES) return sites;
+        List<TvBoxConfig.Site> cheap = new ArrayList<TvBoxConfig.Site>();
+        List<TvBoxConfig.Site> plugins = new ArrayList<TvBoxConfig.Site>();
+        for (TvBoxConfig.Site site : sites) {
+            if (site.type == 3) plugins.add(site);
+            else cheap.add(site);
+        }
+        List<TvBoxConfig.Site> limited = new ArrayList<TvBoxConfig.Site>();
+        int pluginQuota = Math.max(0, MAX_SEARCH_SITES - cheap.size());
+        limited.addAll(cheap.subList(0, Math.min(cheap.size(), MAX_SEARCH_SITES)));
+        limited.addAll(plugins.subList(0, Math.min(plugins.size(), pluginQuota)));
+        AppLog.i("搜索", "站点较多，本次搜索 " + limited.size() + "/" + sites.size()
+                + " 个（优先普通站点，插件站点每次最多 " + pluginQuota + " 个）");
+        return limited;
     }
 
     static List<TvBoxConfig.Site> selectSites(List<TvBoxConfig.Site> available,

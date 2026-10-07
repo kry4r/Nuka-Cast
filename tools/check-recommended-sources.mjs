@@ -37,6 +37,14 @@ async function probe(item) {
   const url = requestUrl(item)
   const started = Date.now()
   try {
+    const local = await localBody(item)
+    if (local !== null) {
+      const described = describe(item, local)
+      const suffix = "bundled"
+      return described.ok
+        ? { item, ok: true, detail: `${described.detail} · ${suffix}` }
+        : { item, ok: false, detail: `${described.detail} · ${suffix}` }
+    }
     const response = await fetch(url, {
       headers: { "user-agent": UA, accept: "application/json,text/plain,*/*" },
       redirect: "follow",
@@ -64,6 +72,14 @@ export function requestUrl(item) {
   }
   // Metadata catalog: only a real search proves the JSON contract still answers.
   return `${base}/api/search?q=${encodeURIComponent(SEARCH_KEYWORD)}`
+}
+
+/** Bundled configs live in the APK; read them from the working tree instead of the network. */
+async function localBody(item) {
+  if (!item.url.startsWith("asset://")) return null
+  const relative = item.url.slice("asset://".length).replace(/^\/+/, "")
+  const file = new URL(`../app/src/main/assets/${relative}`, import.meta.url)
+  return readFile(file, "utf8")
 }
 
 export function describe(item, body) {

@@ -36,6 +36,8 @@ import okhttp3.Response;
 
 public final class TvBoxRepository {
     private static final int MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+    /** Above this, a config is treated as "too many sites for this class of device" and said so. */
+    static final int LARGE_CONFIG_SITES = 60;
     public interface RefreshListener {
         void onSourceRefreshed(int configs, int enabledSites);
         void onRefreshComplete(int configs, int enabledSites);
@@ -252,6 +254,13 @@ public final class TvBoxRepository {
             saveCache(source.id, resolved.content);
             AppLog.i("片源", "配置刷新成功 [" + safe(source.name) + "]："
                     + config.sites.size() + " 个站点");
+            if (config.sites.size() > LARGE_CONFIG_SITES) {
+                // Public repos hand out 100+ sites, most of them plugin sites that cost native memory
+                // and rarely answer. Say so once instead of letting the user wonder why it is slow.
+                AppLog.w("片源", "该配置有 " + config.sites.size() + " 个站点，插件站点会被自动限制"
+                        + "（搜索最多 " + com.nukacast.app.tvbox.SearchEngine.MAX_SEARCH_SITES
+                        + " 个，首页最多 2 个插件站点）。建议改用“NukaCast 精简片源”");
+            }
             trace.success();
             return config;
         } catch (Exception error) {
@@ -313,6 +322,11 @@ public final class TvBoxRepository {
     }
 
     private ConfigPayloadResolver.Payload fetchConfig(String url) throws IOException {
+        if (com.nukacast.app.net.BundledAssets.isBundled(url)) {
+            // Ships inside the APK: no network, no repository, no plugin JARs.
+            byte[] bytes = com.nukacast.app.net.BundledAssets.read(context, url);
+            return new ConfigPayloadResolver.Payload(url, bytes, "application/json");
+        }
         String normalized;
         try {
             normalized = com.nukacast.app.net.UrlNormalizer.normalize(url);

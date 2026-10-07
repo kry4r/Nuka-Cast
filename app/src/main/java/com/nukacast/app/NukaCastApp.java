@@ -7,6 +7,7 @@ import androidx.multidex.MultiDex;
 
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.PostMortemLog;
 import com.nukacast.app.diagnostics.SessionMarker;
 
 public final class NukaCastApp extends Application implements android.content.ComponentCallbacks2 {
@@ -27,9 +28,11 @@ public final class NukaCastApp extends Application implements android.content.Co
         SessionMarker.initialize(this);
         SessionMarker.Run interrupted = SessionMarker.interruptedRun();
         if (interrupted != null && !interrupted.endedCleanly) {
-            AppLog.w("应用", "上次运行在 " + (interrupted.durationMs() / 1000) + " 秒后被系统结束"
-                    + (interrupted.lastSample() == null ? ""
-                    : "（最后内存占用 " + interrupted.peakHeapPercent() + "%）"));
+            AppLog.w("应用", "上次运行在 " + (interrupted.durationMs() / 1000) + " 秒后"
+                    + interrupted.describeDeath());
+            // A process that died without a Java trace leaves its reason in the system log; try to
+            // keep a copy while it is still in the ring buffer.
+            PostMortemLog.captureAsync(this);
         }
         AppLog.i("应用", "NukaCast 启动");
         runtime = new NukaRuntime(this);

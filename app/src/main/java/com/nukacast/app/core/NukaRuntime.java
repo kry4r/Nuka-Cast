@@ -119,7 +119,20 @@ public final class NukaRuntime {
         // Playlist catalogs are the biggest rebuildable structure the app holds; the web console
         // simply re-downloads them when a source is opened again.
         try { liveService.clearCache(); } catch (RuntimeException ignored) {}
-        try { spiderManager.clearCompatibility(); } catch (RuntimeException ignored) {}
+        // Plugin sessions are native memory (QuickJS runtimes, DexClassLoader spiders) and are the
+        // reason a 1 GB TV kills this process; release them before anything else.
+        try { spiderManager.dropSessions("系统内存紧张"); } catch (RuntimeException ignored) {}
+        // Note: the site compatibility verdicts are deliberately kept. They are what stops a broken
+        // JAR from being downloaded and verified again on every retry.
+    }
+
+    /** Package-visible for diagnostics; the spider manager owns the real counters. */
+    public String pluginSessionSummary() {
+        try {
+            return spiderManager.sessionSummary();
+        } catch (RuntimeException ignored) {
+            return "";
+        }
     }
 
     public void contentChanged() {

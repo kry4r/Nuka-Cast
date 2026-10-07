@@ -225,6 +225,11 @@ final class H264VideoRenderer {
                         queue.clear();
                         queue.offer(recovery);
                     }
+                } catch (Throwable fatal) {
+                    // An Error escaping this thread would take the whole process down with no chance
+                    // to report it: on Android an uncaught exception in any thread kills the app.
+                    blockDecoder("解码器不可恢复：" + fatal.getClass().getSimpleName());
+                    StageTrace.componentFailure("airplay", "video", "decode_loop", fatal);
                 }
             }
         } finally {

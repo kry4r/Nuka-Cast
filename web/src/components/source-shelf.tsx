@@ -12,7 +12,7 @@ type RecommendedKind = "live" | "vod" | "drama"
 export function RecommendedShelf({ kind, title, description, onChanged, setError }: {
   kind: RecommendedKind
   title: string
-  description: string
+  description?: string
   onChanged?: () => void
   setError: (value: string) => void
 }) {

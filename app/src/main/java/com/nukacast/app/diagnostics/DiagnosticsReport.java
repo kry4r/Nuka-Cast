@@ -52,8 +52,21 @@ public final class DiagnosticsReport {
         skippedSites(report, runtime);
         previousRun(report);
         javaCrash(report, context);
+        postMortem(report, context);
         log(report, level);
         return report.toString();
+    }
+
+    /** The platform's own log from around the previous process's death, when it could be read. */
+    private static void postMortem(StringBuilder report, Context context) {
+        report.append("== 上次退出时的系统日志 ==\n");
+        String captured = context == null ? "" : PostMortemLog.read(context);
+        if (captured.isEmpty()) {
+            report.append("（未捕获。系统日志需要 root 权限，重启后也会被环形缓冲区覆盖）\n");
+        } else {
+            report.append(captured).append('\n');
+        }
+        report.append('\n');
     }
 
     /** Writes the bundle next to the app's own files, which needs no storage permission. */
@@ -94,6 +107,29 @@ public final class DiagnosticsReport {
         report.append('\n');
     }
 
+    /**
+     * The numbers the platform's killer uses. Included because plugin work lives in native memory:
+     * a Java heap at 1% says nothing about whether the process is about to be ended.
+     */
+    private static void processMemory(StringBuilder report, NukaRuntime runtime) {
+        Context context = runtime == null ? null : runtime.getContext();
+        long totalRam = context == null ? 0L : ProcessMemory.totalRamBytes(context);
+        long budget = context == null ? 0L : ProcessMemory.pluginBudgetBytes(context);
+        report.append("进程内存：RSS ").append(ProcessMemory.megabytes(ProcessMemory.rssBytes()))
+                .append(" · PSS ").append(ProcessMemory.megabytes(
+                        context == null ? 0L : ProcessMemory.totalPssBytes(context)))
+                .append(" · 虚拟 ").append(ProcessMemory.megabytes(ProcessMemory.vmSizeBytes()))
+                .append(" · 线程 ").append(ProcessMemory.threadCount())
+                .append(" · oom_score_adj ").append(ProcessMemory.oomScoreAdj()).append('\n');
+        report.append("内存预算：插件上限 ").append(ProcessMemory.megabytes(budget))
+                .append("（设备总内存 ").append(ProcessMemory.megabytes(totalRam)).append("）");
+        if (runtime != null) {
+            String sessions = runtime.pluginSessionSummary();
+            if (sessions != null && !sessions.isEmpty()) report.append(" · ").append(sessions);
+        }
+        report.append('\n');
+    }
+
     private static void device(StringBuilder report, NukaRuntime runtime) {
         report.append("== 设备 ==\n");
         if (runtime == null) {
@@ -112,6 +148,7 @@ public final class DiagnosticsReport {
         report.append("内存：堆 ").append(megabytes(java.totalMemory() - java.freeMemory()))
                 .append(" / 上限 ").append(megabytes(java.maxMemory()))
                 .append(" · 原生 ").append(megabytes(Debug.getNativeHeapAllocatedSize())).append('\n');
+        processMemory(report, runtime);
         report.append("H.264：").append(profile == null ? "-"
                 : profile.hasHardwareAvcDecoder ? "硬解优先" : "无硬解").append('\n');
         if (profile != null && profile.warnings != null) {

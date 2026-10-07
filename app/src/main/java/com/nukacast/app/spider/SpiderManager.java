@@ -7,6 +7,8 @@ import com.github.catvod.crawler.SpiderApi;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.net.ResponseBodies;
 import com.nukacast.app.diagnostics.AppLog;
+import com.nukacast.app.diagnostics.ProcessMemory;
+import com.nukacast.app.diagnostics.SessionMarker;
 import com.nukacast.app.diagnostics.StageTrace;
 import com.nukacast.app.tvbox.model.TvBoxConfig;
 import com.nukacast.app.util.Digests;
@@ -37,10 +39,28 @@ import okhttp3.Response;
 public final class SpiderManager {
     private static final long RECHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L;
     private static final int MAX_JAR_BYTES = 20 * 1024 * 1024;
-    private static final int MAX_SESSIONS = 64;
+    /**
+     * Upper bound on live plugin sessions. A session is either a QuickJS runtime (several MB of
+     * native memory for a drpy bundle) or a DexClassLoader-owned spider instance, and none of that
+     * shows up in the Java heap. The old fixed cap of 64 was reachable with a 139-site config and
+     * pushed a 1 GB TV into the platform's memory killer; the limit is now derived from the device.
+     */
+    private static final int MIN_SESSIONS = 4;
+    private static final int MAX_SESSIONS_LIMIT = 16;
+    /** Plugin initialisation is serialised: starting twelve JS engines at once spikes memory. */
+    private static final int MAX_CONCURRENT_INITIALISATIONS = 2;
+    /** A session untouched for this long is destroyed instead of cached. */
+    private static final long SESSION_IDLE_MS = 60_000L;
+    /** After hitting the memory budget, plugin work stays paused for this long. */
+    private static final long SHED_COOLDOWN_MS = 60_000L;
     private static final long CALL_TIMEOUT_SECONDS = 10L;
     private final Context context;
     private final JarTrustStore trustStore;
+    private final int maxSessions;
+    private final int maxJsSessions;
+    private volatile long shedUntilMs;
+    private final java.util.concurrent.Semaphore initialisationSlots =
+            new java.util.concurrent.Semaphore(MAX_CONCURRENT_INITIALISATIONS, true);
     private final Map<String, SpiderSession> sessions = new HashMap<String, SpiderSession>();
     private final Map<String, Long> sessionUsedAt = new HashMap<String, Long>();
     private final Map<String, LoadedJar> loadedJars = new HashMap<String, LoadedJar>();
@@ -66,6 +86,8 @@ public final class SpiderManager {
 
     public SpiderManager(Context context) {
         this.context = context.getApplicationContext();
+        this.maxSessions = sessionBudget(context);
+        this.maxJsSessions = Math.max(2, this.maxSessions / 3);
         this.trustStore = new JarTrustStore(this.context);
         com.github.catvod.SpiderContext.set(this.context);
         com.github.catvod.Proxy.set(com.nukacast.app.core.NukaRuntime.CONTROL_PORT);
@@ -208,7 +230,37 @@ public final class SpiderManager {
         if (recentJar == removed) recentJar = null;
     }
 
+    /**
+     * Refuses to start more plugin work when the process is already at its budget.
+     *
+     * <p>The failure mode being prevented: a 139-site config makes the app create JS runtimes and
+     * dex-loaded spiders until the platform's killer ends the process with no Java trace at all.
+     * Here the app sheds everything it can, then lets CMS sites keep working instead of gambling on
+     * the killer's threshold.
+     */
+    private void requireMemoryHeadroom() throws IllegalStateException {
+        long budget = ProcessMemory.pluginBudgetBytes(context);
+        long rss = ProcessMemory.rssBytes();
+        if (rss <= 0L) return;
+        if (rss >= budget) {
+            dropSessions("超过内存预算");
+            shedUntilMs = System.currentTimeMillis() + SHED_COOLDOWN_MS;
+            throw new IllegalStateException("插件已暂停：本进程 " + ProcessMemory.megabytes(rss)
+                    + " 超过预算 " + ProcessMemory.megabytes(budget));
+        }
+        if (rss >= budget * 8L / 10L) {
+            // Close to the limit: release the cache now so the current request still fits.
+            dropSessions("接近内存预算");
+        }
+    }
+
+    /** True while plugin work is paused after hitting the budget. */
+    public boolean pausedForMemory() {
+        return System.currentTimeMillis() < shedUntilMs;
+    }
+
     private synchronized SpiderSession session(TvBoxConfig.Site site) throws Exception {
+        requireMemoryHeadroom();
         StageTrace.Trace trace = StageTrace.start("spider", siteIdentity(site));
         try {
             if (QuickJsSpiderSession.supports(site)) {
@@ -221,8 +273,8 @@ public final class SpiderManager {
                     trace.success();
                     return existing;
                 }
-                ensureSessionSlot();
-                SpiderSession created = new QuickJsSpiderSession(site);
+                ensureSessionSlot(true);
+                SpiderSession created = createJsSession(site);
                 rememberSession(sessionKey, created);
                 trace.success();
                 return created;
@@ -242,9 +294,9 @@ public final class SpiderManager {
                 trace.success();
                 return existing;
             }
-            ensureSessionSlot();
+            ensureSessionSlot(false);
             trace.stage("plugin_init");
-            Class<?> type = loaded.loader.loadClass(className);
+            Class<?> type = loadClass(loaded, className);
             Object instance = type.newInstance();
             if (!(instance instanceof Spider)) {
                 throw new IllegalStateException(className + " 未继承 CatVod Spider");
@@ -291,6 +343,60 @@ public final class SpiderManager {
     private void rememberSession(String key, SpiderSession session) {
         sessions.put(key, session);
         touch(key);
+        SessionMarker.publishPluginSessions(sessionSummary());
+    }
+
+    /**
+     * Destroys every live plugin session. Called when the platform reports memory pressure: the
+     * sessions are rebuildable, and dropping them is what actually returns native memory to the
+     * device — a Java {@code System.gc()} would not touch a QuickJS runtime.
+     */
+    public synchronized void dropSessions(String reason) {
+        if (sessions.isEmpty()) return;
+        String summary = sessionSummary();
+        for (SpiderSession session : sessions.values()) {
+            if (session instanceof JavaSpiderSession) removeSpider((JavaSpiderSession) session);
+            try {
+                session.destroy();
+            } catch (RuntimeException ignored) {
+                // Already broken; nothing to preserve.
+            }
+        }
+        sessions.clear();
+        sessionUsedAt.clear();
+        SessionMarker.publishPluginSessions(sessionSummary());
+        AppLog.i("Spider", "释放插件会话（" + reason + "）：" + summary);
+    }
+
+    /**
+     * Creates a JS session with the initialisation slot held, so a bulk search cannot start a dozen
+     * QuickJS runtimes at the same moment.
+     */
+    private SpiderSession createJsSession(TvBoxConfig.Site site) throws Exception {
+        boolean acquired = false;
+        try {
+            acquired = initialisationSlots.tryAcquire(20, java.util.concurrent.TimeUnit.SECONDS);
+            return new QuickJsSpiderSession(site);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("会话初始化被中断", interrupted);
+        } finally {
+            if (acquired) initialisationSlots.release();
+        }
+    }
+
+    /** Loads the plugin class with the same guard, because dex verification is the expensive part. */
+    private Class<?> loadClass(LoadedJar loaded, String className) throws Exception {
+        boolean acquired = false;
+        try {
+            acquired = initialisationSlots.tryAcquire(20, java.util.concurrent.TimeUnit.SECONDS);
+            return loaded.loader.loadClass(className);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("插件初始化被中断", interrupted);
+        } finally {
+            if (acquired) initialisationSlots.release();
+        }
     }
 
     private void touch(String key) {
@@ -301,8 +407,14 @@ public final class SpiderManager {
      * Evicts the least recently used session when the cache is full instead of failing every
      * later request, which keeps the API 19 resource budget bounded without a hard error wall.
      */
-    private void ensureSessionSlot() {
-        while (sessions.size() >= MAX_SESSIONS && !sessions.isEmpty()) {
+    private void ensureSessionSlot(boolean forJsSession) {
+        // Idle first: a session untouched for a minute is worth more as free memory than as a cache.
+        evictIdle();
+        // JS runtimes first: they cost the most native memory per session.
+        while (forJsSession && countJsSessions() >= maxJsSessions && !sessions.isEmpty()) {
+            if (!evictOldest("js|")) break;
+        }
+        while (sessions.size() >= maxSessions && !sessions.isEmpty()) {
             String oldestKey = null;
             long oldest = Long.MAX_VALUE;
             for (String key : sessions.keySet()) {
@@ -320,8 +432,63 @@ public final class SpiderManager {
             try {
                 victim.destroy();
             } catch (RuntimeException ignored) {}
-            AppLog.d("Spider", "会话缓存已满，释放最久未用的会话");
+            AppLog.d("Spider", "会话缓存已满，释放最久未用的会话：" + sessionSummary());
         }
+    }
+
+    private int countJsSessions() {
+        int count = 0;
+        for (String key : sessions.keySet()) {
+            if (key.startsWith("js|")) count++;
+        }
+        return count;
+    }
+
+    /** Sessions cost native memory even while idle, so old ones are released proactively. */
+    private void evictIdle() {
+        long now = System.currentTimeMillis();
+        java.util.List<String> idle = new java.util.ArrayList<String>();
+        for (Map.Entry<String, Long> entry : sessionUsedAt.entrySet()) {
+            if (now - entry.getValue() >= SESSION_IDLE_MS) idle.add(entry.getKey());
+        }
+        for (String key : idle) {
+            SpiderSession session = sessions.remove(key);
+            sessionUsedAt.remove(key);
+            if (session == null) continue;
+            if (session instanceof JavaSpiderSession) removeSpider((JavaSpiderSession) session);
+            try {
+                session.destroy();
+            } catch (RuntimeException ignored) {
+                // Nothing to preserve.
+            }
+        }
+        if (!idle.isEmpty()) {
+            SessionMarker.publishPluginSessions(sessionSummary());
+            AppLog.d("Spider", "释放 " + idle.size() + " 个空闲会话：" + sessionSummary());
+        }
+    }
+
+    /** Evicts the least recently used session whose key starts with {@code prefix}. */
+    private boolean evictOldest(String prefix) {
+        String oldestKey = null;
+        long oldest = Long.MAX_VALUE;
+        for (Map.Entry<String, SpiderSession> entry : sessions.entrySet()) {
+            if (prefix != null && !entry.getKey().startsWith(prefix)) continue;
+            Long used = sessionUsedAt.get(entry.getKey());
+            long value = used == null ? 0L : used;
+            if (value < oldest) {
+                oldest = value;
+                oldestKey = entry.getKey();
+            }
+        }
+        if (oldestKey == null) return false;
+        SpiderSession victim = sessions.remove(oldestKey);
+        sessionUsedAt.remove(oldestKey);
+        if (victim instanceof JavaSpiderSession) removeSpider((JavaSpiderSession) victim);
+        try {
+            victim.destroy();
+        } catch (RuntimeException ignored) {}
+        return true;
     }
 
     private synchronized void pinProxy(TvBoxConfig.Site site) {
@@ -528,6 +695,44 @@ public final class SpiderManager {
     private static String firstNonEmpty(String first, String second) {
         return first != null && !first.trim().isEmpty() ? first.trim()
                 : second == null ? "" : second.trim();
+    }
+
+    /**
+     * Session budget from the device's total RAM: plugins are native-memory heavy, so a small box
+     * gets a small budget. Read from {@code MemoryInfo.totalMem} (API 16+) rather than the Java heap
+     * limit, which says nothing about the QuickJS runtimes.
+     */
+    static int sessionBudget(Context context) {
+        long totalBytes = 0L;
+        try {
+            android.app.ActivityManager manager =
+                    (android.app.ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo info = new android.app.ActivityManager.MemoryInfo();
+            if (manager != null) manager.getMemoryInfo(info);
+            totalBytes = info.totalMem;
+        } catch (Throwable ignored) {
+            totalBytes = 0L;
+        }
+        long totalMb = totalBytes / (1024L * 1024L);
+        int budget;
+        if (totalMb <= 0L) budget = 8;            // unknown device: stay conservative
+        else if (totalMb <= 512L) budget = MIN_SESSIONS;
+        else if (totalMb <= 1024L) budget = 8;
+        else if (totalMb <= 2048L) budget = 12;
+        else budget = MAX_SESSIONS_LIMIT;
+        return Math.max(MIN_SESSIONS, Math.min(MAX_SESSIONS_LIMIT, budget));
+    }
+
+    /** Live session counts, for diagnostics: JS runtimes are the ones that hurt. */
+    public synchronized String sessionSummary() {
+        int js = 0;
+        int jar = 0;
+        for (String key : sessions.keySet()) {
+            if (key.startsWith("js|")) js++;
+            else jar++;
+        }
+        return "插件会话 " + sessions.size() + "/" + maxSessions + "（JS " + js + "/" + maxJsSessions
+                + " · JAR " + jar + "）";
     }
 
     private static String safe(String value) { return value == null ? "" : value; }

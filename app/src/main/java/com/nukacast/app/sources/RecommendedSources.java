@@ -135,6 +135,24 @@ public final class RecommendedSources {
         probe.id = item.id;
         probe.checkedAt = System.currentTimeMillis();
         long startedAt = System.currentTimeMillis();
+        if (com.nukacast.app.net.BundledAssets.isBundled(item.url)) {
+            // Bundled source: nothing to reach over the network, verify that it decodes and that the
+            // sites it declares are actually there.
+            try {
+                byte[] bytes = com.nukacast.app.net.BundledAssets.read(context, item.url);
+                probe.httpStatus = 200;
+                probe.bytes = bytes.length;
+                describe(item, new String(bytes, UTF_8), probe);
+            } catch (Exception error) {
+                probe.errorCode = ErrorCodes.of(error);
+                probe.error = ErrorCodes.message(error);
+            }
+            probe.latencyMs = System.currentTimeMillis() - startedAt;
+            synchronized (probes) {
+                probes.put(item.id, probe);
+            }
+            return probe;
+        }
         try (Response response = call(item)) {
             probe.httpStatus = response.code();
             ResponseBody body = response.body();
@@ -188,6 +206,12 @@ public final class RecommendedSources {
             return;
         }
         describeConfig(item, body, probe);
+    }
+
+    /** True when this entry ships inside the APK rather than pointing at a network location. */
+    public boolean isBundled(String id) {
+        RecommendedSource item = find(id);
+        return item != null && com.nukacast.app.net.BundledAssets.isBundled(item.url);
     }
 
     private void describeCms(String body, RecommendedSource.Probe probe) {
@@ -257,6 +281,7 @@ public final class RecommendedSources {
     }
 
     private Response call(RecommendedSource item) throws Exception {
+        if (com.nukacast.app.net.BundledAssets.isBundled(item.url)) return null;
         String url = item.url;
         if (RecommendedSource.KIND_DRAMA.equals(item.kind)
                 && DramaProviderConfig.KIND_CMS_DRAMA.equals(kindOf(item))) {

@@ -44,7 +44,11 @@ public final class TvBoxContentService {
     private final SpiderManager spiders;
     private final StorageLibrary storageLibrary;
     private final CmsSiteSearcher cmsSearcher = new CmsSiteSearcher();
-    private final ExecutorService homeExecutor = Executors.newFixedThreadPool(4);
+    /**
+     * Two threads, not four: each home site can start a QuickJS runtime or a dex-loaded spider, and
+     * four of those in parallel is what peaks native memory right after startup on a small TV.
+     */
+    private final ExecutorService homeExecutor = Executors.newFixedThreadPool(2);
     private final SiteFailureStore homeFailures = new SiteFailureStore();
 
     public TvBoxContentService(TvBoxRepository repository, SpiderManager spiders) {
@@ -70,17 +74,42 @@ public final class TvBoxContentService {
         return detail;
     }
 
+    /**
+     * Plugin sites are only a small part of the home batch: each one costs a QuickJS runtime or a
+     * DexClassLoader spider instance in native memory, which is what makes a low-end TV kill the
+     * process a minute after startup. Plain CMS sites (type 0/1) are cheap and come first.
+     */
+    private static final int MAX_PLUGIN_HOME_SITES = 2;
+
     public List<SearchItem> home(int maxSites, int maxItems) throws InterruptedException {
+        List<TvBoxConfig.Site> pluginSites = new ArrayList<TvBoxConfig.Site>();
         List<TvBoxConfig.Site> selected = new ArrayList<TvBoxConfig.Site>();
         int skipped = 0;
+        int quota = Math.max(1, maxSites);
         for (TvBoxConfig.Site site : repository.getEnabledSites()) {
             if (site.type != 0 && site.type != 1 && site.type != 3) continue;
-            if (site.type == 3 && spiders.compatibility().isUnsupported(site)) {
-                skipped++;
+            if (site.type == 3) {
+                if (spiders.compatibility().isUnsupported(site)) {
+                    skipped++;
+                    continue;
+                }
+                pluginSites.add(site);
                 continue;
             }
+            if (selected.size() >= quota) continue;
             selected.add(site);
-            if (selected.size() >= Math.max(1, maxSites)) break;
+        }
+        // Only fill the remaining slots with plugins, and never more than a couple of them.
+        int plugins = 0;
+        for (TvBoxConfig.Site site : pluginSites) {
+            if (selected.size() >= quota || plugins >= MAX_PLUGIN_HOME_SITES) break;
+            // While the app is shedding memory, plugin sites stay out of the home batch entirely.
+            if (spiders.pausedForMemory()) break;
+            selected.add(site);
+            plugins++;
+        }
+        if (plugins == 0 && !pluginSites.isEmpty() && spiders.pausedForMemory()) {
+            AppLog.i("片源", "首页本次不加载插件站点（内存已收紧）");
         }
         if (skipped > 0) {
             AppLog.i("片源", "首页跳过 " + skipped + " 个本机不支持的站点（详见设备页诊断）");

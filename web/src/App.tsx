@@ -222,7 +222,6 @@ function Overview({ status, onNavigate, onStatusChanged, setError }: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <SectionCard
           title="AirPlay 投屏"
-          description="iPhone / iPad 控制中心里选择“屏幕镜像”即可看到 NukaCast。"
           badges={airPlay?.sessionActive
             ? <Badge variant="secondary">正在镜像{status?.activeMedia && status.activeMedia !== "AirPlay 镜像" ? ` · ${status.activeMedia}` : ""}</Badge>
             : <Badge variant="outline">等待设备</Badge>}
@@ -677,7 +676,6 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
     <>
       <PageHeader
         title="短剧"
-        subtitle="资料目录负责找剧，CMS 直连目录直接给出剧集地址：添加后在网页或电视上点一集即可播放。"
         badges={<Badge variant={enabled.length ? "secondary" : "destructive"}>{enabled.length ? `${enabled.length} 个目录已启用` : "未启用目录"}</Badge>}
         action={<Button variant="outline" size="sm" onClick={() => setShowSources(!showSources)}><Library className="size-4" />目录管理</Button>}
       />
@@ -685,8 +683,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
       <div className="space-y-4">
         <RecommendedShelf
           kind="drama"
-          title="推荐短剧源"
-          description="内置清单挑了直连 m3u8 的短剧资源站，以及红果短剧榜用于按剧名搜剧。检测按钮会用本机网络重新确认一次。"
+          title="推荐源"
           onChanged={load}
           setError={setError}
         />
@@ -694,7 +691,6 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
         {showSources && (
           <SectionCard
             title="短剧目录"
-            description="资料目录（vote）只提供剧名与简介，播放需要片源线路；CMS 直连目录自带剧集地址。"
             badges={<Badge variant="outline">{providers.length}</Badge>}
             action={<Button variant="ghost" size="sm" onClick={() => setShowSources(false)}><X className="size-4" />收起</Button>}
           >
@@ -726,7 +722,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
                 </div>
               ))}
               {providers.length === 0 && (
-                <EmptyState icon={Clapperboard} title="还没有短剧目录" hint="用上面的推荐源一键添加，或在下面粘贴一个自定义地址。" />
+                <EmptyState icon={Clapperboard} title="还没有短剧目录" hint="用推荐源一键添加，或粘贴地址。" />
               )}
               <form className="grid gap-2 pt-2 sm:grid-cols-[200px_1fr_auto]"
                 onSubmit={(event) => {
@@ -747,9 +743,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
 
         <SectionCard
           title="查找剧集"
-          description={active
-            ? `${active.name} · ${active.kind === "cms.drama" ? "支持分类浏览与直接播放" : "按剧名搜索剧目资料"}`
-            : "先添加并启用一个短剧目录"}
+          description={active ? active.name : "先添加一个短剧目录"}
         >
           <div className="flex flex-wrap items-center gap-2">
             {providers.map((provider) => (
@@ -800,7 +794,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
           </div>
 
           {!busy && result && result.items.length === 0 && (
-            <EmptyState icon={Clapperboard} title="没有匹配的短剧" hint="换个关键词，或切换到另一个目录再试。" />
+            <EmptyState icon={Clapperboard} title="没有匹配的短剧" hint="换个关键词试试。" />
           )}
           {!result && !busy && (
             <EmptyState icon={Clapperboard} title={providerId ? "搜索或浏览短剧" : "先添加并启用一个短剧目录"}
@@ -1139,7 +1133,6 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
     <>
       <PageHeader
         title="直播"
-        subtitle="可以直接添加公开的 IPTV 清单（m3u/txt），也可以从推荐源一键添加。频道地址来自清单本身，能否播放取决于上游线路。"
         badges={<Badge variant="outline">{channelCount} 个频道</Badge>}
         action={<Button variant="outline" size="sm" onClick={() => setShowManager(!showManager)}><ListFilter className="size-4" />直播源管理</Button>}
       />
@@ -1149,14 +1142,12 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
           <>
             <RecommendedShelf
               kind="live"
-              title="推荐直播源"
-              description="内置清单全部来自公开的 IPTV 项目（多数每天自动校验）。检测会按本机网络实测，失效时优先换同组镜像。"
+              title="推荐源"
               onChanged={loadPlaylists}
               setError={setError}
             />
             <SectionCard
               title="我的直播源"
-              description="自定义 m3u / txt 清单，添加后立即出现在上面的频道列表里。"
               badges={<Badge variant="outline">{playlists.filter((row) => row.user).length} 条自定义</Badge>}
             >
               <form onSubmit={addPlaylist} className="grid gap-2 sm:grid-cols-[200px_1fr_auto]">
@@ -1202,7 +1193,7 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
 
         {busy && <RowSkeletons count={4} />}
         {!busy && sources.length === 0 && (
-          <EmptyState icon={Radio} title="还没有直播源" hint="用“直播源管理”里的推荐源一键添加，或粘贴一个 m3u/txt 清单地址。"
+          <EmptyState icon={Radio} title="还没有直播源" hint="添加一个 m3u / txt 清单。"
             action={<Button size="sm" onClick={() => setShowManager(true)}><Plus />添加直播源</Button>} />
         )}
 
@@ -1252,7 +1243,7 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
               </section>
             ))}
             {filter && visibleCount === 0 && (
-              <EmptyState icon={Search} title="没有匹配的频道" hint="换个关键词，或清空筛选查看全部频道。" />
+              <EmptyState icon={Search} title="没有匹配的频道" hint="换个关键词。" />
             )}
           </div>
         )}
@@ -1313,22 +1304,19 @@ function SourcesView({ contentVersion, onChanged, setError }: { contentVersion: 
     <>
       <PageHeader
         title="点播源"
-        subtitle="TVBox 兼容配置（单仓、多仓、仓库）。也可用推荐源一键添加，或用仓库批量导入。"
         badges={<Badge variant="outline">{healthy}/{sources.length} 正常</Badge>}
         action={<Button variant="outline" size="sm" onClick={refresh}><RefreshCw />刷新全部</Button>}
       />
       <div className="space-y-4">
         <RecommendedShelf
           kind="vod"
-          title="推荐点播源"
-          description="长期维护的公开配置，含单仓与多仓。添加后可在“刷新全部”里拉取站点；检测只确认配置文件可达。"
+          title="推荐源"
           onChanged={onChanged}
           setError={setError}
         />
 
         <SectionCard
           title="添加自定义配置"
-          description="支持单仓 JSON、多仓（urls/storeHouse）以及带前导注释或 Base64 的配置。"
         >
           <form onSubmit={add} className="grid gap-2 sm:grid-cols-[200px_1fr_auto]">
             <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="名称（可选）" />
@@ -1362,7 +1350,7 @@ function SourcesView({ contentVersion, onChanged, setError }: { contentVersion: 
                 )}
               </div>
             ))}
-            {sources.length === 0 && <EmptyState icon={Library} title="还没有配置源" hint="用推荐源一键添加，或粘贴一个 TVBox 配置地址。" />}
+            {sources.length === 0 && <EmptyState icon={Library} title="还没有配置源" hint="用推荐源一键添加，或粘贴配置地址。" />}
           </div>
         </SectionCard>
       </div>
@@ -1498,7 +1486,6 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
     <>
       <PageHeader
         title="设备能力"
-        subtitle="用于判断这台电视适合的分辨率、解码方式与投屏表现。"
         badges={
           <Badge variant={device?.hasHardwareAvcDecoder ? "secondary" : "destructive"}>
             {device?.hasHardwareAvcDecoder ? "支持 1080p 硬解" : "未检测到硬解"}
@@ -1538,7 +1525,6 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
 
         <SectionCard
           title="投屏诊断"
-          description="镜像接收与解码的实时计数，用来判断“黑屏/卡顿”发生在哪一段。"
           badges={<Badge variant={airPlay?.sessionActive ? "secondary" : "outline"}>{airPlay?.sessionActive ? "会话中" : airPlay?.state || "未启动"}</Badge>}
         >
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1563,7 +1549,6 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
       <SectionCard
         className="mt-4"
         title="阶段诊断"
-        description="最近经过的关键阶段。最后一条 running/failed 的记录就是问题最可能出现的位置，仍需结合运行日志判断。"
         badges={<Badge variant={failedStages.length > 0 ? "destructive" : "outline"}>{diagnostics?.stages?.length ?? 0} 条{failedStages.length > 0 ? ` · ${failedStages.length} 失败` : ""}</Badge>}
         action={<Button variant="ghost" size="sm" onClick={() => { void api.diagnostics().then(setDiagnostics).catch((reason) => setError(message(reason))) }}><RefreshCw className="size-4" />刷新</Button>}
       >
@@ -1583,7 +1568,7 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
             </div>
           ))}
           {(!diagnostics?.stages || diagnostics.stages.length === 0) && (
-            <EmptyState icon={Gauge} title="还没有阶段记录" hint="刷新片源、搜索或投屏后会记录 fetch_config / plugin_init / native_listen 等阶段。" />
+            <EmptyState icon={Gauge} title="还没有阶段记录"  />
           )}
         </div>
       </SectionCard>
@@ -1618,7 +1603,6 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
         <SectionCard
           className="mt-4"
           title="上次运行"
-          description="进程被系统结束（例如内存不足）时不会有 Java 闪退记录，这里保存了上一次运行的内存曲线与最后阶段。"
           badges={diagnostics?.lastRun
             ? <Badge variant={diagnostics.lastRun.endedCleanly ? "outline" : "destructive"}>
                 {diagnostics.lastRun.endedCleanly ? "正常退出" : "被外部结束"}
@@ -1659,7 +1643,6 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
         <SectionCard
           className="mt-4"
           title="本机不支持的站点"
-          description="插件需要更高版本 Android、或配置里的 JAR 校验值不匹配的站点会被跳过，不再反复请求。"
           badges={<Badge variant={(diagnostics?.siteIssues?.length ?? 0) > 0 ? "destructive" : "outline"}>
             {diagnostics?.siteIssues?.length ?? 0} 个
           </Badge>}
@@ -1680,7 +1663,7 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
             )}
         </SectionCard>
 
-        <SectionCard title="上次 Java 闪退记录" description="闪退发生时保存的堆栈，用于判断是插件、verifier 还是原生库导致的。">
+        <SectionCard title="上次 Java 闪退记录">
           {diagnostics?.javaCrash
             ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border bg-background/60 p-3 text-xs leading-5 text-rose-300">{diagnostics.javaCrash}</pre>
             : <div className="text-sm text-muted-foreground">没有保存的 Java 闪退记录。</div>}
@@ -1767,7 +1750,6 @@ function LogView({ setError }: { setError: (value: string) => void }) {
     <>
       <PageHeader
         title="日志"
-        subtitle="保留最近 400 条调试、信息、警告和错误记录（连续相同的行会折叠并标注重复次数）。导出诊断包会附带设备状态、片源错误、阶段诊断与上次运行的内存曲线。"
         badges={<Badge variant="outline">{visible.length} / {entries.length} 条</Badge>}
         action={
           <>
@@ -1822,7 +1804,7 @@ function LogView({ setError }: { setError: (value: string) => void }) {
             </article>
           ))}
           {visible.length === 0 && (
-            <EmptyState icon={FileWarning} title="当前级别暂无日志" hint="电视端刷新片源、搜索或投屏后会有记录。" />
+            <EmptyState icon={FileWarning} title="当前级别暂无日志"  />
           )}
         </div>
       </SectionCard>
