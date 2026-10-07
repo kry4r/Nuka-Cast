@@ -86,3 +86,5 @@ node tools/dlna-cast.mjs stop  http://<tv>:9978
 | 网页 | 5 files / 16 tests；`check-web-tokens` 266 tokens 缺失 0 |
 | 设备端 | 模拟器 API 19 x86：DLNA 投放、EPG、筛选、收藏、设置逐项实测通过 |
 | 稳定性 | `tools/tv-soak.mjs` 连续轮次播放/搜索/浏览/直播，堆 ~38MB、RSS ~96MB、线程 61 保持平稳 |
+| 设备冒烟 | `node tools/tv-smoke.mjs` → **22/22 通过**（含 DLNA 投放后真的在播、低码率流位置推进、首字母搜索、筛选、收藏、屏幕键盘、直播频道搜索） |
+| 发布 | v0.5.0：`NukaCast-v0.5.0.apk` 10.97 MB，`versionCode 23`、`versionName 0.5.0`，sha256 `2289dc73…7a04cf` 与发布文件一致，签名证书与 v0.3.4 起完全相同（可直接覆盖安装）；`Android CI` 与 `Android Release` 全绿 |
