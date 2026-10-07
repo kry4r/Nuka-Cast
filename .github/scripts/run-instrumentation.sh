@@ -3,7 +3,7 @@ set -uo pipefail
 
 # Pass includeTestAbi (modern x86_64 emulator) or includeLegacyTestAbi (API 19 x86 emulator).
 ABI_PROPERTY="${1:-includeTestAbi}"
-MAX_ATTEMPTS=2
+MAX_ATTEMPTS=3
 
 collect_diagnostics() {
   adb logcat -d -v threadtime > instrumentation-logcat.txt 2>/dev/null || true
@@ -15,10 +15,15 @@ collect_diagnostics() {
 # sys.boot_completed avoids running a test APK against a device that is not ready.
 wait_for_boot() {
   adb start-server >/dev/null 2>&1 || true
-  timeout 180 adb wait-for-device >/dev/null 2>&1 || return 1
-  for _ in $(seq 1 60); do
+  # The API 35 runner boots without KVM, so the device can take minutes to answer; the shorter wait here
+  # is what made an earlier run end with "Unable to connect to adb daemon".
+  timeout 420 adb wait-for-device >/dev/null 2>&1 || return 1
+  for _ in $(seq 1 90); do
     if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-      return 0
+      # boot_completed can be set while the shell is still unresponsive.
+      if adb shell echo ok >/dev/null 2>&1; then
+        return 0
+      fi
     fi
     sleep 5
   done
@@ -39,8 +44,9 @@ for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
     # A wedged adb server, failed console or dead emulator is retried once; a real
     # test failure executes test cases and is never retried.
     adb kill-server >/dev/null 2>&1 || true
-    sleep 15
+    sleep 20
     adb start-server >/dev/null 2>&1 || true
+    timeout 60 adb reconnect >/dev/null 2>&1 || true
   fi
   if ! wait_for_boot; then
     echo "warning: emulator did not report sys.boot_completed=1"
