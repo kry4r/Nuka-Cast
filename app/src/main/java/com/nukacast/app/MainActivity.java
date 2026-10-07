@@ -349,6 +349,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         });
     }
 
+    /** Bumped whenever the channel grid is rebuilt, to ignore focus events of removed buttons. */
+    private int liveListGeneration;
+
     /** Digits typed on the live page, waiting to be turned into a channel number. */
     private String liveJumpDigits = "";
     private final Handler liveJumpHandler = new Handler();
@@ -487,11 +490,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             showSearchPage();
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
+        if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_INFO) {
             // While something is playing the menu key opens the player menu, which is what a viewer
-            // expects; otherwise it goes to the settings page.
+            // expects; on the live page it shows that channel's programme list; elsewhere settings.
             if (isFullScreenMedia() && playerHud != null) {
                 togglePlayerMenu();
+                return true;
+            }
+            if (PAGE_LIVE.equals(currentPage)) {
+                showChannelGuide(focusedLiveChannel());
                 return true;
             }
             stopActivePlayback();
@@ -869,15 +876,42 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      */
     public int liveSearchForDebug(final String query) {
         if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
+        if (query == null || query.isEmpty()) {
+            // An empty query leaves search mode: the debug API and the smoke test need a way back to
+            // the group list, since the search state otherwise persists across runs.
+            liveSearching = false;
+            liveSearchText = "";
+            if (liveSearchPanel != null) liveSearchPanel.setVisibility(View.GONE);
+            renderLiveGroups();
+            renderLiveChannels();
+            return visibleChannelList().size();
+        }
         if (liveSearchPanel == null || liveSearchPanel.getVisibility() != View.VISIBLE) {
             toggleLiveSearch();
         }
-        liveSearchText = query == null ? "" : query;
+        liveSearchText = query;
         // Typing one key at a time exercises the same path the keyboard uses.
         renderLiveSearchResults();
         List<com.nukacast.app.live.model.LiveCatalog.Channel> hits =
                 com.nukacast.app.live.ChannelSearch.find(liveCatalog, liveSearchText);
         return hits.size();
+    }
+
+    /** What the live page is showing right now: source, group or search, focused channel (debug API). */
+    public java.util.Map<String, Object> livePageStateForDebug() {
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> visible = visibleChannelList();
+        com.nukacast.app.live.model.LiveCatalog.Channel focused = focusedLiveChannel();
+        java.util.Map<String, Object> payload = new java.util.LinkedHashMap<String, Object>();
+        payload.put("sourceId", liveSourceId);
+        payload.put("sourceName", liveCatalog == null ? "" : liveCatalog.sourceName);
+        payload.put("group", liveGroupName);
+        payload.put("searching", liveSearching);
+        payload.put("searchText", liveSearchText);
+        payload.put("visible", visible.size());
+        payload.put("focusedChannel", focused == null ? "" : focused.name);
+        payload.put("focusedChannelId", focused == null ? "" : focused.id);
+        payload.put("watching", livePlayingIndex);
+        return payload;
     }
 
     /** True once the live page has a catalog to search (or has finished trying). */
@@ -1577,6 +1611,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void onClick(View view) { toggleLiveSearch(); }
         });
         liveTools.addView(searchToggle);
+        Button guideButton = actionButton("节目单", 0);
+        guideButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showChannelGuide(focusedLiveChannel()); }
+        });
+        liveTools.addView(guideButton);
         livePage.addView(chipRowHolder(liveTools));
 
         liveSearchPanel = new LinearLayout(this);
@@ -1908,6 +1947,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Renders a channel list (one group, or the hits of a search), paged. */
     private void renderLiveChannelList(
             List<com.nukacast.app.live.model.LiveCatalog.Channel> all, boolean fromSearch) {
+        liveListGeneration++;
         liveChannelGrid.removeAllViews();
         int total = all.size();
         if (total == 0) {
@@ -1950,13 +1990,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 @Override public void onClick(View view) { playLiveChannel(channel); }
             });
             // Walking the channels shows each one's EPG, which is how a viewer picks what to watch.
+            final int generation = liveListGeneration;
             button.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override public void onFocusChange(View view, boolean focused) {
                     // Rebuilding the grid removes the old buttons, and Android still reports a focus
                     // change for those; acting on it labelled the new source with the previous
-                    // source's channel. Only a button that is actually on screen counts.
-                    // getWindowToken() is the API 17-safe way to ask whether the button is on screen.
-                    if (!focused || view.getWindowToken() == null || !view.isFocused()) return;
+                    // source's channel. A generation counter rejects exactly those callbacks.
+                    if (!focused || generation != liveListGeneration) return;
                     showChannelEpg(channel);
                 }
             });
@@ -2010,6 +2050,102 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     /** One line under the channel grid: what is on now and next. */
+    /**
+     * The full programme list of one channel, the way a set-top box's guide page shows it.
+     *
+     * <p>Opened with the 节目单 chip or the MENU key while a channel is focused; the programme airing now
+     * is marked and the dialog scrolls through the rest of the day.
+     */
+    private void showChannelGuide(final com.nukacast.app.live.model.LiveCatalog.Channel channel) {
+        final String source = liveSourceId;
+        if (channel == null || source.isEmpty()) {
+            toast("先选一个直播源与频道");
+            return;
+        }
+        toast(channel.name + "：正在读取节目单…");
+        com.nukacast.app.diagnostics.AppLog.d("直播", "读取节目单：" + channel.name
+                + "（源 " + source + "）");
+        epgIo.execute(new Runnable() {
+            @Override public void run() {
+                final List<String> lines = new java.util.ArrayList<String>();
+                String failure = "";
+                int liveIndex = -1;
+                try {
+                    com.nukacast.app.live.model.EpgSchedule schedule =
+                            runtime.getLiveService().epg(source, channel.id, "");
+                    long now = System.currentTimeMillis();
+                    for (com.nukacast.app.live.EpgNow.Slot slot
+                            : com.nukacast.app.live.EpgNow.slots(schedule)) {
+                        if (slot.isPlaceholder()) continue;
+                        if (slot.isLive(now)) liveIndex = lines.size();
+                        lines.add((slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
+                                + slot.endLabel() + "　" + slot.title);
+                    }
+                    if (lines.isEmpty()) failure = "这个源没有提供节目单";
+                } catch (Throwable error) {
+                    failure = error.getMessage() == null ? "节目单读取失败" : error.getMessage();
+                }
+                final String problem = failure;
+                final int currentIndex = liveIndex;
+                com.nukacast.app.diagnostics.AppLog.d("直播", "节目单结果：" + channel.name
+                        + " → " + lines.size() + " 条"
+                        + (problem.isEmpty() ? "" : "（" + problem + "）"));
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (!source.equals(liveSourceId)) {
+                            com.nukacast.app.diagnostics.AppLog.d("直播",
+                                    "节目单已丢弃：源已切换（" + source + " → " + liveSourceId + "）");
+                            return;
+                        }
+                        if (!problem.isEmpty()) {
+                            // No modal for "this source has no guide for that channel": on a TV a dialog
+                            // holds the focus, so a viewer who must dismiss it notices the blocking long
+                            // before they notice the explanation.
+                            toast(channel.name + "：" + problem);
+                            if (liveFocusedChannelId.equals(channel.id)) {
+                                liveEpgLine.setText(channel.name + "：" + problem);
+                            }
+                            return;
+                        }
+                        final String[] rows = lines.toArray(new String[0]);
+                        AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
+                                .setTitle(channel.name + " 节目单")
+                                .setItems(rows, null)
+                                .setPositiveButton("关闭", null)
+                                .create();
+                        // Opening a 24-hour list at 00:00 when it is half past nine in the evening would
+                        // hide the one thing the viewer asked for, so the list starts at what is on now.
+                        if (currentIndex > 0) {
+                            dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+                                @Override public void onShow(DialogInterface shown) {
+                                    if (shown instanceof AlertDialog) {
+                                        ((AlertDialog) shown).getListView()
+                                                .setSelection(currentIndex);
+                                    }
+                                }
+                            });
+                        }
+                        dialog.show();
+                    }
+                });
+            }
+        });
+    }
+
+    /** The channel the viewer is on, or the first one of the visible list. */
+    private com.nukacast.app.live.model.LiveCatalog.Channel focusedLiveChannel() {
+        List<com.nukacast.app.live.model.LiveCatalog.Channel> channels = visibleChannelList();
+        for (com.nukacast.app.live.model.LiveCatalog.Channel channel : channels) {
+            if (channel.id.equals(liveFocusedChannelId)) return channel;
+        }
+        return channels.isEmpty() ? null : channels.get(0);
+    }
+
+    private void toast(String message) {
+        if (message == null || message.isEmpty()) return;
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show();
+    }
+
     private void showChannelEpg(final com.nukacast.app.live.model.LiveCatalog.Channel channel) {
         final String source = liveSourceId;
         liveFocusedChannelId = channel.id;

@@ -3,7 +3,11 @@ package com.nukacast.app.live;
 import com.nukacast.app.live.model.EpgSchedule;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -38,6 +42,45 @@ public final class EpgNow {
         public String startLabel() {
             return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(startMs));
         }
+
+        public String endLabel() {
+            return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(endMs));
+        }
+
+        /** True while this programme is the one airing at {@code nowMs}. */
+        public boolean isLive(long nowMs) {
+            return nowMs >= startMs && nowMs < endMs;
+        }
+
+        /** True for the "no guide information" rows a service sends instead of a listing. */
+        public boolean isPlaceholder() {
+            String lower = title == null ? "" : title.toLowerCase(Locale.US);
+            for (String marker : PLACEHOLDER_MARKERS) {
+                if (lower.contains(marker)) return true;
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Every readable programme of a schedule, in time order.
+     *
+     * <p>Used by the full-day guide; entries without a usable time are dropped rather than shown as if
+     * they were scheduled.
+     */
+    public static List<Slot> slots(EpgSchedule schedule) {
+        List<Slot> slots = new ArrayList<Slot>();
+        if (schedule == null) return slots;
+        for (EpgSchedule.Program program : schedule.programs) {
+            Slot slot = slot(program);
+            if (slot != null && slot.isValid()) slots.add(slot);
+        }
+        Collections.sort(slots, new Comparator<Slot>() {
+            @Override public int compare(Slot left, Slot right) {
+                return Long.compare(left.startMs, right.startMs);
+            }
+        });
+        return slots;
     }
 
     /**

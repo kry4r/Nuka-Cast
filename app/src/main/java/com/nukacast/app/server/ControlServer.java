@@ -409,6 +409,12 @@ public final class ControlServer extends NanoHTTPD {
                         }
                     });
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("state", activity.onUiThreadNow(
+                    new java.util.concurrent.Callable<Map<String, Object>>() {
+                        @Override public Map<String, Object> call() {
+                            return activity.livePageStateForDebug();
+                        }
+                    }));
             payload.put("query", query);
             payload.put("hits", hits);
             payload.put("sources", names);

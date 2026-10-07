@@ -76,6 +76,37 @@ public class EpgNowTest {
     }
 
     @Test
+    public void slotsAreSortedAndUsableTimesOnly() {
+        // Mixed time formats plus a row without times, as sites send them.
+        EpgSchedule mixed = schedule(
+                program("晚间新闻", "21:00", "22:00"),
+                program("午间新闻", "12:00", "12:30"),
+                program("没有时间的节目", "", ""));
+        java.util.List<EpgNow.Slot> slots = EpgNow.slots(mixed);
+        assertEquals(2, slots.size());
+        assertEquals("午间新闻", slots.get(0).title);
+        assertEquals("晚间新闻", slots.get(1).title);
+        assertEquals("12:00", slots.get(0).startLabel());
+        assertEquals("12:30", slots.get(0).endLabel());
+    }
+
+    @Test
+    public void aSlotKnowsWhetherItIsOnNow() {
+        EpgNow.Slot slot = EpgNow.slots(schedule(program("晚间新闻", "20:00", "21:00"))).get(0);
+        assertTrue(slot.isLive(slot.startMs + 1000));
+        assertFalse(slot.isLive(slot.startMs - 1000));
+        assertFalse(slot.isLive(slot.endMs));
+        assertTrue(slot.isPlaceholder() == false);
+    }
+
+    @Test
+    public void placeholderRowsAreRecognised() {
+        EpgNow.Slot slot = EpgNow.slots(
+                schedule(program("精彩节目-暂未提供节目预告信息 --免费使用", "20:00", "21:00"))).get(0);
+        assertTrue(slot.isPlaceholder());
+    }
+
+    @Test
     public void placeholderSchedulesAreRecognised() {
         // What a real service returns for a channel it has no listing for.
         EpgSchedule fake = schedule(

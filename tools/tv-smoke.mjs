@@ -286,6 +286,8 @@ async function main() {
     const group = (live.groups || [])[0];
     const channelNames = ((group && group.channels) || []).map((c) => c.name);
     await call("GET", "/api/debug/navigate?page=live");
+    // Leave any search left over from an earlier run, so the numbered list is the group's channels.
+    await call("GET", "/api/debug/live?query=");
     await new Promise((r) => setTimeout(r, 1500));
     await key(7 + 3); // 数字键 3
     await new Promise((r) => setTimeout(r, 3000));
@@ -293,11 +295,30 @@ async function main() {
     check("number keys jump to a channel", watched.title === channelNames[2],
       `数字键 3 → ${watched.title}（列表第 3 个是 ${channelNames[2]}）`);
     await call("GET", "/api/debug/key?code=4"); // BACK leaves the live player
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 1500));
+    // Back to the page explicitly: the group row (which holds 常看) is rebuilt on render.
+    await call("GET", "/api/debug/navigate?page=live");
+    await new Promise((r) => setTimeout(r, 2500));
     const layout = (await call("GET", "/api/debug/layout")).data;
     const texts = (layout.views || []).map((v) => String(v.text || ""));
     check("watched channels are listed under 常看", texts.some((t) => t.startsWith("常看")),
       texts.filter((t) => t.startsWith("常看")).join(" / ") || "没有常看分组");
+  }
+
+  // The full-day guide (MENU on the live page): the TV must fetch it and prepare rows.
+  const guideSearch = (await call("GET", "/api/debug/live?query=CCTV13")).data.state || {};
+  if ((guideSearch.visible || 0) > 0) {
+    await call("GET", "/api/debug/key?code=82"); // MENU → 节目单
+    await new Promise((r) => setTimeout(r, 14000));
+    const logs = (await call("GET", "/api/logs")).data;
+    const rows = Array.isArray(logs) ? logs : logs.entries || [];
+    const line = rows.map((r) => r.message || "").filter((m) => m.includes("节目单结果")).pop() || "";
+    const count = Number((line.match(/→ (\d+) 条/) || [])[1] || 0);
+    check("the TV builds a full-day guide", count > 5, line || "没有节目单日志");
+    await call("GET", "/api/debug/key?code=4"); // BACK closes the dialog
+    await new Promise((r) => setTimeout(r, 1500));
+    await call("GET", "/api/debug/live?query="); // back to the plain channel list
+    await new Promise((r) => setTimeout(r, 1000));
   }
 
   // DLNA: the TV must advertise itself and accept a cast over SOAP.
