@@ -171,11 +171,31 @@ export type DramaSearchResult = {
   items: DramaItem[]
 }
 
+export type DramaEpisode = {
+  index: number
+  name: string
+  playUrl: string
+  pageUrl: string
+  headers: Record<string, string>
+  direct: boolean
+}
+
 export type DramaDetail = {
   item: DramaItem
   related: DramaItem[]
   relatedTotal: number
   relatedPartial: boolean
+  episodes: DramaEpisode[]
+  directPlayable: boolean
+  note: string
+}
+
+export type DramaPlayResult = {
+  title: string
+  url: string
+  index: number
+  episodeName: string
+  headers: Record<string, string>
 }
 
 export type DramaLine = {
@@ -212,12 +232,53 @@ export type DramaProvider = {
   enabled: boolean
   error: string
   updatedAt: number
+  categoryId: string
+  note: string
 }
 
 export type DramaProviders = {
   providers: DramaProvider[]
-  suggestedName: string
-  suggestedUrl: string
+}
+
+export type SourceProbe = {
+  id: string
+  ok: boolean
+  httpStatus: number
+  latencyMs: number
+  bytes: number
+  detail: string
+  errorCode: string
+  error: string
+  checkedAt: number
+}
+
+export type RecommendedSource = {
+  id: string
+  kind: "live" | "vod" | "drama" | string
+  group: string
+  name: string
+  url: string
+  note: string
+  categoryId: string
+  verifiedAt: string
+  added: boolean
+  probe: SourceProbe | null
+}
+
+export type RecommendedList = {
+  verifiedAt: string
+  note: string
+  items: RecommendedSource[]
+}
+
+export type LiveSourceRow = {
+  id: string
+  name: string
+  url: string
+  enabled: boolean
+  error: string
+  updatedAt: number
+  user: boolean
 }
 
 export type LiveSource = {
@@ -364,7 +425,7 @@ export const api = {
     method: "POST",
   }),
   dramaProviders: () => request<DramaProviders>("/api/drama/providers"),
-  addDramaProvider: (payload: { name?: string; url?: string; suggested?: boolean }) =>
+  addDramaProvider: (payload: { name?: string; url: string }) =>
     request<DramaProvider>("/api/drama/providers", { method: "POST", body: JSON.stringify(payload) }),
   removeDramaProvider: (id: string) => request<{ removed: boolean }>(`/api/drama/providers/${id}`, {
     method: "DELETE",
@@ -376,8 +437,37 @@ export const api = {
     }),
   dramaSearch: (payload: { providerId?: string; keyword: string }) =>
     request<DramaSearchResult>("/api/drama/search", { method: "POST", body: JSON.stringify(payload) }),
+  dramaBrowse: (payload: { providerId?: string; categoryId?: string; page?: number }) =>
+    request<DramaSearchResult>("/api/drama/browse", { method: "POST", body: JSON.stringify(payload) }),
   dramaDetail: (payload: { providerId: string; dramaId: string }) =>
     request<DramaDetail>("/api/drama/detail", { method: "POST", body: JSON.stringify(payload) }),
   dramaLines: (payload: { providerId: string; dramaId: string; sourceId?: string }) =>
     request<DramaLineResult>("/api/drama/lines", { method: "POST", body: JSON.stringify(payload) }),
+  dramaPlay: (payload: { providerId: string; dramaId: string; index: number; title?: string; poster?: string }) =>
+    request<DramaPlayResult>("/api/drama/play", { method: "POST", body: JSON.stringify(payload) }),
+  recommended: () => request<RecommendedList>("/api/recommended"),
+  verifyRecommended: (payload: { id?: string; kind?: string; all?: boolean }) =>
+    request<{ probes: SourceProbe[]; items: RecommendedSource[] }>("/api/recommended/verify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addRecommended: (payload: { id?: string; ids?: string[]; kind?: string; all?: boolean }) =>
+    request<{ added: number; items: RecommendedSource[] }>("/api/recommended/add", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  liveSourceRows: () => request<LiveSourceRow[]>("/api/live/sources"),
+  addLiveSource: (payload: { name?: string; url: string }) =>
+    request<{ id: string; name: string; url: string }>("/api/live/sources", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  removeLiveSource: (id: string) => request<{ removed: boolean }>(`/api/live/sources/${id}`, {
+    method: "DELETE",
+  }),
+  setLiveSourceEnabled: (id: string, enabled: boolean) =>
+    request<{ enabled: boolean }>(`/api/live/sources/${id}/enabled`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
 }

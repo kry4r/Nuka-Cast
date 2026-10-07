@@ -1,0 +1,284 @@
+/**
+ * Local preview server for the built control page.
+ *
+ * Serves app/src/main/assets/web and answers the API routes the UI calls with representative
+ * sample data, so the interface can be reviewed visually without a TV on the network. It is a
+ * development tool: it never runs inside the APK and its numbers are fixtures, not measurements.
+ *
+ *   node tools/preview-server.mjs [port]
+ */
+import { createServer } from "node:http"
+import { readFile, stat } from "node:fs/promises"
+import { extname, join, normalize } from "node:path"
+
+const root = new URL("../app/src/main/assets/web/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")
+const port = Number(process.argv[2] || 9978)
+const now = Date.now()
+
+const types = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+}
+
+const liveSources = [
+  { id: "a1", sourceId: "user:pl-1", name: "IPTV 综合（央视+卫视）", url: "https://cdn.jsdelivr.net/gh/bestK/iptv@main/iptv.m3u", epg: "", logo: "" },
+  { id: "b2", sourceId: "cfg:office", name: "小盒子直播", url: "http://xhztv.top/live.txt", epg: "", logo: "" },
+]
+
+const channels = (prefix, names) => names.map((name, index) => ({
+  id: `${prefix}-${index}`,
+  name,
+  epgId: name,
+  logo: "",
+  urls: ["http://example.test/live/index.m3u8"],
+  headers: {},
+}))
+
+const api = {
+  "/api/status": {
+    name: "NukaCast",
+    version: "0.3.5",
+    message: "运行中",
+    serviceState: "ready",
+    stateVersion: 42,
+    sourceCount: 3,
+    siteCount: 41,
+    contentVersion: 17,
+    webAddress: "192.168.1.24:9978",
+    activeMedia: "",
+    airPlay: {
+      state: "ready",
+      error: "",
+      port: 7000,
+      sessionActive: false,
+      clientName: "",
+      videoWidth: 1920,
+      videoHeight: 1080,
+      decoderName: "OMX.hisi.video.decoder.avc",
+      decoderSoftwareFallback: false,
+      decoderInputs: 128,
+      decoderOutputs: 127,
+      droppedFrames: 2,
+      identity: "deviceId=02:AA:BB:CC:DD:EE;name=NukaCast;model=AppleTV3,2;pi=8f2c…",
+    },
+  },
+  "/api/player": { playing: true, title: "重生2000：靠山吃山成首富 · 第1集", positionMs: 42000, durationMs: 180000, bufferedMs: 12000, speed: 1, volume: 1, url: "http://example.test/a.m3u8" },
+  "/api/device": {
+    manufacturer: "Sharp",
+    model: "SHARP-TVC",
+    product: "aosp_arm",
+    androidVersion: "4.4.2",
+    sdk: 19,
+    primaryAbi: "armeabi-v7a",
+    totalMemoryBytes: 1_500_000_000,
+    appMemoryBytes: 192_000_000,
+    displayWidth: 1920,
+    displayHeight: 1080,
+    refreshRate: 60,
+    hasHardwareAvcDecoder: true,
+    preferredAvcDecoder: "OMX.hisi.video.decoder.avc",
+    avcDecoders: ["OMX.hisi.video.decoder.avc", "OMX.google.h264.decoder"],
+    warnings: [],
+  },
+  "/api/sites": [
+    { key: "ffzy", name: "非凡资源", type: 1, sourceId: "src-1", sourceName: "PyramidStore 单仓" },
+    { key: "bfzy", name: "暴风资源", type: 1, sourceId: "src-1", sourceName: "PyramidStore 单仓" },
+  ],
+  "/api/live": liveSources,
+  "/api/live/sources": [
+    { id: "pl-1", name: "IPTV 综合（央视+卫视）", url: "https://cdn.jsdelivr.net/gh/bestK/iptv@main/iptv.m3u", enabled: true, error: "", updatedAt: now - 90000, user: true },
+    { id: "pl-2", name: "典藏版直播源（频道最全）", url: "https://gh-proxy.com/raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u", enabled: false, error: "2026-10-06 拉取超时", updatedAt: now - 400000, user: true },
+    { id: "b2", name: "小盒子直播", url: "http://xhztv.top/live.txt", enabled: true, error: "", updatedAt: 0, user: false },
+  ],
+  "/api/live/catalog": {
+    sourceId: "a1",
+    sourceName: "IPTV 综合（央视+卫视）",
+    groups: [
+      { name: "央视", channels: channels("cctv", ["CCTV-1 综合", "CCTV-2 财经", "CCTV-5 体育", "CCTV-6 电影", "CCTV-13 新闻", "CCTV-17 农业农村"]) },
+      { name: "卫视", channels: channels("sat", ["湖南卫视", "浙江卫视", "江苏卫视", "东方卫视", "北京卫视", "广东卫视", "深圳卫视", "安徽卫视"]) },
+      { name: "地方", channels: channels("loc", ["北京新闻", "上海都市", "广州综合", "成都新闻"]) },
+    ],
+  },
+  "/api/live/epg": { channel: "CCTV-1 综合", date: "2026-10-07", programs: [
+    { start: "19:00", end: "19:30", title: "新闻联播" },
+    { start: "19:30", end: "20:30", title: "焦点访谈" },
+    { start: "20:30", end: "22:00", title: "电视剧：山海情" },
+  ] },
+  "/api/sources": [
+    { id: "src-1", name: "PyramidStore 单仓", url: "https://cdn.jsdelivr.net/gh/UndCover/PyramidStore@main/py.json", kind: "single", enabled: true, error: "", searchError: "", siteCount: 23, liveCount: 1, latencyMs: 640, parentId: "" },
+    { id: "src-2", name: "小盒子多仓", url: "http://xhztv.top/dc", kind: "warehouse", enabled: true, error: "", searchError: "", siteCount: 0, liveCount: 0, latencyMs: 320, parentId: "" },
+    { id: "src-2-1", name: "🐔肥猫", url: "http://我不是.肥猫.live/接口禁止贩卖", kind: "single", enabled: true, error: "", searchError: "最近搜索全部失败", siteCount: 18, liveCount: 2, latencyMs: 1500, parentId: "src-2" },
+  ],
+  "/api/logs": [
+    { level: "INFO", tag: "片源", message: "配置刷新成功 [PyramidStore 单仓]：23 个站点", timestamp: now - 20000 },
+    { level: "WARN", tag: "短剧", message: "目录详情失败：目录 HTTP 502（api.ffzyapi.com）", timestamp: now - 60000 },
+    { level: "INFO", tag: "AirPlay", message: "接收器已发布，可被 iOS 发现，端口 7000", timestamp: now - 120000 },
+    { level: "ERROR", tag: "网页服务", message: "请求处理失败 [/api/drama/search]", timestamp: now - 180000 },
+  ],
+  "/api/diagnostics": {
+    javaCrash: "",
+    serviceState: "ready",
+    serviceMessage: "运行中",
+    deviceWarnings: [],
+    airPlay: { state: "ready", error: "", port: 7000, sessionActive: false, clientName: "", videoWidth: 1920, videoHeight: 1080, decoderName: "OMX.hisi.video.decoder.avc", decoderSoftwareFallback: false, decoderInputs: 128, decoderOutputs: 127, droppedFrames: 2, identity: "deviceId=02:AA:BB:CC:DD:EE;name=NukaCast;model=AppleTV3,2;pi=8f2c…" },
+    player: { playing: true, title: "重生2000 · 第1集", positionMs: 42000, durationMs: 180000, bufferedMs: 12000, speed: 1, volume: 1, url: "" },
+    sources: [],
+    homeErrors: [],
+    httpStack: { degraded: false, initError: "" },
+    stages: [
+      { scope: "source", subject: "PyramidStore 单仓", stage: "persist", result: "ok", startedAt: now - 9000, updatedAt: now - 8000, elapsedMs: 640, detail: "", errorCode: "", rootCauseClass: "", generation: 12 },
+      { scope: "airplay", subject: "video", stage: "first_output", result: "ok", startedAt: now - 30000, updatedAt: now - 30000, elapsedMs: 240, detail: "OMX.hisi.video.decoder.avc 1920x1080", errorCode: "", rootCauseClass: "", generation: 11 },
+      { scope: "spider", subject: "src-1|ffzy", stage: "plugin_init", result: "failed", startedAt: now - 60000, updatedAt: now - 59000, elapsedMs: 1200, detail: "dalvik verifier rejected class", errorCode: "linkage_error", rootCauseClass: "java.lang.VerifyError", generation: 10 },
+    ],
+  },
+  "/api/recommended": {
+    verifiedAt: "2026-10-07",
+    note: "均为公开可直连的源，2026-10-07 由本地实测确认可达。",
+    items: [
+      { id: "live-bestk", kind: "live", group: "直播", name: "IPTV 综合（央视+卫视）", url: "https://cdn.jsdelivr.net/gh/bestK/iptv@main/iptv.m3u", note: "540 个频道，每 6 小时自动更新，jsdelivr 镜像通常比 raw 更稳", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "live-bestk", ok: true, httpStatus: 200, latencyMs: 320, bytes: 268000, detail: "540 个频道", errorCode: "", error: "", checkedAt: now - 60000 } },
+      { id: "live-guovin", kind: "live", group: "直播", name: "IPTV API 精选（Guovin）", url: "https://gh-proxy.com/raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u", note: "473 个频道，项目每日自动检测可用性", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: { id: "live-guovin", ok: true, httpStatus: 200, latencyMs: 1180, bytes: 210000, detail: "473 个频道", errorCode: "", error: "", checkedAt: now - 120000 } },
+      { id: "live-suxuang", kind: "live", group: "直播", name: "典藏版直播源（频道最全）", url: "https://gh-proxy.com/raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u", note: "1273 个频道，含地方台与港澳台", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: { id: "live-suxuang", ok: false, httpStatus: 0, latencyMs: 25000, bytes: 0, detail: "", errorCode: "timeout", error: "read timed out", checkedAt: now - 5000 } },
+      { id: "vod-pyramid", kind: "vod", group: "点播", name: "PyramidStore 单仓", url: "https://cdn.jsdelivr.net/gh/UndCover/PyramidStore@main/py.json", note: "23 个站点 + 1 个直播源，长期维护", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "vod-pyramid", ok: true, httpStatus: 200, latencyMs: 640, bytes: 11386, detail: "23 个站点，1 个直播源", errorCode: "", error: "", checkedAt: now - 90000 } },
+      { id: "vod-noimank", kind: "vod", group: "点播", name: "多仓合集（noimank）", url: "https://gitlab.com/noimank/tvbox/-/raw/main/tvboxmuti.json", note: "多仓，内含 14 个单仓", categoryId: "", verifiedAt: "2026-10-07", added: false, probe: null },
+      { id: "drama-vote", kind: "drama", group: "短剧", name: "红果短剧榜（资料目录）", url: "https://vote.252035.xyz", note: "按剧名搜索剧目资料与相关推荐", categoryId: "", verifiedAt: "2026-10-07", added: true, probe: { id: "drama-vote", ok: true, httpStatus: 200, latencyMs: 420, bytes: 3000, detail: "共 213 条", errorCode: "", error: "", checkedAt: now - 30000 } },
+      { id: "drama-ffzy", kind: "drama", group: "短剧", name: "非凡资源·短剧", url: "https://api.ffzyapi.com/api.php/provide/vod", categoryId: "36", note: "短剧分类约 1.9 万部，直连 m3u8", verifiedAt: "2026-10-07", added: false, probe: { id: "drama-ffzy", ok: true, httpStatus: 200, latencyMs: 890, bytes: 42000, detail: "共 19874 部", errorCode: "", error: "", checkedAt: now - 45000 } },
+      { id: "drama-bfzy", kind: "drama", group: "短剧", name: "暴风资源·短剧大全", url: "https://bfzyapi.com/api.php/provide/vod", categoryId: "58", note: "短剧分类约 1.2 万部，直连 m3u8", verifiedAt: "2026-10-07", added: false, probe: null },
+    ],
+  },
+  "/api/drama/providers": {
+    providers: [
+      { id: "p-ffzy", name: "非凡资源·短剧", baseUrl: "https://api.ffzyapi.com/api.php/provide/vod", kind: "cms.drama", builtin: false, enabled: true, error: "", updatedAt: now, categoryId: "36", note: "短剧分类约 1.9 万部" },
+      { id: "p-vote", name: "红果短剧榜（资料目录）", baseUrl: "https://vote.252035.xyz", kind: "vote.catalog", builtin: true, enabled: true, error: "目录 HTTP 502", updatedAt: now - 60000, categoryId: "", note: "" },
+    ],
+  },
+  "/api/drama/search": {
+    providerId: "p-ffzy",
+    providerName: "非凡资源·短剧",
+    keyword: "重生",
+    ok: true,
+    error: "",
+    errorCode: "",
+    rootCauseClass: "",
+    total: 19874,
+    warning: "",
+    elapsedMs: 890,
+    partial: false,
+    items: Array.from({ length: 12 }).map((_, index) => ({
+      providerId: "p-ffzy",
+      dramaId: `769019266369323${3100 + index}`,
+      title: ["重生2000：靠山吃山成首富", "重生七零小辣媳第二季", "重生后我成了首富千金", "重生之我在都市当神医", "重生八零：娇妻有点甜", "重生之逆袭人生"][index % 6],
+      cover: "",
+      intro: "重回2000年，他靠着前世的记忆一路逆袭，把山货卖到了全世界。",
+      remark: `全${80 + index * 7}集`,
+      category: ["脑洞", "都市", "逆袭", "甜宠"][index % 4],
+      tags: ["短剧", "重生"],
+      episodeCount: 80 + index * 7,
+      heat: String(4317982 + index * 137),
+      status: "finished",
+      contentKind: "short_drama",
+    })),
+  },
+  "/api/drama/browse": {
+    providerId: "p-ffzy",
+    providerName: "非凡资源·短剧",
+    keyword: "",
+    ok: true,
+    error: "",
+    errorCode: "",
+    rootCauseClass: "",
+    total: 19874,
+    warning: "",
+    elapsedMs: 740,
+    partial: false,
+    items: Array.from({ length: 18 }).map((_, index) => ({
+      providerId: "p-ffzy",
+      dramaId: `769019266369323${4100 + index}`,
+      title: ["总裁的隐婚妻子", "闪婚老公是首富", "我的霸道男友", "穿书后我成了反派", "离婚后她惊艳了世界", "天才萌宝：妈咪快跑"][index % 6] + `（${index + 1}）`,
+      cover: "",
+      intro: "短剧简介",
+      remark: `全${60 + index * 5}集`,
+      category: ["都市", "甜宠", "虐恋"][index % 3],
+      tags: [],
+      episodeCount: 60 + index * 5,
+      heat: "",
+      status: "finished",
+      contentKind: "short_drama",
+    })),
+  },
+  "/api/drama/detail": {
+    item: { providerId: "p-ffzy", dramaId: "7690192663693233100", title: "重生2000：靠山吃山成首富", cover: "", intro: "重回2000年，他靠着前世的记忆一路逆袭，把山货卖到了全世界。", remark: "全115集", category: "脑洞", tags: ["脑洞", "重生", "逆袭"], episodeCount: 115, heat: "43179826", status: "finished", contentKind: "short_drama" },
+    related: Array.from({ length: 6 }).map((_, index) => ({ providerId: "p-ffzy", dramaId: `rel-${index}`, title: ["重生七零小辣媳第二季", "重生后我成了首富千金", "重生之我在都市当神医", "重生八零：娇妻有点甜", "重生之逆袭人生", "重生之最强赘婿"][index], cover: "", intro: "", remark: "", category: "", tags: [], episodeCount: 0, heat: "", status: "", contentKind: "short_drama" })),
+    relatedTotal: 6,
+    relatedPartial: false,
+    episodes: Array.from({ length: 40 }).map((_, index) => ({ index: index + 1, name: `第${String(index + 1).padStart(2, "0")}集`, playUrl: `https://cdn.example.test/${index + 1}/index.m3u8`, pageUrl: "", headers: {}, direct: true })),
+    directPlayable: true,
+    note: "",
+  },
+  "/api/drama/lines": { lines: [], searchedSites: 0, failedSites: 0, searched: false, error: "", elapsedMs: 0 },
+  "/api/storage/mounts": [
+    { id: "m1", name: "家庭 NAS", url: "http://192.168.1.8:5000", username: "media", enabled: true, error: "", itemCount: 1284, scannedAt: now - 600000 },
+  ],
+  "/api/storage/items": { items: [], total: 0 },
+}
+
+const json = (value) => JSON.stringify(value)
+
+async function serveStatic(pathname, response) {
+  const relative = pathname === "/" ? "index.html" : pathname.slice(1)
+  const target = normalize(join(root, relative))
+  if (!target.startsWith(normalize(root))) {
+    response.writeHead(403).end("forbidden")
+    return
+  }
+  try {
+    const info = await stat(target)
+    if (info.isDirectory()) throw new Error("directory")
+    const body = await readFile(target)
+    response.writeHead(200, { "content-type": types[extname(target)] || "application/octet-stream" }).end(body)
+  } catch {
+    const body = await readFile(join(root, "index.html"))
+    response.writeHead(200, { "content-type": types[".html"] }).end(body)
+  }
+}
+
+createServer(async (request, response) => {
+  const url = new URL(request.url, `http://localhost:${port}`)
+  if (url.pathname.startsWith("/api/")) {
+    const payload = api[url.pathname]
+    if (!payload) {
+      response.writeHead(404, { "content-type": "application/json" }).end(json({ error: "preview 未实现该接口" }))
+      return
+    }
+    const body = request.method === "POST" ? await readBody(request) : null
+    if (url.pathname === "/api/recommended/add" || url.pathname === "/api/recommended/verify") {
+      response.writeHead(200, { "content-type": "application/json" }).end(json({ added: 0, probes: [], items: api["/api/recommended"].items }))
+      return
+    }
+    if (url.pathname === "/api/drama/search" && body?.keyword) {
+      api["/api/drama/search"].keyword = body.keyword
+    }
+    response.writeHead(200, { "content-type": "application/json" }).end(json(payload))
+    return
+  }
+  await serveStatic(url.pathname, response)
+}).listen(port, () => {
+  console.log(`preview server: http://localhost:${port}/  (root: ${root})`)
+})
+
+function readBody(request) {
+  return new Promise((resolve) => {
+    let data = ""
+    request.on("data", (chunk) => { data += chunk })
+    request.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : null)
+      } catch {
+        resolve(null)
+      }
+    })
+  })
+}

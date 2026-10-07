@@ -28,11 +28,15 @@ import {
   Wifi,
   X,
 } from "lucide-react"
-import { api, type Device, type Diagnostics, type DramaDetail, type DramaItem, type DramaLine, type DramaLineResult, type DramaProvider, type DramaSearchResult, type EpgSchedule, type LiveCatalog, type LiveSource, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
+import { api, type Device, type Diagnostics, type DramaDetail, type DramaEpisode, type DramaItem, type DramaLine, type DramaLineResult, type DramaProvider, type DramaSearchResult, type EpgSchedule, type LiveCatalog, type LiveSource, type LiveSourceRow, type LogEntry, type LogLevel, type MediaDetail, type Player, type SearchItem, type SearchResponse, type Site, type Source, type Status, type StorageMount } from "@/lib/api"
 import { formatBytes } from "@/lib/utils"
 import { dramaFacts, lineLabel, matchLabel, missingLineHint } from "@/lib/drama"
+import { hostOf, kindTone, probeDotClass, probeState } from "@/lib/kind"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
+import { RecommendedShelf } from "@/components/source-shelf"
+import { ViewBoundary } from "@/components/view-boundary"
+import { EmptyState, PageHeader, RowSkeletons, SectionCard, Skeleton, StatusDot } from "@/components/ui/primitives"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,10 +54,33 @@ const nav: { id: View; label: string; icon: typeof Gauge }[] = [
   { id: "logs", label: "日志", icon: FileWarning },
 ]
 
+function navLabel(view: View): string {
+  return nav.find((item) => item.id === view)?.label ?? "页面"
+}
+
+const VIEW_IDS: View[] = ["overview", "search", "drama", "live", "sources", "storage", "device", "logs"]
+
+/** The current page lives in the URL hash, so a refresh or a shared link keeps the same view. */
+function viewFromHash(): View {
+  const value = window.location.hash.replace(/^#\/?/, "")
+  return (VIEW_IDS as string[]).includes(value) ? (value as View) : "overview"
+}
+
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null)
-  const [view, setView] = useState<View>("overview")
+  const [view, setView] = useState<View>(() => viewFromHash())
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    const sync = () => setView(viewFromHash())
+    window.addEventListener("hashchange", sync)
+    return () => window.removeEventListener("hashchange", sync)
+  }, [])
+
+  const navigate = useCallback((next: View) => {
+    setView(next)
+    if (window.location.hash !== `#/${next}`) window.location.hash = `#/${next}`
+  }, [])
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -70,62 +97,75 @@ export default function App() {
   }, [refreshStatus])
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[220px_1fr]">
-      <aside className="border-b bg-card lg:fixed lg:inset-y-0 lg:w-[220px] lg:border-b-0 lg:border-r">
-        <div className="flex h-16 items-center gap-3 px-4 lg:h-20">
-          <div className="grid size-9 place-items-center rounded-md border bg-background text-primary"><Cast className="size-5" /></div>
+    <div className="min-h-screen lg:grid lg:grid-cols-[236px_1fr]">
+      <aside className="border-b bg-card/50 backdrop-blur lg:fixed lg:inset-y-0 lg:flex lg:w-[236px] lg:flex-col lg:border-b-0 lg:border-r">
+        <div className="flex h-16 items-center gap-3 px-4 lg:h-auto lg:py-5">
+          <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-violet-600 text-white shadow-lg shadow-sky-950/40">
+            <Cast className="size-5" />
+          </div>
           <div className="min-w-0">
-            <div className="truncate text-base font-semibold">NukaCast</div>
+            <div className="truncate text-base font-semibold tracking-tight">NukaCast</div>
             <div className="truncate text-xs text-muted-foreground">{status?.message || "连接中"}</div>
           </div>
         </div>
-        <nav className="flex gap-1 overflow-x-auto px-2 pb-3 lg:block lg:space-y-1 lg:px-3">
+        <nav className="flex gap-1 overflow-x-auto px-2 pb-3 lg:flex-1 lg:block lg:space-y-0.5 lg:px-2 lg:pb-0">
           {nav.map((item) => {
             const Icon = item.icon
+            const active = view === item.id
             return (
-              <Button key={item.id} variant={view === item.id ? "secondary" : "ghost"}
-                className="shrink-0 justify-start lg:w-full" onClick={() => setView(item.id)}>
-                <Icon />{item.label}
-              </Button>
+              <button key={item.id} type="button" onClick={() => navigate(item.id)}
+                className={`group flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring lg:w-full ${active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"}`}>
+                <Icon className="size-4" />
+                <span className="truncate">{item.label}</span>
+                {active && <span className="ml-auto hidden size-1.5 rounded-full bg-foreground lg:block" />}
+              </button>
             )
           })}
         </nav>
-        <div className="hidden px-4 lg:absolute lg:bottom-5 lg:block lg:w-full">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={`size-2 rounded-full ${status?.serviceState === "ready" ? "bg-foreground" : "bg-destructive"}`} />
-            {status?.webAddress || "局域网服务"}
+        <div className="hidden p-3 lg:block">
+          <div className="space-y-1 rounded-xl border bg-background/60 p-3 text-xs">
+            <div className="flex items-center gap-2 font-medium">
+              <span className={`size-2 rounded-full ${status?.serviceState === "ready" ? "bg-emerald-400" : "bg-rose-400"}`} />
+              {status?.serviceState === "ready" ? "服务已就绪" : "服务未就绪"}
+            </div>
+            <div className="truncate text-muted-foreground">{status?.webAddress || "局域网服务"}</div>
+            <div className="text-muted-foreground">v{status?.version || "-"}</div>
           </div>
         </div>
       </aside>
 
       <main className="min-w-0 px-4 py-5 sm:px-6 lg:col-start-2 lg:px-8 lg:py-7">
         <div className="mx-auto max-w-[1600px]">
-        {error && (
-          <div className="mb-4 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            <CircleAlert className="size-4" />{error}
-            <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setError("")}>关闭</Button>
-          </div>
-        )}
-        {view === "overview" && <Overview status={status} onStatusChanged={refreshStatus} setError={setError} />}
-        {view === "search" && <SearchView sourceVersion={status?.stateVersion ?? 0} setError={setError} />}
-        {view === "drama" && <DramaView setError={setError} />}
-        {view === "live" && <LiveView contentVersion={status?.contentVersion ?? 0} setError={setError} />}
-        {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
-        {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
-        {view === "device" && <DeviceView setError={setError} />}
-        {view === "logs" && <LogView setError={setError} />}
+          {error && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <CircleAlert className="size-4 shrink-0" />{error}
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setError("")}>关闭</Button>
+            </div>
+          )}
+          <ViewBoundary name={navLabel(view)}>
+            {view === "overview" && <Overview status={status} onNavigate={navigate} onStatusChanged={refreshStatus} setError={setError} />}
+            {view === "search" && <SearchView sourceVersion={status?.stateVersion ?? 0} setError={setError} />}
+            {view === "drama" && <DramaView setError={setError} />}
+            {view === "live" && <LiveView contentVersion={status?.contentVersion ?? 0} setError={setError} />}
+            {view === "sources" && <SourcesView contentVersion={status?.contentVersion ?? 0} onChanged={refreshStatus} setError={setError} />}
+            {view === "storage" && <StorageView onChanged={refreshStatus} setError={setError} />}
+            {view === "device" && <DeviceView setError={setError} />}
+            {view === "logs" && <LogView setError={setError} />}
+          </ViewBoundary>
         </div>
       </main>
     </div>
   )
 }
 
-function PageHeader({ title, action }: { title: string; action?: React.ReactNode }) {
-  return <header className="mb-5 flex min-h-10 items-center justify-between gap-3"><h1 className="text-xl font-semibold sm:text-2xl">{title}</h1>{action}</header>
-}
-
-function Overview({ status, onStatusChanged, setError }: { status: Status | null; onStatusChanged: () => Promise<void>; setError: (value: string) => void }) {
+function Overview({ status, onNavigate, onStatusChanged, setError }: {
+  status: Status | null
+  onNavigate: (view: View) => void
+  onStatusChanged: () => Promise<void>
+  setError: (value: string) => void
+}) {
   const [player, setPlayer] = useState<Player | null>(null)
+  const [logs, setLogs] = useState<LogEntry[]>([])
   const [disconnecting, setDisconnecting] = useState(false)
 
   const refresh = useCallback(() => api.player().then(setPlayer).catch((reason) => setError(message(reason))), [setError])
@@ -135,8 +175,19 @@ function Overview({ status, onStatusChanged, setError }: { status: Status | null
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  useEffect(() => {
+    const load = () => api.logs().then((entries) => setLogs(entries.slice(-6).reverse())).catch(() => {})
+    load()
+    const timer = window.setInterval(load, 6000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const control = async (action: string, offsetMs?: number) => {
-    try { setPlayer(await api.control({ action, offsetMs })) } catch (reason) { setError(message(reason)) }
+    try {
+      setPlayer(await api.control({ action, offsetMs }))
+    } catch (reason) {
+      setError(message(reason))
+    }
   }
 
   const disconnectAirPlay = async () => {
@@ -151,37 +202,67 @@ function Overview({ status, onStatusChanged, setError }: { status: Status | null
     }
   }
 
+  const airPlay = status?.airPlay
+  const shortcuts: { view: View; label: string; hint: string; icon: typeof Gauge }[] = [
+    { view: "search", label: "影视搜索", hint: `${status?.siteCount ?? 0} 个站点可用`, icon: Film },
+    { view: "drama", label: "短剧", hint: "目录搜索与直连播放", icon: Clapperboard },
+    { view: "live", label: "直播", hint: "IPTV 清单与节目单", icon: Radio },
+    { view: "sources", label: "源管理", hint: `${status?.sourceCount ?? 0} 个配置`, icon: Library },
+  ]
+
   return (
     <>
-      <PageHeader title="控制中心" action={<Badge variant={status?.serviceState === "ready" ? "secondary" : "destructive"}>{status?.message || "连接中"}</Badge>} />
-      <section className="panel flex min-h-40 flex-col justify-between gap-6 p-5 sm:flex-row sm:items-center sm:p-6">
-        <div className="flex min-w-0 items-center gap-4">
-          <div className="grid size-12 shrink-0 place-items-center rounded-md bg-primary text-primary-foreground"><Airplay className="size-6" /></div>
-          <div className="min-w-0">
-            <div className="text-xs font-medium text-muted-foreground">AIRPLAY</div>
-            <h2 className="mt-1 truncate text-2xl font-semibold">{status?.airPlay?.sessionActive ? "正在镜像" : status?.airPlayName || "NukaCast"}</h2>
-            {status?.airPlay?.error && <div className="mt-2 text-sm text-destructive">{status.airPlay.error}</div>}
+      <PageHeader
+        title="控制中心"
+        subtitle={status?.webAddress ? `在同一局域网用浏览器打开 ${status.webAddress.replace(/^https?:\/\//, "")} 即可控制这台电视。` : "正在连接本机服务…"}
+        badges={<Badge variant={status?.serviceState === "ready" ? "secondary" : "destructive"}>{status?.message || "连接中"}</Badge>}
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <SectionCard
+          title="AirPlay 投屏"
+          description="iPhone / iPad 控制中心里选择“屏幕镜像”即可看到 NukaCast。"
+          badges={airPlay?.sessionActive
+            ? <Badge variant="secondary">正在镜像{status?.activeMedia && status.activeMedia !== "AirPlay 镜像" ? ` · ${status.activeMedia}` : ""}</Badge>
+            : <Badge variant="outline">等待设备</Badge>}
+          action={airPlay?.sessionActive
+            ? <Button variant="outline" size="sm" disabled={disconnecting} onClick={disconnectAirPlay}>
+                {disconnecting ? <LoaderCircle className="animate-spin" /> : <Square />}退出投屏
+              </Button>
+            : undefined}
+        >
+          <div className="flex items-start gap-4">
+            <div className="grid size-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-violet-600 text-white">
+              <Airplay className="size-6" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-lg font-semibold">
+                {airPlay?.sessionActive ? "正在镜像" : "NukaCast 已就绪"}
+              </h2>
+              {airPlay?.error
+                ? <div className="mt-2 flex items-start gap-2 text-sm text-rose-300"><CircleAlert className="mt-0.5 size-4 shrink-0" />{airPlay.error}</div>
+                : <p className="mt-1 text-sm text-muted-foreground">
+                    {airPlay?.state === "waiting_network" ? "等待可用局域网…" : `接收端口 ${airPlay?.port || "-"} · 设备能力可在“设备”页查看`}
+                  </p>}
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Badge variant="outline">{airPlay?.decoderSoftwareFallback ? "软件解码" : "硬解优先"}</Badge>
+                {airPlay?.decoderName && <Badge variant="outline" className="max-w-64 truncate">{airPlay.decoderName}</Badge>}
+                {(airPlay?.decoderInputs ?? 0) > 0 && <Badge variant="outline">输入 {airPlay?.decoderInputs} / 输出 {airPlay?.decoderOutputs}</Badge>}
+                {airPlay?.videoWidth ? <Badge variant="outline">{airPlay.videoWidth}×{airPlay.videoHeight}</Badge> : null}
+              </div>
+            </div>
           </div>
-        </div>
-        {status?.airPlay?.sessionActive
-          ? <Button variant="outline" disabled={disconnecting} onClick={disconnectAirPlay}>{disconnecting ? <LoaderCircle className="animate-spin" /> : <Square />}退出投屏</Button>
-          : <Badge variant="outline">等待设备</Badge>}
-      </section>
+        </SectionCard>
 
-      <section className="mt-4 grid divide-y rounded-md border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        <OverviewFact icon={Wifi} label="控制地址" value={status?.webAddress?.replace(/^https?:\/\//, "") || "-"} />
-        <OverviewFact icon={Server} label="片源" value={`${status?.sourceCount ?? 0} 个配置 · ${status?.siteCount ?? 0} 个站点`} />
-        <OverviewFact icon={Film} label="播放状态" value={status?.activeMedia || "空闲"} />
-      </section>
-
-      <section className="mt-6 border-t pt-5">
-        <div className="mb-3 flex items-center justify-between"><h2 className="section-title">播放器</h2><Badge variant="outline">{player?.state || "idle"}</Badge></div>
-        <div className="panel flex min-h-28 flex-col justify-between gap-4 p-4 sm:flex-row sm:items-center">
+        <SectionCard
+          title="播放器"
+          badges={<Badge variant="outline">{player?.playing ? "播放中" : "空闲"}</Badge>}
+        >
           <div className="min-w-0">
             <div className="truncate font-medium">{player?.title || "未播放"}</div>
             <div className="mt-1 truncate text-xs text-muted-foreground">{player?.url || "-"}</div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button variant="outline" size="icon" title="后退 10 秒" onClick={() => control("seek", -10000)}><SkipBack /></Button>
             <Button size="icon" title={player?.playing ? "暂停" : "播放"} onClick={() => control("toggle")}>
               {player?.playing ? <Pause /> : <Play />}
@@ -189,10 +270,67 @@ function Overview({ status, onStatusChanged, setError }: { status: Status | null
             <Button variant="outline" size="icon" title="前进 30 秒" onClick={() => control("seek", 30000)}><SkipForward /></Button>
             <Button variant="outline" size="icon" title="停止" onClick={() => control("stop")}><Square /></Button>
           </div>
-        </div>
-      </section>
+        </SectionCard>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <OverviewFact icon={Wifi} label="控制地址" value={status?.webAddress?.replace(/^https?:\/\//, "") || "-"} />
+        <OverviewFact icon={Server} label="片源" value={`${status?.sourceCount ?? 0} 个配置 · ${status?.siteCount ?? 0} 个站点`} />
+        <OverviewFact icon={Film} label="当前播放" value={status?.activeMedia || "空闲"} />
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {shortcuts.map((shortcut) => {
+          const Icon = shortcut.icon
+          return (
+            <button key={shortcut.view} type="button" onClick={() => onNavigate(shortcut.view)}
+              className="group flex items-center gap-3 rounded-xl border bg-card/40 px-4 py-3 text-left outline-none transition hover:border-foreground/20 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg border bg-background/60 text-muted-foreground transition group-hover:text-foreground">
+                <Icon className="size-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">{shortcut.label}</span>
+                <span className="block truncate text-xs text-muted-foreground">{shortcut.hint}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      <SectionCard
+        className="mt-4"
+        title="最近动态"
+        badges={<Badge variant="outline">{logs.length}</Badge>}
+        action={<Button variant="ghost" size="sm" onClick={() => onNavigate("logs")}>全部日志</Button>}
+      >
+        {logs.length === 0
+          ? <p className="text-sm text-muted-foreground">还没有日志。刷新片源或投屏后这里会显示最近记录。</p>
+          : (
+            <div className="space-y-1.5">
+              {logs.map((entry, index) => (
+                <div key={`${entry.timestamp}-${index}`} className="flex items-start gap-3 text-sm">
+                  <span className={`mt-1.5 size-2 shrink-0 rounded-full ${levelDot(entry.level)}`} />
+                  <span className="w-16 shrink-0 text-xs text-muted-foreground">{clockOf(entry.timestamp)}</span>
+                  <span className="w-20 shrink-0 truncate text-xs text-muted-foreground">{entry.component}</span>
+                  <span className="min-w-0 flex-1 break-words">{entry.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+      </SectionCard>
     </>
   )
+}
+
+function levelDot(level: LogLevel): string {
+  if (level === "ERROR") return "bg-rose-400"
+  if (level === "WARN") return "bg-amber-400"
+  return "bg-emerald-400/70"
+}
+
+function clockOf(timestamp: number): string {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`
 }
 
 function OverviewFact({ icon: Icon, label, value }: { icon: typeof Gauge; label: string; value: string }) {
@@ -415,42 +553,68 @@ function PlaySources({ detail, title, setError }: { detail: MediaDetail; title: 
  */
 function DramaView({ setError }: { setError: (value: string) => void }) {
   const [providers, setProviders] = useState<DramaProvider[]>([])
-  const [suggested, setSuggested] = useState({ name: "", url: "" })
+  const [providerId, setProviderId] = useState("")
   const [keyword, setKeyword] = useState("")
   const [result, setResult] = useState<DramaSearchResult | null>(null)
+  const [mode, setMode] = useState<"search" | "browse">("search")
+  const [page, setPage] = useState(1)
   const [busy, setBusy] = useState(false)
   const [detail, setDetail] = useState<DramaDetail | null>(null)
   const [detailBusy, setDetailBusy] = useState(false)
-  const [showCustom, setShowCustom] = useState(false)
+  const [showSources, setShowSources] = useState(false)
   const [customName, setCustomName] = useState("")
   const [customUrl, setCustomUrl] = useState("")
   const [providerBusy, setProviderBusy] = useState(false)
-  const requestGate = useMemo(() => createLatestRequestGate(), [])
+  const gate = useMemo(() => createLatestRequestGate(), [])
 
-  const loadProviders = useCallback(() => api.dramaProviders().then((data) => {
+  const load = useCallback(() => api.dramaProviders().then((data) => {
     setProviders(data.providers)
-    setSuggested({ name: data.suggestedName, url: data.suggestedUrl })
+    setProviderId((current) => {
+      if (current && data.providers.some((provider) => provider.id === current && provider.enabled)) return current
+      const enabled = data.providers.find((provider) => provider.enabled)
+      return enabled ? enabled.id : ""
+    })
   }).catch((reason) => setError(message(reason))), [setError])
 
-  useEffect(() => { void loadProviders() }, [loadProviders])
+  useEffect(() => { void load() }, [load])
 
   const enabled = providers.filter((provider) => provider.enabled)
-  const hasSuggested = providers.some((provider) => provider.baseUrl === suggested.url)
+  const active = providers.find((provider) => provider.id === providerId) ?? null
+  const canBrowse = !!active && active.kind === "cms.drama"
 
   async function search(event?: FormEvent) {
     event?.preventDefault()
-    if (!keyword.trim() || enabled.length === 0) return
-    const request = requestGate.begin()
+    if (!keyword.trim() || !providerId) return
+    const request = gate.begin()
     setBusy(true)
+    setMode("search")
     try {
-      const next = await api.dramaSearch({ providerId: enabled[0].id, keyword: keyword.trim() })
-      if (!requestGate.isLatest(request)) return
+      const next = await api.dramaSearch({ providerId, keyword: keyword.trim() })
+      if (!gate.isLatest(request)) return
       setResult(next)
       if (!next.ok) setError(next.error || "短剧搜索失败")
     } catch (reason) {
-      if (requestGate.isLatest(request)) setError(message(reason))
+      if (gate.isLatest(request)) setError(message(reason))
     } finally {
-      if (requestGate.isLatest(request)) setBusy(false)
+      if (gate.isLatest(request)) setBusy(false)
+    }
+  }
+
+  async function browse(nextPage = 1) {
+    if (!providerId) return
+    const request = gate.begin()
+    setBusy(true)
+    setMode("browse")
+    setPage(nextPage)
+    try {
+      const next = await api.dramaBrowse({ providerId, page: nextPage })
+      if (!gate.isLatest(request)) return
+      setResult(next)
+      if (!next.ok) setError(next.error || "分类浏览失败")
+    } catch (reason) {
+      if (gate.isLatest(request)) setError(message(reason))
+    } finally {
+      if (gate.isLatest(request)) setBusy(false)
     }
   }
 
@@ -458,7 +622,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
     setDetailBusy(true)
     setDetail(null)
     try {
-      setDetail(await api.dramaDetail({ providerId: item.providerId, dramaId: item.dramaId }))
+      setDetail(await api.dramaDetail({ providerId: item.providerId || providerId, dramaId: item.dramaId }))
     } catch (reason) {
       setError(message(reason))
     } finally {
@@ -470,7 +634,7 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
     setProviderBusy(true)
     try {
       await action()
-      await loadProviders()
+      await load()
     } catch (reason) {
       setError(message(reason))
     } finally {
@@ -478,66 +642,147 @@ function DramaView({ setError }: { setError: (value: string) => void }) {
     }
   }
 
-  async function addCustom(event: FormEvent) {
-    event.preventDefault()
-    await runProviderAction(async () => {
-      await api.addDramaProvider({ name: customName, url: customUrl })
-      setCustomName("")
-      setCustomUrl("")
-      setShowCustom(false)
-    })
-  }
-
   return (
     <>
-      <PageHeader title="短剧目录" action={<Badge variant={enabled.length ? "secondary" : "destructive"}>{enabled.length ? `${enabled.length} 个目录` : "未启用目录"}</Badge>} />
+      <PageHeader
+        title="短剧"
+        subtitle="资料目录负责找剧，CMS 直连目录直接给出剧集地址：添加后在网页或电视上点一集即可播放。"
+        badges={<Badge variant={enabled.length ? "secondary" : "destructive"}>{enabled.length ? `${enabled.length} 个目录已启用` : "未启用目录"}</Badge>}
+        action={<Button variant="outline" size="sm" onClick={() => setShowSources(!showSources)}><Library className="size-4" />目录管理</Button>}
+      />
 
-      <section className="border-y py-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {providers.map((provider) => (
-            <div key={provider.id} className="flex items-center gap-1 rounded-md border bg-card px-2 py-1">
-              <Clapperboard className="size-4 text-muted-foreground" />
-              <span className="max-w-48 truncate text-sm font-medium">{provider.name}</span>
-              <span className="hidden max-w-56 truncate text-xs text-muted-foreground sm:inline">{provider.baseUrl.replace(/^https?:\/\//, "")}</span>
-              {provider.error && <Badge variant="destructive">异常</Badge>}
-              <Button variant="ghost" size="sm" disabled={providerBusy} onClick={() => runProviderAction(() => api.setDramaProviderEnabled(provider.id, !provider.enabled))}>{provider.enabled ? "停用" : "启用"}</Button>
-              <Button variant="ghost" size="icon" title="删除目录" disabled={providerBusy} onClick={() => runProviderAction(() => api.removeDramaProvider(provider.id))}><Trash2 /></Button>
+      <div className="space-y-4">
+        <RecommendedShelf
+          kind="drama"
+          title="推荐短剧源"
+          description="内置清单挑了直连 m3u8 的短剧资源站，以及红果短剧榜用于按剧名搜剧。检测按钮会用本机网络重新确认一次。"
+          onChanged={load}
+          setError={setError}
+        />
+
+        {showSources && (
+          <SectionCard
+            title="短剧目录"
+            description="资料目录（vote）只提供剧名与简介，播放需要片源线路；CMS 直连目录自带剧集地址。"
+            badges={<Badge variant="outline">{providers.length}</Badge>}
+            action={<Button variant="ghost" size="sm" onClick={() => setShowSources(false)}><X className="size-4" />收起</Button>}
+          >
+            <div className="space-y-2">
+              {providers.map((provider) => (
+                <div key={provider.id} className="flex flex-wrap items-center gap-3 rounded-lg border bg-background/40 p-3">
+                  <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs ${kindTone(provider.kind === "cms.drama" ? "drama" : "vod").badge}`}>
+                    {provider.kind === "cms.drama" ? "CMS 直连" : "资料目录"}
+                  </span>
+                  <div className="min-w-[200px] flex-1">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      {provider.name}
+                      {!provider.enabled && <Badge variant="outline">已停用</Badge>}
+                      {provider.error && <Badge variant="destructive">异常</Badge>}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {hostOf(provider.baseUrl)}{provider.categoryId ? ` · 分类 ${provider.categoryId}` : ""}
+                    </div>
+                    {provider.error && <div className="mt-1 text-xs text-rose-300">{provider.error}</div>}
+                  </div>
+                  <Button variant="ghost" size="sm" disabled={providerBusy}
+                    onClick={() => runProviderAction(() => api.setDramaProviderEnabled(provider.id, !provider.enabled))}>
+                    {provider.enabled ? "停用" : "启用"}
+                  </Button>
+                  <Button variant="ghost" size="icon" title="删除" disabled={providerBusy}
+                    onClick={() => runProviderAction(() => api.removeDramaProvider(provider.id))}>
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              {providers.length === 0 && (
+                <EmptyState icon={Clapperboard} title="还没有短剧目录" hint="用上面的推荐源一键添加，或在下面粘贴一个自定义地址。" />
+              )}
+              <form className="grid gap-2 pt-2 sm:grid-cols-[200px_1fr_auto]"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void runProviderAction(async () => {
+                    await api.addDramaProvider({ name: customName, url: customUrl })
+                    setCustomName("")
+                    setCustomUrl("")
+                  })
+                }}>
+                <Input value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="名称（可选）" />
+                <Input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="短剧站地址，或 …/api.php/provide/vod" />
+                <Button disabled={providerBusy || !customUrl.trim()}>{providerBusy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
+              </form>
             </div>
-          ))}
-          {providers.length === 0 && <span className="text-sm text-muted-foreground">还没有短剧目录。目录只提供剧目资料，播放仍需“源管理”里的片源。</span>}
-          {!hasSuggested && <Button variant="outline" size="sm" disabled={providerBusy} onClick={() => runProviderAction(() => api.addDramaProvider({ suggested: true }))}><Plus />添加内置目录</Button>}
-          <Button variant="ghost" size="sm" onClick={() => setShowCustom(!showCustom)}><Settings2 />自定义目录</Button>
-        </div>
-        {showCustom && (
-          <form onSubmit={addCustom} className="mt-3 grid gap-2 sm:grid-cols-[200px_1fr_auto]">
-            <Input value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="名称（可选）" />
-            <Input value={customUrl} onChange={(event) => setCustomUrl(event.target.value)} placeholder="https://...（目录站点根地址）" />
-            <Button disabled={providerBusy || !customUrl.trim()}>{providerBusy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
-          </form>
+          </SectionCard>
         )}
-        {providers.some((provider) => provider.error) && <div className="mt-2 text-xs text-destructive">{providers.filter((provider) => provider.error).map((provider) => `${provider.name}：${provider.error}`).join("；")}</div>}
-      </section>
 
-      <form onSubmit={search} className="mt-5 grid gap-2 border-b pb-4 sm:grid-cols-[1fr_auto]">
-        <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="输入短剧名，如：重生" className="h-10" />
-        <Button className="h-10" disabled={busy || !keyword.trim() || enabled.length === 0}>{busy ? <LoaderCircle className="animate-spin" /> : <Search />}搜索短剧</Button>
-      </form>
+        <SectionCard
+          title="查找剧集"
+          description={active
+            ? `${active.name} · ${active.kind === "cms.drama" ? "支持分类浏览与直接播放" : "按剧名搜索剧目资料"}`
+            : "先添加并启用一个短剧目录"}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {providers.map((provider) => (
+              <button key={provider.id} type="button" disabled={!provider.enabled} onClick={() => setProviderId(provider.id)}
+                className={`rounded-full border px-3 py-1 text-xs outline-none transition focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 ${providerId === provider.id ? "border-foreground/30 bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"}`}>
+                {provider.name}
+              </button>
+            ))}
+          </div>
 
-      {result && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant="outline">{result.items.length} 条{result.total >= 0 ? ` / 共 ${result.total}` : ""}</Badge>
-          <span>{result.elapsedMs} ms</span>
-          {result.warning && <span className="text-destructive">{result.warning}</span>}
-          {result.partial && <span className="text-destructive">结果可能不完整</span>}
+          <form onSubmit={search} className="mt-3 flex flex-wrap gap-2">
+            <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="输入短剧名，如：重生" className="h-10 min-w-[220px] flex-1" />
+            <Button className="h-10" disabled={busy || !keyword.trim() || !providerId}>
+              {busy && mode === "search" ? <LoaderCircle className="animate-spin" /> : <Search />}搜索
+            </Button>
+            <Button type="button" variant="outline" className="h-10" disabled={busy || !canBrowse}
+              title={canBrowse ? "浏览该站短剧分类" : "该目录不支持分类浏览"} onClick={() => browse(1)}>
+              {busy && mode === "browse" ? <LoaderCircle className="animate-spin" /> : <Clapperboard />}分类浏览
+            </Button>
+          </form>
+
+          {result && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant="outline">{result.items.length} 条{result.total >= 0 ? ` / 共 ${result.total}` : ""}</Badge>
+              <span>{result.elapsedMs} ms</span>
+              {result.warning && <span className="text-rose-300">{result.warning}</span>}
+              {result.partial && <span className="text-rose-300">结果可能不完整</span>}
+              {mode === "browse" && (
+                <span className="flex items-center gap-1">
+                  <Button variant="ghost" size="sm" disabled={busy || page <= 1} onClick={() => browse(page - 1)}>上一页</Button>
+                  <span>第 {page} 页</span>
+                  <Button variant="ghost" size="sm" disabled={busy || result.items.length === 0} onClick={() => browse(page + 1)}>下一页</Button>
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
+            {busy && !result && Array.from({ length: 8 }).map((_, index) => (
+              <div key={index} className="space-y-2">
+                <Skeleton className="aspect-[2/3] w-full" />
+                <Skeleton className="h-4 w-4/5" />
+              </div>
+            ))}
+            {result?.items.map((item) => (
+              <DramaCard key={`${item.providerId}-${item.dramaId}`} item={item} onClick={() => openDetail(item)} />
+            ))}
+          </div>
+
+          {!busy && result && result.items.length === 0 && (
+            <EmptyState icon={Clapperboard} title="没有匹配的短剧" hint="换个关键词，或切换到另一个目录再试。" />
+          )}
+          {!result && !busy && (
+            <EmptyState icon={Clapperboard} title={providerId ? "搜索或浏览短剧" : "先添加并启用一个短剧目录"}
+              hint={providerId ? "CMS 直连目录可以直接在播放器里播放，无需再匹配片源线路。" : undefined} />
+          )}
+        </SectionCard>
+      </div>
+
+      {detailBusy && (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-background/80">
+          <LoaderCircle className="size-8 animate-spin text-primary" />
         </div>
       )}
-
-      <section className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8">
-        {result?.items.map((item) => <DramaCard key={`${item.providerId}-${item.dramaId}`} item={item} onClick={() => openDetail(item)} />)}
-      </section>
-      {result && result.items.length === 0 && <Empty icon={Clapperboard} label={keyword.trim() ? "没有匹配的短剧" : "输入剧名开始搜索"} />}
-      {!result && <Empty icon={Clapperboard} label={enabled.length === 0 ? "先添加并启用一个短剧目录" : "输入剧名开始搜索"} />}
-      {detailBusy && <div className="fixed inset-0 z-40 grid place-items-center bg-background/80"><LoaderCircle className="size-8 animate-spin text-primary" /></div>}
       {detail && <DramaDialog detail={detail} onSwitch={openDetail} onClose={() => setDetail(null)} setError={setError} />}
     </>
   )
@@ -547,25 +792,43 @@ function DramaCard({ item, onClick }: { item: DramaItem; onClick: () => void }) 
   const [failed, setFailed] = useState(false)
   const facts = dramaFacts(item)
   return (
-    <button type="button" onClick={onClick} className="group min-w-0 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-      <div className="aspect-[2/3] overflow-hidden rounded-md border bg-muted">
-        {!failed && item.cover ? <img src={item.cover} alt="" className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" loading="lazy" onError={() => setFailed(true)} /> : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-8" /></div>}
+    <button type="button" onClick={onClick}
+      className="group min-w-0 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
+      <div className="relative aspect-[2/3] overflow-hidden rounded-xl border bg-muted">
+        {!failed && item.cover
+          ? <img src={item.cover} alt="" loading="lazy" onError={() => setFailed(true)}
+              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]" />
+          : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-8" /></div>}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background/90 to-transparent p-2 pt-8">
+          <div className="flex items-center gap-1">
+            {item.episodeCount > 0 && <Badge variant="secondary">{item.episodeCount} 集</Badge>}
+            {item.category && <Badge variant="outline">{item.category}</Badge>}
+          </div>
+        </div>
       </div>
       <h3 className="mt-2 truncate text-sm font-medium">{item.title}</h3>
-      <div className="mt-1 flex items-center justify-between gap-1 text-xs text-muted-foreground"><span className="truncate">{item.remark || facts[0] || "- "}</span><span className="shrink-0">{item.category}</span></div>
+      <div className="mt-0.5 truncate text-xs text-muted-foreground">{item.remark || facts[0] || "短剧"}</div>
     </button>
   )
 }
 
-function DramaDialog({ detail, onSwitch, onClose, setError }: { detail: DramaDetail; onSwitch: (item: DramaItem) => void; onClose: () => void; setError: (value: string) => void }) {
+function DramaDialog({ detail, onSwitch, onClose, setError }: {
+  detail: DramaDetail
+  onSwitch: (item: DramaItem) => void
+  onClose: () => void
+  setError: (value: string) => void
+}) {
   const item = detail.item
   const [lines, setLines] = useState<DramaLineResult | null>(null)
   const [linesBusy, setLinesBusy] = useState(false)
+  const [showLines, setShowLines] = useState(!detail.directPlayable)
   const [selected, setSelected] = useState<{ line: DramaLine; media: MediaDetail } | null>(null)
   const [posterFailed, setPosterFailed] = useState(false)
+  const [playing, setPlaying] = useState(0)
 
   async function findLines() {
     setLinesBusy(true)
+    setShowLines(true)
     try {
       setLines(await api.dramaLines({ providerId: item.providerId, dramaId: item.dramaId }))
     } catch (reason) {
@@ -587,54 +850,134 @@ function DramaDialog({ detail, onSwitch, onClose, setError }: { detail: DramaDet
     }
   }
 
+  async function play(episode: DramaEpisode) {
+    setPlaying(episode.index)
+    try {
+      await api.dramaPlay({
+        providerId: item.providerId,
+        dramaId: item.dramaId,
+        index: episode.index,
+        title: item.title,
+        poster: item.cover,
+      })
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setPlaying(0)
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-xs sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
-      <div className="mx-auto min-h-full max-w-5xl border bg-background shadow-xl">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-background/90 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true" aria-label={item.title}>
+      <div className="mx-auto min-h-full max-w-5xl overflow-hidden rounded-2xl border bg-background shadow-2xl">
         <header className="sticky top-0 z-10 flex min-h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
-          <div className="min-w-0 flex-1"><h2 className="truncate text-lg font-semibold">{item.title}</h2><div className="text-xs text-muted-foreground">短剧目录 · ID {item.dramaId}</div></div>
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-lg font-semibold">{item.title}</h2>
+            <div className="truncate text-xs text-muted-foreground">ID {item.dramaId}</div>
+          </div>
           <Button variant="ghost" size="icon" title="关闭" onClick={onClose}><X /></Button>
         </header>
         <div className="grid gap-6 p-4 md:grid-cols-[190px_1fr] md:p-6">
           <div>
-            <div className="aspect-[2/3] overflow-hidden rounded-md border bg-muted">
-              {!posterFailed && item.cover ? <img src={item.cover} alt="" className="h-full w-full object-cover" onError={() => setPosterFailed(true)} /> : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-10" /></div>}
+            <div className="aspect-[2/3] overflow-hidden rounded-xl border bg-muted">
+              {!posterFailed && item.cover
+                ? <img src={item.cover} alt="" className="h-full w-full object-cover" onError={() => setPosterFailed(true)} />
+                : <div className="grid h-full place-items-center text-muted-foreground"><Clapperboard className="size-10" /></div>}
             </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">{dramaFacts(item).map((fact) => <Badge key={fact} variant="outline">{fact}</Badge>)}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {dramaFacts(item).map((fact) => <Badge key={fact} variant="outline">{fact}</Badge>)}
+            </div>
           </div>
           <div className="min-w-0">
-            {item.tags.length > 0 && <div className="flex flex-wrap gap-1.5">{item.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}</div>}
-            {item.intro && <p className="mt-4 max-h-28 overflow-y-auto border-y py-3 text-sm leading-6 text-muted-foreground">{item.intro}</p>}
+            {item.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">{item.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}</div>
+            )}
+            {item.intro && (
+              <p className="mt-4 max-h-28 overflow-y-auto rounded-lg border bg-card/40 p-3 text-sm leading-6 text-muted-foreground">{item.intro}</p>
+            )}
 
-            <section className="mt-5">
-              <div className="mb-2 flex items-center gap-2"><h3 className="section-title">播放线路</h3>{lines && <Badge variant="secondary">{lines.lines.length}</Badge>}</div>
-              <div className="text-xs text-muted-foreground">播放线路来自“源管理”里已启用的片源，按片名匹配。请确认条目后再播放。</div>
-              {!lines && <Button className="mt-3" variant="outline" disabled={linesBusy} onClick={findLines}>{linesBusy ? <LoaderCircle className="animate-spin" /> : <Search />}在已启用片源中匹配</Button>}
-              {lines && (
-                <div className="mt-3 space-y-2">
-                  <div className="text-xs text-muted-foreground">已查询 {lines.searchedSites} 个站点{lines.failedSites > 0 ? `，${lines.failedSites} 个失败` : ""} · {lines.elapsedMs} ms</div>
-                  {lines.lines.map((line) => (
-                    <button key={`${line.siteKey}-${line.vodId}`} type="button" disabled={linesBusy} onClick={() => chooseLine(line)} className="flex w-full min-w-0 items-center gap-3 rounded-md border bg-card px-3 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{lineLabel(line)}</span>
-                      <Badge variant={line.matchKind === "exact" ? "secondary" : "outline"}>{matchLabel(line.matchKind)}</Badge>
-                    </button>
-                  ))}
-                  {lines.lines.length === 0 && <div className="rounded-md border border-dashed px-3 py-4 text-sm text-muted-foreground">暂无可用播放线路。{missingLineHint(lines.searched, lines.failedSites)}</div>}
-                  {lines.error && lines.lines.length > 0 && <div className="text-xs text-destructive">{lines.error}</div>}
+            {detail.directPlayable ? (
+              <section className="mt-5">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h3 className="section-title">剧集</h3>
+                  <Badge variant="secondary">{detail.episodes.length} 集</Badge>
+                  <span className="text-xs text-muted-foreground">点击即在电视上播放</span>
+                  <Button variant="ghost" size="sm" className="ml-auto" onClick={findLines} disabled={linesBusy}>
+                    <Search className="size-4" />用片源线路播放
+                  </Button>
                 </div>
-              )}
-            </section>
+                <div className="grid max-h-72 grid-cols-4 gap-2 overflow-y-auto pr-1 sm:grid-cols-6 lg:grid-cols-8">
+                  {detail.episodes.map((episode) => (
+                    <Button key={episode.index} variant="outline" size="sm" className="min-w-0 justify-center truncate"
+                      title={episode.name} disabled={playing === episode.index} onClick={() => play(episode)}>
+                      {playing === episode.index ? <LoaderCircle className="animate-spin" /> : episode.name}
+                    </Button>
+                  ))}
+                </div>
+                {detail.note && <p className="mt-2 text-xs text-muted-foreground">{detail.note}</p>}
+              </section>
+            ) : (
+              <section className="mt-5">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h3 className="section-title">播放线路</h3>
+                  <Badge variant="outline">资料目录</Badge>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  该目录只提供剧目资料，播放线路来自“源管理”里已启用的片源，按片名匹配；确认条目后再播放。
+                </p>
+                {!lines && (
+                  <Button className="mt-3" variant="outline" disabled={linesBusy} onClick={findLines}>
+                    {linesBusy ? <LoaderCircle className="animate-spin" /> : <Search />}在已启用片源中匹配
+                  </Button>
+                )}
+              </section>
+            )}
+
+            {showLines && lines && (
+              <section className="mt-4 space-y-2">
+                <div className="text-xs text-muted-foreground">
+                  已查询 {lines.searchedSites} 个站点{lines.failedSites > 0 ? `，${lines.failedSites} 个失败` : ""} · {lines.elapsedMs} ms
+                </div>
+                {lines.lines.map((line) => (
+                  <button key={`${line.siteKey}-${line.vodId}`} type="button" disabled={linesBusy} onClick={() => chooseLine(line)}
+                    className="flex w-full min-w-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-left outline-none transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{lineLabel(line)}</span>
+                    <Badge variant={line.matchKind === "exact" ? "secondary" : "outline"}>{matchLabel(line.matchKind)}</Badge>
+                  </button>
+                ))}
+                {lines.lines.length === 0 && (
+                  <div className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                    暂无可用播放线路。{missingLineHint(lines.searched, lines.failedSites)}
+                  </div>
+                )}
+                {lines.error && lines.lines.length > 0 && <div className="text-xs text-rose-300">{lines.error}</div>}
+              </section>
+            )}
 
             {selected && (
               <section className="mt-5 border-t pt-4">
-                <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="section-title">选集</h3><Badge variant="outline">{selected.line.siteName}</Badge><Button variant="ghost" size="sm" onClick={() => setSelected(null)}>重新选择线路</Button></div>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h3 className="section-title">选集</h3>
+                  <Badge variant="outline">{selected.line.siteName}</Badge>
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(null)}>重新选择线路</Button>
+                </div>
                 <PlaySources detail={selected.media} title={item.title} setError={setError} />
               </section>
             )}
 
             {detail.related.length > 0 && (
               <section className="mt-6 border-t pt-4">
-                <div className="mb-2 flex items-center gap-2"><h3 className="section-title">相关短剧</h3><Badge variant="secondary">{detail.related.length}</Badge></div>
-                <div className="flex flex-wrap gap-2">{detail.related.slice(0, 12).map((related) => <Button key={related.dramaId} variant="outline" size="sm" className="max-w-56 truncate" onClick={() => onSwitch(related)}>{related.title}</Button>)}</div>
+                <div className="mb-2 flex items-center gap-2">
+                  <h3 className="section-title">相关短剧</h3>
+                  <Badge variant="secondary">{detail.related.length}</Badge>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {detail.related.slice(0, 12).map((related) => (
+                    <Button key={related.dramaId} variant="outline" size="sm" className="max-w-56 truncate" onClick={() => onSwitch(related)}>
+                      {related.title}
+                    </Button>
+                  ))}
+                </div>
                 {detail.relatedPartial && <div className="mt-2 text-xs text-muted-foreground">相关推荐加载不完整</div>}
               </section>
             )}
@@ -653,23 +996,40 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
   const [playing, setPlaying] = useState("")
   const [schedule, setSchedule] = useState<EpgSchedule | null>(null)
   const [epgBusy, setEpgBusy] = useState(false)
+  const [playlists, setPlaylists] = useState<LiveSourceRow[]>([])
+  const [showManager, setShowManager] = useState(false)
+  const [playlistName, setPlaylistName] = useState("")
+  const [playlistUrl, setPlaylistUrl] = useState("")
+  const [playlistBusy, setPlaylistBusy] = useState(false)
+  const [channelFilter, setChannelFilter] = useState("")
   const requestGate = useMemo(() => createLatestRequestGate(), [])
+
+  const loadPlaylists = useCallback(() => api.liveSourceRows().then(setPlaylists).catch((reason) => setError(message(reason))), [setError])
+
+  useEffect(() => {
+    void loadPlaylists()
+  }, [loadPlaylists, contentVersion])
 
   useEffect(() => {
     api.liveSources().then((items) => {
       setSources(items)
       if (!items.length) {
-        setSelected(""); setCatalog(null); setSchedule(null)
+        setSelected("")
+        setCatalog(null)
+        setSchedule(null)
         return
       }
       const next = items.some((source) => source.id === selected) ? selected : items[0].id
       void load(next)
     }).catch((reason) => setError(message(reason)))
-  }, [contentVersion, setError])
+  }, [contentVersion, setError, playlists.length])
 
   async function load(id: string) {
     const request = requestGate.begin()
-    setSelected(id); setBusy(true); setCatalog(null); setSchedule(null)
+    setSelected(id)
+    setBusy(true)
+    setCatalog(null)
+    setSchedule(null)
     try {
       const next = await api.liveCatalog(id)
       if (requestGate.isLatest(request)) setCatalog(next)
@@ -681,31 +1041,191 @@ function LiveView({ contentVersion, setError }: { contentVersion: number; setErr
   }
 
   async function play(channelId: string) {
-    setPlaying(channelId); setSchedule(null)
-    try { await api.playLive(selected, channelId) } catch (reason) { setError(message(reason)); setPlaying(""); return }
-    setPlaying(""); setEpgBusy(true)
-    try { setSchedule(await api.epg(selected, channelId)) } catch { setSchedule(null) } finally { setEpgBusy(false) }
+    setPlaying(channelId)
+    setSchedule(null)
+    try {
+      await api.playLive(selected, channelId)
+    } catch (reason) {
+      setError(message(reason))
+      setPlaying("")
+      return
+    }
+    setPlaying("")
+    setEpgBusy(true)
+    try {
+      setSchedule(await api.epg(selected, channelId))
+    } catch {
+      setSchedule(null)
+    } finally {
+      setEpgBusy(false)
+    }
+  }
+
+  async function addPlaylist(event: FormEvent) {
+    event.preventDefault()
+    setPlaylistBusy(true)
+    try {
+      await api.addLiveSource({ name: playlistName, url: playlistUrl })
+      setPlaylistName("")
+      setPlaylistUrl("")
+      await loadPlaylists()
+    } catch (reason) {
+      setError(message(reason))
+    } finally {
+      setPlaylistBusy(false)
+    }
+  }
+
+  async function removePlaylist(id: string) {
+    try {
+      await api.removeLiveSource(id)
+      await loadPlaylists()
+    } catch (reason) {
+      setError(message(reason))
+    }
+  }
+
+  async function togglePlaylist(row: LiveSourceRow) {
+    try {
+      await api.setLiveSourceEnabled(row.id, !row.enabled)
+      await loadPlaylists()
+    } catch (reason) {
+      setError(message(reason))
+    }
   }
 
   const channelCount = catalog?.groups.reduce((sum, group) => sum + group.channels.length, 0) ?? 0
+  const filter = channelFilter.trim().toLowerCase()
+  const visibleGroups = (catalog?.groups ?? [])
+    .map((group) => ({
+      ...group,
+      channels: filter ? group.channels.filter((channel) => channel.name.toLowerCase().includes(filter)) : group.channels,
+    }))
+    .filter((group) => group.channels.length > 0)
+  const visibleCount = visibleGroups.reduce((sum, group) => sum + group.channels.length, 0)
+
   return (
     <>
-      <PageHeader title="直播" action={<Badge variant="outline">{channelCount} 个频道</Badge>} />
-      <div className="flex gap-2 overflow-x-auto border-y py-3">
-        {sources.map((source) => <Button key={source.id} variant={selected === source.id ? "secondary" : "ghost"} onClick={() => load(source.id)}><Radio />{source.name}</Button>)}
-      </div>
-      {busy && <div className="grid min-h-64 place-items-center"><LoaderCircle className="size-7 animate-spin text-primary" /></div>}
-      {!busy && sources.length === 0 && <Empty icon={Radio} label="当前配置没有直播源" />}
-      {epgBusy && <div className="mt-5 flex h-16 items-center justify-center border-y"><LoaderCircle className="size-5 animate-spin text-primary" /></div>}
-      {schedule && schedule.programs.length > 0 && <section className="mt-5 border-y py-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="section-title truncate">{schedule.channel} · 节目单</h2><span className="text-xs text-muted-foreground">{schedule.date}</span></div><div className="flex gap-2 overflow-x-auto pb-1">{schedule.programs.map((program, index) => <div key={`${program.start}-${index}`} className="w-44 shrink-0 rounded-md border bg-card px-3 py-2"><div className="truncate text-sm font-medium">{program.title}</div><div className="mt-1 text-xs text-muted-foreground">{program.start} - {program.end}</div></div>)}</div></section>}
-      {!busy && catalog && <div className="mt-5 space-y-7">{catalog.groups.map((group) => (
-        <section key={group.name}>
-          <div className="mb-3 flex items-center gap-2"><h2 className="section-title">{group.name}</h2><Badge variant="secondary">{group.channels.length}</Badge></div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
-            {group.channels.map((channel) => <button key={channel.id} type="button" onClick={() => play(channel.id)} disabled={playing === channel.id} className="flex h-16 min-w-0 items-center gap-3 rounded-md border bg-card px-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">{channel.logo ? <img src={channel.logo} alt="" className="size-9 shrink-0 object-contain" /> : <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"><Tv className="size-5" /></span>}<span className="min-w-0 flex-1 truncate text-sm font-medium">{channel.name}</span>{playing === channel.id && <LoaderCircle className="size-4 shrink-0 animate-spin" />}</button>)}
+      <PageHeader
+        title="直播"
+        subtitle="可以直接添加公开的 IPTV 清单（m3u/txt），也可以从推荐源一键添加。频道地址来自清单本身，能否播放取决于上游线路。"
+        badges={<Badge variant="outline">{channelCount} 个频道</Badge>}
+        action={<Button variant="outline" size="sm" onClick={() => setShowManager(!showManager)}><ListFilter className="size-4" />直播源管理</Button>}
+      />
+
+      <div className="space-y-4">
+        {showManager && (
+          <>
+            <RecommendedShelf
+              kind="live"
+              title="推荐直播源"
+              description="内置清单全部来自公开的 IPTV 项目（多数每天自动校验）。检测会按本机网络实测，失效时优先换同组镜像。"
+              onChanged={loadPlaylists}
+              setError={setError}
+            />
+            <SectionCard
+              title="我的直播源"
+              description="自定义 m3u / txt 清单，添加后立即出现在上面的频道列表里。"
+              badges={<Badge variant="outline">{playlists.filter((row) => row.user).length} 条自定义</Badge>}
+            >
+              <form onSubmit={addPlaylist} className="grid gap-2 sm:grid-cols-[200px_1fr_auto]">
+                <Input value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} placeholder="名称（可选）" />
+                <Input value={playlistUrl} onChange={(event) => setPlaylistUrl(event.target.value)} placeholder="https://.../live.m3u" />
+                <Button disabled={playlistBusy || !playlistUrl.trim()}>{playlistBusy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
+              </form>
+              <div className="mt-3 space-y-2">
+                {playlists.filter((row) => row.user).map((row) => (
+                  <div key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border bg-background/40 p-3">
+                    <StatusDot className={row.error ? "bg-rose-400" : row.enabled ? "bg-emerald-400" : "bg-muted-foreground/50"} />
+                    <div className="min-w-[200px] flex-1">
+                      <div className="text-sm font-medium">{row.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">{hostOf(row.url)}</div>
+                      {row.error && <div className="mt-1 text-xs text-rose-300">{row.error}</div>}
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => togglePlaylist(row)}>{row.enabled ? "停用" : "启用"}</Button>
+                    <Button variant="ghost" size="icon" title="删除" onClick={() => removePlaylist(row.id)}><Trash2 className="size-4" /></Button>
+                  </div>
+                ))}
+                {playlists.filter((row) => row.user).length === 0 && (
+                  <p className="rounded-lg border border-dashed px-3 py-4 text-center text-sm text-muted-foreground">
+                    还没有自定义直播源。也可以直接用上面的推荐源一键添加。
+                  </p>
+                )}
+              </div>
+            </SectionCard>
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {sources.map((source) => (
+            <button key={source.id} type="button" onClick={() => load(source.id)}
+              className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${selected === source.id ? "border-foreground/30 bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"}`}>
+              <Radio className="size-3.5" />{source.name}
+            </button>
+          ))}
+          {channelCount > 0 && (
+            <Input value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}
+              placeholder={`筛选 ${channelCount} 个频道`} className="h-9 w-full sm:ml-auto sm:w-56" />
+          )}
+        </div>
+
+        {busy && <RowSkeletons count={4} />}
+        {!busy && sources.length === 0 && (
+          <EmptyState icon={Radio} title="还没有直播源" hint="用“直播源管理”里的推荐源一键添加，或粘贴一个 m3u/txt 清单地址。"
+            action={<Button size="sm" onClick={() => setShowManager(true)}><Plus />添加直播源</Button>} />
+        )}
+
+        {epgBusy && <Skeleton className="h-16 w-full" />}
+        {schedule && schedule.programs.length > 0 && (
+          <SectionCard title={`${schedule.channel} · 节目单`} badges={<Badge variant="outline">{schedule.date}</Badge>}>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {schedule.programs.map((program, index) => (
+                <div key={`${program.start}-${index}`} className="w-44 shrink-0 rounded-lg border bg-background/40 px-3 py-2">
+                  <div className="truncate text-sm font-medium">{program.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{program.start} - {program.end}</div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
+
+        {!busy && catalog && (
+          <div className="space-y-6">
+            {filter && (
+              <p className="text-xs text-muted-foreground">筛选出 {visibleCount} 个频道</p>
+            )}
+            {visibleGroups.map((group) => (
+              <section key={group.name}>
+                <div className="mb-3 flex items-center gap-2">
+                  <h2 className="section-title">{group.name}</h2>
+                  <Badge variant="secondary">{group.channels.length}</Badge>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2">
+                  {group.channels.map((channel) => (
+                    <button key={channel.id} type="button" onClick={() => play(channel.id)} disabled={playing === channel.id}
+                      title={channel.urls[0]}
+                      className="flex h-16 min-w-0 items-center gap-3 rounded-xl border bg-card px-3 text-left outline-none transition hover:border-foreground/20 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60">
+                      {channel.logo
+                        ? <img src={channel.logo} alt="" loading="lazy" className="size-9 shrink-0 object-contain" />
+                        : <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Tv className="size-5" /></span>}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{channel.name}</span>
+                        {channel.urls.length > 1 && (
+                          <span className="block truncate text-xs text-muted-foreground">{channel.urls.length} 个地址</span>
+                        )}
+                      </span>
+                      {playing === channel.id && <LoaderCircle className="size-4 shrink-0 animate-spin" />}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {filter && visibleCount === 0 && (
+              <EmptyState icon={Search} title="没有匹配的频道" hint="换个关键词，或清空筛选查看全部频道。" />
+            )}
           </div>
-        </section>
-      ))}</div>}
+        )}
+      </div>
     </>
   )
 }
@@ -724,40 +1244,97 @@ function SourcesView({ contentVersion, onChanged, setError }: { contentVersion: 
     setBusy(true)
     try {
       await api.addSource(name, url)
-      setName(""); setUrl(""); await load(); onChanged()
-    } catch (reason) { await load(); onChanged(); setError(message(reason)) } finally { setBusy(false) }
+      setName("")
+      setUrl("")
+      await load()
+      onChanged()
+    } catch (reason) {
+      await load()
+      onChanged()
+      setError(message(reason))
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function remove(id: string) {
-    try { await api.removeSource(id); await load(); onChanged() } catch (reason) { setError(message(reason)) }
+    try {
+      await api.removeSource(id)
+      await load()
+      onChanged()
+    } catch (reason) {
+      setError(message(reason))
+    }
   }
 
   async function refresh() {
-    try { await api.refreshSources(); onChanged() } catch (reason) { setError(message(reason)) }
+    try {
+      await api.refreshSources()
+      onChanged()
+    } catch (reason) {
+      setError(message(reason))
+    }
   }
+
+  const healthy = sources.filter((source) => !source.error).length
 
   return (
     <>
-      <PageHeader title="源管理" action={<Button variant="outline" onClick={refresh}><RefreshCw />刷新全部</Button>} />
-      <form onSubmit={add} className="grid gap-2 border-y py-4 sm:grid-cols-[180px_1fr_auto]">
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称" />
-        <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://.../tvbox.json" />
-        <Button disabled={busy || !url.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
-      </form>
-      <section className="mt-5 divide-y rounded-md border">
-        {orderedSources.map((source) => (
-          <div key={source.id} className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-center ${source.parentId ? "bg-muted/20 pl-8" : ""}`}>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{source.name}</span><Badge variant={source.error ? "destructive" : "secondary"}>{source.error ? "异常" : source.kind === "warehouse" ? "多仓" : source.parentId ? "子仓" : "单仓"}</Badge></div>
-              <div className="mt-1 truncate text-xs text-muted-foreground">{source.url}</div>
-              {(source.error || source.searchError) && <div className="mt-1 break-words text-xs text-destructive">{source.error || source.searchError}</div>}
-            </div>
-            <div className="shrink-0 text-xs text-muted-foreground">{source.kind === "warehouse" ? `${sources.filter((item) => item.parentId === source.id).length} 个子仓` : `${source.siteCount} 站点 · ${source.liveCount} 直播 · ${source.latencyMs || "-"} ms`}</div>
-            {!source.parentId && <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 /></Button>}
+      <PageHeader
+        title="点播源"
+        subtitle="TVBox 兼容配置（单仓、多仓、仓库）。也可用推荐源一键添加，或用仓库批量导入。"
+        badges={<Badge variant="outline">{healthy}/{sources.length} 正常</Badge>}
+        action={<Button variant="outline" size="sm" onClick={refresh}><RefreshCw />刷新全部</Button>}
+      />
+      <div className="space-y-4">
+        <RecommendedShelf
+          kind="vod"
+          title="推荐点播源"
+          description="长期维护的公开配置，含单仓与多仓。添加后可在“刷新全部”里拉取站点；检测只确认配置文件可达。"
+          onChanged={onChanged}
+          setError={setError}
+        />
+
+        <SectionCard
+          title="添加自定义配置"
+          description="支持单仓 JSON、多仓（urls/storeHouse）以及带前导注释或 Base64 的配置。"
+        >
+          <form onSubmit={add} className="grid gap-2 sm:grid-cols-[200px_1fr_auto]">
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="名称（可选）" />
+            <Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="http://.../tvbox.json" />
+            <Button disabled={busy || !url.trim()}>{busy ? <LoaderCircle className="animate-spin" /> : <Plus />}添加</Button>
+          </form>
+        </SectionCard>
+
+        <SectionCard title="已添加的源" badges={<Badge variant="outline">{orderedSources.length}</Badge>}>
+          <div className="divide-y">
+            {orderedSources.map((source) => (
+              <div key={source.id} className={`flex flex-col gap-3 py-3 sm:flex-row sm:items-center ${source.parentId ? "pl-6" : ""}`}>
+                <StatusDot className={source.error ? "bg-rose-400" : "bg-emerald-400"} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{source.name}</span>
+                    <Badge variant={source.error ? "destructive" : "secondary"}>
+                      {source.error ? "异常" : source.kind === "warehouse" ? "多仓" : source.parentId ? "子仓" : "单仓"}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">{source.url}</div>
+                  {(source.error || source.searchError) && <div className="mt-1 break-words text-xs text-rose-300">{source.error || source.searchError}</div>}
+                </div>
+                <div className="shrink-0 text-xs text-muted-foreground">
+                  {source.kind === "warehouse"
+                    ? `${sources.filter((item) => item.parentId === source.id).length} 个子仓`
+                    : `${source.siteCount} 站点 · ${source.liveCount} 直播 · ${source.latencyMs || "-"} ms`}
+                </div>
+                {!source.parentId && (
+                  <Button variant="ghost" size="icon" title="删除" onClick={() => remove(source.id)}><Trash2 className="size-4" /></Button>
+                )}
+              </div>
+            ))}
+            {sources.length === 0 && <EmptyState icon={Library} title="还没有配置源" hint="用推荐源一键添加，或粘贴一个 TVBox 配置地址。" />}
           </div>
-        ))}
-        {sources.length === 0 && <Empty icon={Library} label="还没有配置源" compact />}
-      </section>
+        </SectionCard>
+      </div>
     </>
   )
 }
@@ -841,16 +1418,27 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
       if (refreshing) return Promise.resolve()
       refreshing = true
       return Promise.all([api.device(), api.diagnostics()])
-      .then(([nextDevice, nextDiagnostics]) => {
-        if (active) { setDevice(nextDevice); setDiagnostics(nextDiagnostics) }
-      })
-      .catch((reason) => { if (active) setError(message(reason)) })
-      .finally(() => { refreshing = false })
+        .then(([nextDevice, nextDiagnostics]) => {
+          if (active) {
+            setDevice(nextDevice)
+            setDiagnostics(nextDiagnostics)
+          }
+        })
+        .catch((reason) => {
+          if (active) setError(message(reason))
+        })
+        .finally(() => {
+          refreshing = false
+        })
     }
     void refresh()
     const timer = window.setInterval(refresh, 2500)
-    return () => { active = false; window.clearInterval(timer) }
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
   }, [setError])
+
   const rows = useMemo(() => device ? [
     ["系统", `${device.manufacturer} ${device.model} · Android ${device.androidVersion} / API ${device.sdk}`],
     ["架构", device.primaryAbi],
@@ -860,61 +1448,142 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
     ["H.264", device.hasHardwareAvcDecoder ? `硬解 · ${device.preferredAvcDecoder}` : "未发现硬件解码器"],
   ] : [], [device])
 
+  const airPlay = diagnostics?.airPlay
+  const failedStages = diagnostics?.stages?.filter((stage) => stage.result === "failed") ?? []
+
   return (
     <>
-      <PageHeader title="设备能力" action={<Badge variant={device?.hasHardwareAvcDecoder ? "secondary" : "destructive"}>{device?.hasHardwareAvcDecoder ? "1080p 候选" : "待检测"}</Badge>} />
-      <section className="divide-y rounded-md border">
-        {rows.map(([label, value]) => <div key={label} className="grid gap-1 px-4 py-3 sm:grid-cols-[150px_1fr]"><div className="text-sm text-muted-foreground">{label}</div><div className="break-words text-sm font-medium">{value}</div></div>)}
-      </section>
-      {device?.warnings.length ? <section className="mt-5"><h2 className="section-title mb-3">检测提示</h2>{device.warnings.map((warning) => <div key={warning} className="mb-2 flex items-center gap-2 text-sm text-destructive"><CircleAlert className="size-4" />{warning}</div>)}</section> : null}
-      <section className="mt-5"><h2 className="section-title mb-3">H.264 解码器</h2><div className="flex flex-wrap gap-2">{device?.avcDecoders.map((codec) => <Badge key={codec} variant="outline">{codec}</Badge>)}</div></section>
-      <section className="mt-7 border-t pt-5">
-        <div className="mb-3 flex items-center justify-between gap-3"><h2 className="section-title">投屏诊断</h2><Badge variant={diagnostics?.airPlay.decoderOutputs ? "secondary" : "outline"}>{diagnostics?.airPlay.sessionActive ? "会话中" : diagnostics?.airPlay.state || "未启动"}</Badge></div>
-        <div className="grid divide-y rounded-md border sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
-          <DiagnosticFact label="接收视频" value={`${diagnostics?.airPlay.videoFrames ?? 0} 包 · ${diagnostics?.airPlay.videoKeyFrames ?? 0} IDR`} />
-          <DiagnosticFact label="解码输入 / 输出" value={`${diagnostics?.airPlay.decoderInputs ?? 0} / ${diagnostics?.airPlay.decoderOutputs ?? 0}`} />
-          <DiagnosticFact label="实际解码器" value={diagnostics?.airPlay.decoderName || "尚未创建"} />
-          <DiagnosticFact label="解码模式" value={diagnostics?.airPlay.decoderSoftwareFallback ? "Google 软件回退" : "系统硬解优先"} />
-        </div>
-        {diagnostics?.airPlay.identity && <div className="mt-3 break-all font-mono text-xs text-muted-foreground">原生 /info 身份：{diagnostics.airPlay.identity}</div>}
-        {diagnostics?.airPlay.error && <div className="mt-3 break-words text-sm text-destructive">AirPlay：{diagnostics.airPlay.error}</div>}
-      </section>
-      <section className="mt-7 border-t pt-5">
-        <h2 className="section-title mb-3">源与启动诊断</h2>
-        <div className="space-y-2">
-          {diagnostics?.httpStack?.degraded && <div className="flex items-center gap-2 border-b py-2 text-sm text-destructive"><CircleAlert className="size-4 shrink-0" />旧版 TLS 初始化失败，已回退平台 TLS：{diagnostics.httpStack.initError}</div>}
-          {diagnostics?.sources.filter((source) => source.error || source.searchError).map((source) => <div key={source.id} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{source.name}</span><span className="break-words text-destructive">{source.error || source.searchError}</span></div>)}
-          {diagnostics?.homeErrors.map((failure) => <div key={`${failure.sourceId}-${failure.siteKey}`} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[180px_1fr]"><span className="font-medium">{failure.siteName}</span><span className="break-words text-destructive">首页：{failure.error}</span></div>)}
-          {diagnostics && diagnostics.sources.every((source) => !source.error && !source.searchError) && diagnostics.homeErrors.length === 0 && <div className="text-sm text-muted-foreground">当前没有源刷新或首页加载错误。</div>}
-        </div>
-        {diagnostics?.javaCrash ? <details className="mt-4 rounded-md border"><summary className="cursor-pointer px-4 py-3 text-sm font-medium">上次 Java 闪退记录</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t p-4 text-xs leading-5 text-destructive">{diagnostics.javaCrash}</pre></details> : <div className="mt-4 text-sm text-muted-foreground">没有保存的 Java 闪退记录。</div>}
-      </section>
-      <section className="mt-7 border-t pt-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="section-title">阶段诊断</h2>
-          <Badge variant={diagnostics?.stages?.some((stage) => stage.result === "failed") ? "destructive" : "outline"}>{diagnostics?.stages?.length ?? 0} 条</Badge>
-        </div>
-        <div className="space-y-2">
-          {diagnostics?.stages?.slice(0, 12).map((stage) => (
-            <div key={`${stage.generation}-${stage.scope}-${stage.subject}`} className="grid gap-1 border-b py-2 text-sm sm:grid-cols-[160px_1fr_auto]">
+      <PageHeader
+        title="设备能力"
+        subtitle="用于判断这台电视适合的分辨率、解码方式与投屏表现。"
+        badges={
+          <Badge variant={device?.hasHardwareAvcDecoder ? "secondary" : "destructive"}>
+            {device?.hasHardwareAvcDecoder ? "支持 1080p 硬解" : "未检测到硬解"}
+          </Badge>
+        }
+      />
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard title="设备信息">
+          <div className="divide-y">
+            {rows.map(([label, value]) => (
+              <div key={label} className="grid gap-1 py-2.5 first:pt-0 last:pb-0 sm:grid-cols-[120px_1fr]">
+                <span className="text-sm text-muted-foreground">{label}</span>
+                <span className="break-words text-sm font-medium">{value}</span>
+              </div>
+            ))}
+            {device?.warnings.map((warning) => (
+              <div key={warning} className="flex items-start gap-2 py-2.5 text-sm text-rose-300">
+                <CircleAlert className="mt-0.5 size-4 shrink-0" />{warning}
+              </div>
+            ))}
+          </div>
+          {device && device.avcDecoders.length > 0 && (
+            <div className="mt-3 border-t pt-3">
+              <div className="mb-2 text-xs text-muted-foreground">H.264 解码器（按优先级）</div>
+              <div className="flex flex-wrap gap-1.5">
+                {device.avcDecoders.map((codec) => <Badge key={codec} variant="outline">{codec}</Badge>)}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="投屏诊断"
+          description="镜像接收与解码的实时计数，用来判断“黑屏/卡顿”发生在哪一段。"
+          badges={<Badge variant={airPlay?.sessionActive ? "secondary" : "outline"}>{airPlay?.sessionActive ? "会话中" : airPlay?.state || "未启动"}</Badge>}
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DiagnosticFact label="接收视频" value={`${airPlay?.videoFrames ?? 0} 包 · ${airPlay?.videoKeyFrames ?? 0} IDR`} />
+            <DiagnosticFact label="解码输入 / 输出" value={`${airPlay?.decoderInputs ?? 0} / ${airPlay?.decoderOutputs ?? 0}`} />
+            <DiagnosticFact label="实际解码器" value={airPlay?.decoderName || "尚未创建"} />
+            <DiagnosticFact label="解码模式" value={airPlay?.decoderSoftwareFallback ? "软件回退" : "系统硬解优先"} />
+          </div>
+          {airPlay?.identity && (
+            <div className="mt-3 break-all rounded-lg border bg-background/60 p-3 font-mono text-xs text-muted-foreground">
+              原生 /info 身份：{airPlay.identity}
+            </div>
+          )}
+          {airPlay?.error && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+              <CircleAlert className="mt-0.5 size-4 shrink-0" />{airPlay.error}
+            </div>
+          )}
+        </SectionCard>
+      </div>
+
+      <SectionCard
+        className="mt-4"
+        title="阶段诊断"
+        description="最近经过的关键阶段。最后一条 running/failed 的记录就是问题最可能出现的位置，仍需结合运行日志判断。"
+        badges={<Badge variant={failedStages.length > 0 ? "destructive" : "outline"}>{diagnostics?.stages?.length ?? 0} 条{failedStages.length > 0 ? ` · ${failedStages.length} 失败` : ""}</Badge>}
+        action={<Button variant="ghost" size="sm" onClick={() => { void api.diagnostics().then(setDiagnostics).catch((reason) => setError(message(reason))) }}><RefreshCw className="size-4" />刷新</Button>}
+      >
+        <div className="space-y-1.5">
+          {diagnostics?.stages?.slice(0, 14).map((stage) => (
+            <div key={`${stage.generation}-${stage.scope}-${stage.subject}`}
+              className="grid gap-1 rounded-lg border bg-background/40 px-3 py-2 text-sm sm:grid-cols-[190px_1fr_auto]">
               <span className="truncate font-medium">{stage.scope} · {stage.subject}</span>
-              <span className="break-words">
+              <span className="min-w-0 break-words">
                 <span className="font-mono text-xs">{stage.stage}</span>
                 {stage.detail && <span className="ml-2 text-muted-foreground">{stage.detail}</span>}
                 {stage.rootCauseClass && <span className="ml-2 text-xs text-muted-foreground">{stage.rootCauseClass}</span>}
               </span>
-              <span className={`text-xs ${stage.result === "failed" ? "text-destructive" : "text-muted-foreground"}`}>{stage.result === "failed" ? `失败${stage.errorCode ? ` · ${stage.errorCode}` : ""}` : stage.result === "ok" ? `${stage.elapsedMs} ms` : "进行中"}</span>
+              <span className={`text-xs ${stage.result === "failed" ? "text-rose-300" : "text-muted-foreground"}`}>
+                {stage.result === "failed" ? `失败${stage.errorCode ? ` · ${stage.errorCode}` : ""}` : stage.result === "ok" ? `${stage.elapsedMs} ms` : "进行中"}
+              </span>
             </div>
           ))}
-          {(!diagnostics?.stages || diagnostics.stages.length === 0) && <div className="text-sm text-muted-foreground">还没有阶段记录；刷新片源、搜索或投屏后会记录 fetch_config / plugin_init / native_listen 等阶段。</div>}
+          {(!diagnostics?.stages || diagnostics.stages.length === 0) && (
+            <EmptyState icon={Gauge} title="还没有阶段记录" hint="刷新片源、搜索或投屏后会记录 fetch_config / plugin_init / native_listen 等阶段。" />
+          )}
         </div>
-      </section>
+      </SectionCard>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <SectionCard title="源与启动诊断">
+          <div className="space-y-2 text-sm">
+            {diagnostics?.httpStack?.degraded && (
+              <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-destructive">
+                <CircleAlert className="mt-0.5 size-4 shrink-0" />
+                旧版 TLS 初始化失败，已回退平台 TLS：{diagnostics.httpStack.initError}
+              </div>
+            )}
+            {diagnostics?.sources.filter((source) => source.error || source.searchError).map((source) => (
+              <div key={source.id} className="grid gap-1 border-b py-2 last:border-b-0 sm:grid-cols-[150px_1fr]">
+                <span className="font-medium">{source.name}</span>
+                <span className="break-words text-rose-300">{source.error || source.searchError}</span>
+              </div>
+            ))}
+            {diagnostics?.homeErrors.map((failure) => (
+              <div key={`${failure.sourceId}-${failure.siteKey}`} className="grid gap-1 border-b py-2 last:border-b-0 sm:grid-cols-[150px_1fr]">
+                <span className="font-medium">{failure.siteName}</span>
+                <span className="break-words text-rose-300">首页：{failure.error}</span>
+              </div>
+            ))}
+            {diagnostics && diagnostics.sources.every((source) => !source.error && !source.searchError) && diagnostics.homeErrors.length === 0 && (
+              <div className="text-muted-foreground">当前没有源刷新或首页加载错误。</div>
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="上次 Java 闪退记录" description="闪退发生时保存的堆栈，用于判断是插件、verifier 还是原生库导致的。">
+          {diagnostics?.javaCrash
+            ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border bg-background/60 p-3 text-xs leading-5 text-rose-300">{diagnostics.javaCrash}</pre>
+            : <div className="text-sm text-muted-foreground">没有保存的 Java 闪退记录。</div>}
+        </SectionCard>
+      </div>
     </>
   )
 }
 
 function DiagnosticFact({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 px-4 py-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 break-words text-sm font-medium">{value}</div></div>
+  return (
+    <div className="min-w-0 rounded-lg border bg-background/40 px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 break-words text-sm font-medium">{value}</div>
+    </div>
+  )
 }
 
 const logFilters: { value: "ALL" | LogLevel; label: string }[] = [
@@ -948,8 +1617,11 @@ function LogView({ setError }: { setError: (value: string) => void }) {
     return () => window.clearInterval(timer)
   }, [refresh])
 
-  const visible = useMemo(() => filter === "ALL"
-    ? entries : entries.filter((entry) => entry.level === filter), [entries, filter])
+  const visible = useMemo(() => (filter === "ALL" ? entries : entries.filter((entry) => entry.level === filter)).slice().reverse(), [entries, filter])
+  const counts = useMemo(() => ({
+    ERROR: entries.filter((entry) => entry.level === "ERROR").length,
+    WARN: entries.filter((entry) => entry.level === "WARN").length,
+  }), [entries])
 
   const clear = async () => {
     setClearing(true)
@@ -965,37 +1637,60 @@ function LogView({ setError }: { setError: (value: string) => void }) {
 
   return (
     <>
-      <PageHeader title="错误日志" action={
-        <div className="flex items-center gap-2">
-          <Badge variant="outline">{visible.length} / {entries.length}</Badge>
-          <Button variant="outline" size="icon" title="刷新日志" disabled={refreshing} onClick={refresh}>
-            <RefreshCw className={refreshing ? "animate-spin" : ""} />
-          </Button>
-          <Button variant="outline" size="icon" title="清空日志" disabled={clearing || entries.length === 0} onClick={clear}>
-            {clearing ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
-          </Button>
-        </div>
-      } />
-      <div className="mb-4 flex flex-wrap gap-2">
+      <PageHeader
+        title="日志"
+        subtitle="保留最近 500 条调试、信息、警告和错误记录，电视端“设置 → 错误日志”看到的是同一份。"
+        badges={<Badge variant="outline">{visible.length} / {entries.length} 条</Badge>}
+        action={
+          <>
+            <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>
+              <RefreshCw className={refreshing ? "animate-spin" : ""} />刷新
+            </Button>
+            <Button variant="outline" size="sm" disabled={clearing || entries.length === 0} onClick={clear}>
+              {clearing ? <LoaderCircle className="animate-spin" /> : <Trash2 />}清空
+            </Button>
+          </>
+        }
+      />
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {logFilters.map((item) => (
-          <Button key={item.value} size="sm" variant={filter === item.value ? "secondary" : "outline"}
-            onClick={() => setFilter(item.value)}>{item.label}</Button>
+          <button key={item.value} type="button" onClick={() => setFilter(item.value)}
+            className={`rounded-full border px-3 py-1 text-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${filter === item.value ? "border-foreground/30 bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"}`}>
+            {item.label}
+          </button>
         ))}
+        {(counts.ERROR > 0 || counts.WARN > 0) && (
+          <span className="flex items-center gap-3 text-xs text-muted-foreground">
+            {counts.ERROR > 0 && <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-rose-400" />{counts.ERROR} 个错误</span>}
+            {counts.WARN > 0 && <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-amber-400" />{counts.WARN} 个警告</span>}
+          </span>
+        )}
       </div>
-      <section className="divide-y rounded-md border">
-        {visible.slice().reverse().map((entry, index) => (
-          <article key={`${entry.timestamp}-${index}`} className="p-4">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <Badge variant={entry.level === "ERROR" ? "destructive" : "outline"}>{logLevelLabel(entry.level)}</Badge>
-              <span className="text-sm font-medium">{entry.component}</span>
-              <time className="text-xs text-muted-foreground">{new Date(entry.timestamp).toLocaleString("zh-CN", { hour12: false })}</time>
-            </div>
-            <div className="break-words text-sm leading-6">{entry.message}</div>
-            {entry.trace && <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap border-t pt-3 text-xs leading-5 text-muted-foreground">{entry.trace}</pre>}
-          </article>
-        ))}
-        {visible.length === 0 && <Empty icon={FileWarning} label="当前级别暂无日志" compact />}
-      </section>
+
+      <SectionCard>
+        <div className="divide-y">
+          {visible.map((entry, index) => (
+            <article key={`${entry.timestamp}-${index}`} className="py-3 first:pt-0 last:pb-0">
+              <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                <span className={`size-2 rounded-full ${levelDot(entry.level)}`} />
+                <span className="text-xs text-muted-foreground">{clockOf(entry.timestamp)}</span>
+                <span className="text-xs text-muted-foreground">{entry.component}</span>
+                <Badge variant={entry.level === "ERROR" ? "destructive" : entry.level === "WARN" ? "outline" : "secondary"}>{logLevelLabel(entry.level)}</Badge>
+              </div>
+              <div className="break-words text-sm leading-6">{entry.message}</div>
+              {entry.trace && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs text-muted-foreground">调用栈</summary>
+                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border bg-background/60 p-3 text-xs leading-5 text-muted-foreground">{entry.trace}</pre>
+                </details>
+              )}
+            </article>
+          ))}
+          {visible.length === 0 && (
+            <EmptyState icon={FileWarning} title="当前级别暂无日志" hint="电视端刷新片源、搜索或投屏后会有记录。" />
+          )}
+        </div>
+      </SectionCard>
     </>
   )
 }
