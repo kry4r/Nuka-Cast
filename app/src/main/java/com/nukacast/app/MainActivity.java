@@ -40,6 +40,8 @@ import com.nukacast.app.core.DeviceProfile;
 import com.nukacast.app.core.NukaRuntime;
 import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.drama.model.DramaDetail;
+import com.nukacast.app.drama.model.DramaEpisode;
+import com.nukacast.app.drama.model.DramaPlayResult;
 import com.nukacast.app.drama.model.DramaItem;
 import com.nukacast.app.drama.model.DramaLine;
 import com.nukacast.app.drama.model.DramaLineResult;
@@ -79,6 +81,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final PosterImageLoader images = new PosterImageLoader();
     private final List<SearchItem> homeItems = new ArrayList<SearchItem>();
+    private static final String DRAMA_SOURCE_PREFIX = "drama:";
+
     private final List<SearchItem> dramaItems = new ArrayList<SearchItem>();
     private NukaRuntime runtime;
     private View appShell;
@@ -817,7 +821,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void openMedia(final SearchItem item) {
-        if (item.sourceId != null && item.sourceId.startsWith("drama:")) {
+        if (item.sourceId != null && item.sourceId.startsWith(DRAMA_SOURCE_PREFIX)) {
             openDrama(item);
             return;
         }
@@ -874,6 +878,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 try {
                     final DramaDetail detail = runtime.getDramaService().detail(providerId, dramaId);
+                    if (detail != null && detail.directPlayable && !detail.episodes.isEmpty()) {
+                        // A CMS catalog already carries playable episode URLs, so matching TVBox
+                        // lines first would only add latency to a result we already have.
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() { showDramaEpisodes(entry, detail); }
+                        });
+                        return;
+                    }
                     final DramaLineResult lines = runtime.getDramaService().lines(
                             providerId, dramaId, "");
                     runOnUiThread(new Runnable() {
@@ -886,6 +898,104 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
             }
         });
+    }
+
+    /**
+     * Episode picker for catalogs that publish direct episode URLs. Picking an episode plays it
+     * straight from the catalog; "用片源线路播放" keeps the TVBox line flow available as a fallback.
+     */
+    private void showDramaEpisodes(final SearchItem entry, final DramaDetail detail) {
+        final CharSequence[] labels = new CharSequence[detail.episodes.size()];
+        for (int i = 0; i < detail.episodes.size(); i++) {
+            DramaEpisode episode = detail.episodes.get(i);
+            labels[i] = episode.name + "  ·  " + (i + 1);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("选择集数（共 " + detail.episodes.size() + " 集）")
+                .setItems(labels, new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        playDramaEpisode(detail, detail.episodes.get(which));
+                    }
+                })
+                .setNeutralButton("用片源线路播放", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        loadDramaLines(entry, detail);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void loadDramaLines(final SearchItem entry, final DramaDetail detail) {
+        Toast.makeText(this, "正在匹配播放线路", Toast.LENGTH_SHORT).show();
+        io.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final DramaLineResult lines = runtime.getDramaService().lines(
+                            entry.siteKey, entry.vodId, "");
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showDramaDetail(entry, detail, lines); }
+                    });
+                } catch (final Exception error) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showError("线路匹配失败", error); }
+                    });
+                }
+            }
+        });
+    }
+
+    private void playDramaEpisode(final DramaDetail detail, final DramaEpisode episode) {
+        Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
+        io.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    final DramaPlayResult result = runtime.getDramaService().play(
+                            detail.item.providerId, detail.item.dramaId, episode.index);
+                    final MediaDetail media = dramaAsMedia(detail, result);
+                    final PlaybackInfo info = new PlaybackInfo();
+                    info.siteKey = detail.item.providerId;
+                    info.title = result.title;
+                    info.url = result.url;
+                    info.sniffUrl = result.url;
+                    info.direct = true;
+                    info.headers.putAll(result.headers);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            MediaDetail.PlaySource source = media.playSources.get(0);
+                            completePlayback(PendingPlayback.episode(result.title, info, 0,
+                                    media, source, source.episodes.get(0)), result.url);
+                        }
+                    });
+                } catch (final Exception error) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showError("播放失败", error); }
+                    });
+                }
+            }
+        });
+    }
+
+    /** Wraps a direct drama episode in a MediaDetail so favorites and continue-watching keep working. */
+    private MediaDetail dramaAsMedia(final DramaDetail detail, final DramaPlayResult result) {
+        DramaItem item = detail.item;
+        MediaDetail media = new MediaDetail();
+        media.sourceId = DRAMA_SOURCE_PREFIX + item.providerId;
+        media.siteKey = item.providerId;
+        media.vodId = item.dramaId;
+        media.name = joinMeta(item.title, result.episodeName);
+        media.poster = item.cover;
+        media.plot = item.intro;
+        media.remarks = item.remark;
+        media.typeName = joinMeta(item.category, "短剧");
+        MediaDetail.PlaySource source = new MediaDetail.PlaySource();
+        source.name = "短剧直连";
+        MediaDetail.Episode picked = new MediaDetail.Episode();
+        picked.name = result.episodeName.isEmpty() ? "第" + result.index + "集" : result.episodeName;
+        picked.id = String.valueOf(result.index);
+        source.episodes.add(picked);
+        media.playSources.add(source);
+        return media;
     }
 
     private void showDramaDetail(final SearchItem entry, final DramaDetail detail,

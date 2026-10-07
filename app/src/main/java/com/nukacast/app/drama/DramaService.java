@@ -5,9 +5,11 @@ import android.content.Context;
 import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.diagnostics.ErrorCodes;
 import com.nukacast.app.drama.model.DramaDetail;
+import com.nukacast.app.drama.model.DramaEpisode;
 import com.nukacast.app.drama.model.DramaItem;
 import com.nukacast.app.drama.model.DramaLine;
 import com.nukacast.app.drama.model.DramaLineResult;
+import com.nukacast.app.drama.model.DramaPlayResult;
 import com.nukacast.app.drama.model.DramaProviderConfig;
 import com.nukacast.app.drama.model.DramaSearchResult;
 import com.nukacast.app.spider.SpiderManager;
@@ -68,6 +70,13 @@ public final class DramaService {
                 @Override protected boolean removeEldestEntry(
                         Map.Entry<String, CacheEntry<DramaDetail>> eldest) {
                     return size() > MAX_CACHE_ENTRIES;
+                }
+            };
+    private final Map<String, CacheEntry<DramaEpisode>> episodeCache =
+            new LinkedHashMap<String, CacheEntry<DramaEpisode>>(32, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(
+                        Map.Entry<String, CacheEntry<DramaEpisode>> eldest) {
+                    return size() > MAX_CACHE_ENTRIES * 4;
                 }
             };
 
@@ -144,6 +153,108 @@ public final class DramaService {
             AppLog.w("短剧", "目录详情失败：" + message, error);
             throw new DramaException(codeOf(error), message, error);
         }
+    }
+
+    /** Category browsing for providers that publish listings. */
+    public DramaSearchResult browse(String providerId, String categoryId, int page) {
+        DramaProviderConfig config = providerId == null || providerId.isEmpty()
+                ? firstEnabled() : registry.find(providerId);
+        if (config == null) {
+            return DramaSearchResult.failure("", "", "provider_missing", "",
+                    "还没有启用短剧目录，请先添加目录");
+        }
+        String cacheKey = config.id + "|browse|" + safe(categoryId) + "|" + Math.max(1, page);
+        DramaSearchResult cached = read(searchCache, cacheKey);
+        if (cached != null) return cached;
+        try {
+            DramaSearchResult result = registry.catalog(config)
+                    .browse(categoryId, Math.max(1, page));
+            result.providerName = config.name;
+            write(searchCache, cacheKey, result);
+            return result;
+        } catch (Throwable error) {
+            String message = message(error);
+            registry.recordError(config.id, message);
+            return DramaSearchResult.failure(config.id, "", codeOf(error),
+                    error.getClass().getName(), message);
+        }
+    }
+
+    /**
+     * Resolves one episode of a direct-play provider. Metadata-only catalogs raise a structured
+     * error so callers fall back to TVBox line matching instead of showing a broken player.
+     */
+    public DramaEpisode episode(String providerId, String dramaId, int index) throws DramaException {
+        if (providerId == null || providerId.isEmpty()) {
+            throw new DramaException("provider_missing", "缺少短剧目录");
+        }
+        if (dramaId == null || dramaId.isEmpty()) {
+            throw new DramaException("drama_id_missing", "缺少短剧 ID");
+        }
+        String cacheKey = providerId + "|" + dramaId + "|" + index;
+        DramaEpisode cached = read(episodeCache, cacheKey);
+        if (cached != null) return cached;
+        DramaCatalog catalog = registry.catalog(providerId);
+        try {
+            DramaEpisode episode = catalog.episode(dramaId, index);
+            if (episode == null || episode.playUrl.isEmpty()) {
+                throw new DramaException("play_not_found", "没有解析到第 " + index + " 集的播放地址");
+            }
+            episode.direct = true;
+            write(episodeCache, cacheKey, episode);
+            return episode;
+        } catch (DramaException error) {
+            throw error;
+        } catch (Throwable error) {
+            String message = message(error);
+            AppLog.w("短剧", "剧集解析失败：" + message, error);
+            throw new DramaException(codeOf(error), message, error);
+        }
+    }
+
+    /**
+     * Resolves one episode into something the player can open, plus the title to show. The provider
+     * keeps its own header rules (referer/user-agent) so a direct URL is not played bare.
+     */
+    public DramaPlayResult play(String providerId, String dramaId, int index) throws DramaException {
+        DramaProviderConfig config = registry.find(providerId);
+        if (config == null) {
+            throw new DramaException("provider_missing", "短剧目录不存在");
+        }
+        DramaEpisode episode = episode(providerId, dramaId, index);
+        DramaItem item;
+        try {
+            item = detail(providerId, dramaId).item;
+        } catch (DramaException error) {
+            item = new DramaItem();
+            item.providerId = providerId;
+            item.dramaId = dramaId;
+        }
+        DramaPlayResult result = new DramaPlayResult();
+        result.providerId = providerId;
+        result.providerName = config.name;
+        result.dramaId = dramaId;
+        result.index = episode.index;
+        result.episodeName = episode.name;
+        result.title = item.title.isEmpty()
+                ? episode.name
+                : item.title + " · " + episode.name;
+        result.url = episode.playUrl;
+        if (!episode.headers.isEmpty()) {
+            result.headers.putAll(episode.headers);
+        } else if (!config.referer.isEmpty()) {
+            result.headers.put("Referer", config.referer);
+        }
+        if (!result.isPlayable()) {
+            throw new DramaException("play_not_found",
+                    "该剧集没有可直接播放的地址，请改用播放线路");
+        }
+        return result;
+    }
+
+    private DramaProviderConfig firstEnabled() {
+        List<DramaProviderConfig> enabled = registry.enabledProviders();
+        return enabled.isEmpty() ? null : enabled.get(0);
     }
 
     /**

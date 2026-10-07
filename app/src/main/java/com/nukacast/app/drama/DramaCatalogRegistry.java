@@ -67,10 +67,28 @@ public final class DramaCatalogRegistry {
     }
 
     public synchronized DramaProviderConfig add(String name, String baseUrl) {
+        return add(name, baseUrl, detectKind(baseUrl), "", "");
+    }
+
+    /** Adds a provider of an explicit kind (used by the curated source list). */
+    public synchronized DramaProviderConfig add(String name, String baseUrl, String kind,
+                                                String categoryId, String note) {
         String normalized = normalizeBaseUrl(baseUrl);
         List<DramaProviderConfig> providers = providers();
         for (DramaProviderConfig provider : providers) {
-            if (normalized.equalsIgnoreCase(provider.baseUrl)) return provider;
+            if (normalized.equalsIgnoreCase(provider.baseUrl)) {
+                // Re-adding an existing URL updates its kind/class so a curated entry can be
+                // upgraded from a metadata catalog to a playable provider without duplicate rows.
+                if (kind != null && !kind.isEmpty() && !kind.equals(provider.kind)) {
+                    provider.kind = kind;
+                    provider.categoryId = categoryId == null ? "" : categoryId;
+                    provider.note = note == null ? "" : note;
+                    provider.updatedAt = System.currentTimeMillis();
+                    save(providers);
+                    catalogs.remove(provider.id);
+                }
+                return provider;
+            }
         }
         DramaProviderConfig provider = new DramaProviderConfig();
         provider.id = Digests.sha256(normalized.getBytes(java.nio.charset.Charset.forName("UTF-8")))
@@ -78,6 +96,9 @@ public final class DramaCatalogRegistry {
         provider.baseUrl = normalized;
         provider.name = name == null || name.trim().isEmpty()
                 ? HttpUrl.parse(normalized).host() : name.trim();
+        provider.kind = kind == null || kind.isEmpty() ? detectKind(normalized) : kind;
+        provider.categoryId = categoryId == null ? "" : categoryId;
+        provider.note = note == null ? "" : note;
         provider.builtin = normalized.equalsIgnoreCase(SUGGESTED_BASE_URL);
         provider.enabled = true;
         provider.updatedAt = System.currentTimeMillis();
@@ -85,6 +106,24 @@ public final class DramaCatalogRegistry {
         save(providers);
         catalogs.remove(provider.id);
         return provider;
+    }
+
+    /** Guesses the provider kind from a pasted URL so users do not have to pick one. */
+    static String detectKind(String baseUrl) {
+        String value = baseUrl == null ? "" : baseUrl.toLowerCase(java.util.Locale.ROOT);
+        if (value.contains("api.php/provide/vod") || value.contains("/provide/vod")) {
+            return DramaProviderConfig.KIND_CMS_DRAMA;
+        }
+        return DramaProviderConfig.KIND_VOTE_CATALOG;
+    }
+
+    public synchronized boolean contains(String baseUrl) {
+        if (baseUrl == null) return false;
+        String value = baseUrl.trim();
+        for (DramaProviderConfig provider : providers()) {
+            if (value.equalsIgnoreCase(provider.baseUrl)) return true;
+        }
+        return false;
     }
 
     public DramaProviderConfig addSuggested() {
@@ -146,10 +185,15 @@ public final class DramaCatalogRegistry {
         if (cached != null && provider.baseUrl.equalsIgnoreCase(cached.config().baseUrl)) {
             return cached;
         }
-        if (!DramaProviderConfig.KIND_VOTE_CATALOG.equals(provider.kind)) {
+        DramaCatalog created;
+        if (DramaProviderConfig.KIND_CMS_DRAMA.equals(provider.kind)) {
+            created = new CmsDramaCatalog(provider);
+        } else if (DramaProviderConfig.KIND_VOTE_CATALOG.equals(provider.kind)
+                || provider.kind == null || provider.kind.isEmpty()) {
+            created = new VoteDramaCatalog(provider);
+        } else {
             throw new DramaException("provider_unsupported", "暂不支持的目录协议：" + provider.kind);
         }
-        DramaCatalog created = new VoteDramaCatalog(provider);
         catalogs.put(provider.id, created);
         return created;
     }
