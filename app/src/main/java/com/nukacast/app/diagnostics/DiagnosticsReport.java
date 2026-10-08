@@ -308,6 +308,17 @@ public final class DiagnosticsReport {
         List<com.nukacast.app.tvbox.SiteCompatibilityStore.Issue> issues =
                 runtime.getSpiderManager().compatibility().snapshot();
         if (issues.isEmpty()) report.append("（无）\n");
+        // A plugin-only source contributes dozens of these; the count and the reason matter first, the
+        // names after, or the answer to "为什么只有这几个站点" is buried in a wall of lines.
+        java.util.Map<String, Integer> byReason = new java.util.LinkedHashMap<String, Integer>();
+        for (com.nukacast.app.tvbox.SiteCompatibilityStore.Issue issue : issues) {
+            Integer seen = byReason.get(issue.reason);
+            byReason.put(issue.reason, seen == null ? 1 : seen + 1);
+        }
+        for (java.util.Map.Entry<String, Integer> entry : byReason.entrySet()) {
+            report.append("共 ").append(entry.getValue()).append(" 个：").append(entry.getKey()).append('\n');
+        }
+        if (!byReason.isEmpty()) report.append('\n');
         for (com.nukacast.app.tvbox.SiteCompatibilityStore.Issue issue : issues) {
             report.append(issue.siteName).append("：").append(issue.reason)
                     .append(issue.permanent ? "（不再重试）" : "（冷却中）").append('\n');

@@ -379,6 +379,13 @@ public final class TvBoxContentService {
                         && !com.nukacast.app.spider.SpiderManager.jarSpidersSupported();
                 if (spiders.compatibility().isUnsupported(site) || unsupportedPlugin) {
                     skipped++;
+                    // Record why: the home page announces "跳过 N 个本机不支持的站点（详见设备页诊断）",
+                    // and that diagnostic was empty because only the search path recorded the reason.
+                    if (unsupportedPlugin && !spiders.compatibility().isUnsupported(site)) {
+                        spiders.compatibility().record(site,
+                                "需要 JAR 插件，Android " + android.os.Build.VERSION.RELEASE
+                                        + "（API " + android.os.Build.VERSION.SDK_INT + "）无法加载", true);
+                    }
                     continue;
                 }
                 pluginSites.add(site);
