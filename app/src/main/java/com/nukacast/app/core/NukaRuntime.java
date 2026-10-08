@@ -130,19 +130,30 @@ public final class NukaRuntime {
         }
         state.updateService(AppState.ServiceState.STARTING, "正在启动局域网服务");
         ControlServer server = new ControlServer(context, CONTROL_PORT, this);
+        // The web console is the one service that everything else is reached through, so it is the only one
+        // whose failure is fatal. AirPlay needs a native library that simply does not exist for every ABI,
+        // and a missing library used to take the console and DLNA down with it (measured on the x86
+        // emulator: no server on port 9978 at all, and a long stack trace as the only clue).
+        server.start(5000, false);
+        controlServer = server;
         try {
-            server.start(5000, false);
             airPlayReceiver.start();
-            startDlna();
-            controlServer = server;
-            state.updateService(AppState.ServiceState.READY, "等待连接");
-        } catch (Exception failure) {
-            server.stop();
-            airPlayReceiver.stop();
-            stopDlna();
-            controlServer = null;
-            throw failure;
+        } catch (Throwable failure) {
+            AppLog.w("AirPlay", "接收器没起来，其余服务照常：" + friendly(failure));
         }
+        try {
+            startDlna();
+        } catch (Throwable failure) {
+            AppLog.w("投屏", "DLNA 没起来，其余服务照常：" + friendly(failure));
+        }
+        state.updateService(AppState.ServiceState.READY, "等待连接");
+    }
+
+    /** One line for a failure, since these are reported, not thrown. */
+    private static String friendly(Throwable failure) {
+        String message = failure.getMessage();
+        if (message != null && !message.isEmpty()) return message;
+        return failure.getClass().getSimpleName();
     }
 
     public synchronized void stopServices() {

@@ -290,6 +290,68 @@ public final class ControlServer extends NanoHTTPD {
                         }
                     }));
         }
+        if ("/api/debug/reminder".equals(path)) {
+            // Programmes the viewer asked to be reminded about, and what the television would do with them
+            // right now. Listing them is also how a check sees that a reminder survived a restart.
+            Map<String, String> query = session.getParms();
+            Map<String, Object> answer = new LinkedHashMap<String, Object>();
+            com.nukacast.app.live.ReminderStore store =
+                    new com.nukacast.app.live.ReminderStore(runtime.getContext());
+            long now = System.currentTimeMillis();
+            List<Map<String, Object>> rows = new ArrayList<Map<String, Object>>();
+            for (com.nukacast.app.live.ProgrammeReminder reminder : store.upcoming()) {
+                Map<String, Object> row = new LinkedHashMap<String, Object>();
+                row.put("key", reminder.key());
+                row.put("channel", reminder.channelName);
+                row.put("channelId", reminder.channelId);
+                row.put("title", reminder.title);
+                row.put("startMs", reminder.startMs);
+                row.put("inSeconds", (reminder.startMs - now) / 1000);
+                row.put("due", com.nukacast.app.live.ReminderPolicy.isDue(reminder, now));
+                rows.add(row);
+            }
+            answer.put("reminders", rows);
+            answer.put("count", rows.size());
+            if (query.get("remove") != null) {
+                answer.put("removed", store.remove(query.get("remove")));
+            }
+            if (query.get("add") != null) {
+                // Sets one for a channel of the loaded playlist, a given number of seconds from now, which
+                // is how the automatic switch is checked without waiting for a real programme to start.
+                long inSeconds = 40L;
+                try {
+                    inSeconds = Long.parseLong(query.get("inSeconds") == null ? "40"
+                            : query.get("inSeconds"));
+                } catch (NumberFormatException ignored) {
+                    // Keep the default.
+                }
+                String wanted = query.get("channel") == null ? "" : query.get("channel");
+                String sourceWanted = query.get("source") == null ? "" : query.get("source");
+                // The playlist the television has loaded is the one the reminder must point at, so it is
+                // asked for it rather than guessed from the stored list.
+                com.nukacast.app.live.model.LiveCatalog.Channel found = null;
+                com.nukacast.app.MainActivity live = com.nukacast.app.MainActivity.onScreen();
+                if (live != null) found = live.liveChannelForDebug(wanted);
+                if (found == null) {
+                    answer.put("added", false);
+                    answer.put("note", "没有找到频道：" + wanted);
+                } else {
+                    com.nukacast.app.live.ProgrammeReminder created =
+                            new com.nukacast.app.live.ProgrammeReminder(
+                                    live == null ? "" : live.liveSourceIdForDebug(), found.id,
+                                    found.name,
+                                    query.get("title") == null ? "测试节目" : query.get("title"),
+                                    now + inSeconds * 1000L);
+                    store.add(created);
+                    answer.put("added", true);
+                    answer.put("key", created.key());
+                    answer.put("firesInSeconds", inSeconds);
+                }
+            }
+            answer.put("leadSeconds", com.nukacast.app.live.ReminderPolicy.LEAD_MS / 1000);
+            answer.put("graceSeconds", com.nukacast.app.live.ReminderPolicy.GRACE_MS / 1000);
+            return json(Response.Status.OK, answer);
+        }
         if ("/api/debug/theme".equals(path)) {
             // Switches the light/dark theme from outside, so the pages can be looked at in both without
             // driving the settings page with a remote (the pass that paints the colours runs on resume).

@@ -211,6 +211,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private boolean liveGaveUp;
     /** True while an earlier programme is playing: the channel ticker must not zap it. */
     private boolean liveCatchupPlaying;
+    /** The programmes the viewer asked to be reminded about. Created in onCreate (it needs a context). */
+    private com.nukacast.app.live.ReminderStore reminders;
+    /** Watches the clock while the window is on screen. */
+    private final Handler reminderHandler = new Handler(Looper.getMainLooper());
+    private final Runnable reminderTick = new Runnable() {
+        @Override public void run() {
+            checkReminders();
+            reminderHandler.postDelayed(this, 15000L);
+        }
+    };
     /** The listings behind the guide dialog, for the rows the viewer picks. */
     private final java.util.Map<String, com.nukacast.app.live.model.EpgSchedule> liveVisibleSchedules =
             new java.util.HashMap<String, com.nukacast.app.live.model.EpgSchedule>();
@@ -318,6 +328,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         setContentView(R.layout.activity_main);
 
         runtime = ((NukaCastApp) getApplication()).runtime();
+        reminders = new com.nukacast.app.live.ReminderStore(this);
         bindViews();
         TvTheme.apply(this, appShell);
         bindNavigation();
@@ -336,9 +347,21 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     protected void onResume() {
         super.onResume();
         hideSystemUi();
+        if (reminders != null) {
+            // A reminder whose moment passed while the app was away is dropped, not fired at the viewer.
+            reminders.prune();
+            reminderHandler.removeCallbacks(reminderTick);
+            reminderHandler.postDelayed(reminderTick, 5000L);
+        }
         render();
         if (PAGE_HOME.equals(currentPage)) renderHome();
         applyThemeNow();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        reminderHandler.removeCallbacks(reminderTick);
     }
 
     @Override
@@ -2751,6 +2774,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         new java.util.ArrayList<com.nukacast.app.live.EpgNow.Slot>();
                 String failure = "";
                 int liveIndex = -1;
+                int lastLiveIndex = -1;
                 try {
                     com.nukacast.app.live.model.EpgSchedule schedule =
                             runtime.getLiveService().epg(source, channel.id, "");
@@ -2758,7 +2782,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     for (com.nukacast.app.live.EpgNow.Slot slot
                             : com.nukacast.app.live.EpgNow.slots(schedule)) {
                         if (slot.isPlaceholder()) continue;
+                        // "Where the viewer is" is taken from the clock, not from the listing's own idea of
+                        // what is live: a feed whose programme boundaries do not line up (or a slot that has
+                        // just ended) leaves isLive() false for every row, and then the list would open at
+                        // the start of the day again.
+                        if (slot.startMs <= now) liveIndex = lines.size();
                         if (slot.isLive(now)) liveIndex = lines.size();
+                        lastLiveIndex = lines.size();
                         lines.add((slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
                                 + slot.endLabel() + "　" + slot.title);
                         slots.add(slot);
@@ -2770,7 +2800,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     failure = error.getMessage() == null ? "节目单读取失败" : error.getMessage();
                 }
                 final String problem = failure;
-                final int currentIndex = liveIndex;
+                final int currentIndex = liveIndex >= 0 ? liveIndex : lastLiveIndex;
                 com.nukacast.app.diagnostics.AppLog.d("直播", "节目单结果：" + channel.name
                         + " → " + lines.size() + " 条"
                         + (problem.isEmpty() ? "" : "（" + problem + "）"));
@@ -2791,35 +2821,129 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                             }
                             return;
                         }
-                        final String[] rows = lines.toArray(new String[0]);
-                        final List<com.nukacast.app.live.EpgNow.Slot> programmeSlots = slots;
+                        final List<com.nukacast.app.live.EpgNow.Slot> programmeSlots =
+                                guideOrder(slots, currentIndex);
+                        final int openingRow = 0;
                         final com.nukacast.app.live.model.EpgSchedule programmeSchedule =
                                 liveVisibleSchedules.get(channel.id);
-                        AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
-                                .setTitle(channel.name + " 节目单")
-                                .setItems(rows, new DialogInterface.OnClickListener() {
-                                    @Override public void onClick(DialogInterface listed, int which) {
-                                        if (which < 0 || which >= programmeSlots.size()) return;
+                        // Rebuilt whenever a reminder is set or cancelled, so the list shows which
+                        // programmes are remembered (the platform list items cannot be edited in place).
+                        final Runnable[] showGuide = new Runnable[1];
+                        // The freshest way to open this list, so a toggle can rebuild it with the marker.
+                        final Runnable[] currentGuide = new Runnable[1];
+                        // The row under the cursor. Read from the list's own selection events rather than
+                        // from getSelectedItemPosition(): scrolling the list to what is on now moves the
+                        // view, not the selection, and the two disagreed by twenty rows (measured: the
+                        // viewer pressed 菜单 on 节目 26 and was told "节目 00 已经开始了").
+                        // With the list ordered as guideOrder() does it, the cursor's first row is "now",
+                        // so that is what 菜单 acts on before the viewer moves.
+                        final int[] highlighted = new int[] {0};
+                        showGuide[0] = new Runnable() {
+                            @Override public void run() {
+                                String[] rows = guideLabels(programmeSlots, currentIndex).toArray(new String[0]);
+                                AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
+                                        .setTitle(channel.name + " 节目单")
+                                        .setItems(rows, new DialogInterface.OnClickListener() {
+                                            @Override public void onClick(DialogInterface listed,
+                                                                        int which) {
+                                                if (which < 0 || which >= programmeSlots.size()) return;
+                                                com.nukacast.app.live.EpgNow.Slot picked =
+                                                        programmeSlots.get(which);
+                                                if (picked == null) return;   // the divider line
+                                                if (picked == null) return;
+                                                if (picked.startMs > System.currentTimeMillis()) {
+                                                    // 确定 on something that has not started cannot mean
+                                                    // "watch it now", so it means "remember it".
+                                                    toggleReminder(channel, programmeSlots, which);
+                                                    listed.dismiss();
+                                                    currentGuide[0].run();
+                                                    return;
+                                                }
+                                                listed.dismiss();
+                                                openProgramme(channel, programmeSchedule, picked);
+                                            }
+                                        })
+                                        .setPositiveButton("关闭", null)
+                                        .create();
+                                // MENU on the highlighted row: 预约 / 取消预约. A television remote has no
+                                // place for a second button in a list, and this is where the viewer is
+                                // already looking when they decide they want to watch something.
+                                dialog.setOnKeyListener(new DialogInterface.OnKeyListener() {
+                                    @Override public boolean onKey(DialogInterface listed, int keyCode,
+                                                                   android.view.KeyEvent event) {
+                                        if (keyCode != android.view.KeyEvent.KEYCODE_MENU
+                                                || event.getAction()
+                                                != android.view.KeyEvent.ACTION_DOWN) {
+                                            return false;
+                                        }
+                                        if (!(listed instanceof AlertDialog)) return false;
+                                        // What the list itself says, once it has a cursor: it tracks the
+                                        // viewer's presses, while the selection callback never fires on this
+                                        // Android (measured: two presses of 下 and the list said 2 while the
+                                        // callback still said 0).
+                                        int which = ((AlertDialog) listed).getListView()
+                                                .getSelectedItemPosition();
+                                        if (which < 0 || which >= programmeSlots.size()) which = highlighted[0];
+                                        AppLog.i("直播", "节目单按了菜单键：第 " + which + " 条（共 "
+                                                + programmeSlots.size() + " 条）");
+                                        toggleReminder(channel, programmeSlots, which);
                                         listed.dismiss();
-                                        openProgramme(channel, programmeSchedule,
-                                                programmeSlots.get(which));
+                                        showGuide[0].run();
+                                        return true;
                                     }
-                                })
-                                .setPositiveButton("关闭", null)
-                                .create();
-                        // Opening a 24-hour list at 00:00 when it is half past nine in the evening would
-                        // hide the one thing the viewer asked for, so the list starts at what is on now.
-                        if (currentIndex > 0) {
-                            dialog.setOnShowListener(new DialogInterface.OnShowListener() {
-                                @Override public void onShow(DialogInterface shown) {
-                                    if (shown instanceof AlertDialog) {
-                                        ((AlertDialog) shown).getListView()
-                                                .setSelection(currentIndex);
+                                });
+                                dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+                                    @Override public void onShow(DialogInterface shown) {
+                                        if (!(shown instanceof AlertDialog)) return;
+                                        AlertDialog alert = (AlertDialog) shown;
+                                        final android.widget.ListView list = alert.getListView();
+                                        list.setOnItemSelectedListener(
+                                                new android.widget.AdapterView.OnItemSelectedListener() {
+                                                    @Override public void onItemSelected(
+                                                            android.widget.AdapterView<?> parent,
+                                                            android.view.View view, int position, long id) {
+                                                        highlighted[0] = position;
+                                                        AppLog.d("直播", "节目单光标第 " + position + " 条");
+                                                    }
+
+                                                    @Override public void onNothingSelected(
+                                                            android.widget.AdapterView<?> parent) { }
+                                                });
+                                        // Opening a 24-hour list at 00:00 when it is half past nine in the
+                                        // evening would hide the one thing the viewer asked for. Posted, and
+                                        // asserted in the log: requesting it while the dialog is being shown
+                                        // is lost on this Android.
+                                        list.post(new Runnable() {
+                                            @Override public void run() {
+                                                // A ListView keeps no selection while it is in touch mode, so
+                                                // setSelection() only scrolled the view: the cursor stayed on
+                                                // the first row of the day and the viewer walked forward from
+                                                // 01:30 instead of from what is on now (measured: three presses
+                                                // of 下 then 确定 acted on 节目 00). Leaving touch mode first
+                                                // makes the selection real, and then it is set where it belongs.
+                                                // The cursor sits on the first row whether or not the list
+                                                // asks for another, which is why guideOrder() puts what is on
+                                                // now at the top.
+                                                list.setFocusableInTouchMode(true);
+                                                list.requestFocus();
+                                                AppLog.i("直播", "节目单打开在 " + highlighted[0] + "/"
+                                                        + programmeSlots.size() + "（现在第 "
+                                                        + currentIndex + " 条）");
+                                            }
+                                        });
+                                        // showDialog()'s own theming pass is replaced by this listener, so
+                                        // the dialog is painted here.
+                                        android.view.Window window = alert.getWindow();
+                                        if (window != null && window.getDecorView() != null) {
+                                            TvTheme.apply(MainActivity.this, window.getDecorView());
+                                        }
                                     }
-                                }
-                            });
-                        }
-                        showDialog(dialog);
+                                });
+                                showDialog(dialog);
+                            }
+                        };
+                        currentGuide[0] = showGuide[0];
+                        showGuide[0].run();
                     }
                 });
             }
@@ -2949,6 +3073,83 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if (program.title != null && program.title.equals(slot.title)) return program;
         }
         return null;
+    }
+
+    /**
+     * The programme list in the order a viewer reads it: what is on now, what is coming, then what has
+     * been on (watchable again where the playlist supports it).
+     *
+     * <p>Not cosmetic: the platform's dialog list hands the cursor to its first row and ignores a request
+     * for another, so a list that starts at midnight leaves the viewer stepping through the small hours —
+     * measured on the television, where three presses of 下 then 确定 acted on a programme from 01:30.
+     */
+    private List<com.nukacast.app.live.EpgNow.Slot> guideOrder(
+            List<com.nukacast.app.live.EpgNow.Slot> slots, int nowIndex) {
+        List<com.nukacast.app.live.EpgNow.Slot> ordered =
+                new java.util.ArrayList<com.nukacast.app.live.EpgNow.Slot>();
+        int start = nowIndex < 0 || nowIndex >= slots.size() ? 0 : nowIndex;
+        for (int i = start; i < slots.size(); i++) ordered.add(slots.get(i));
+        if (start > 0) {
+            ordered.add(null);   // divider
+            for (int i = 0; i < start; i++) ordered.add(slots.get(i));
+        }
+        return ordered;
+    }
+
+    /** One line per programme, with a marker on the ones the viewer asked to be reminded about. */
+    private List<String> guideLabels(List<com.nukacast.app.live.EpgNow.Slot> slots, int nowIndex) {
+        List<String> labels = new java.util.ArrayList<String>();
+        long now = System.currentTimeMillis();
+        for (com.nukacast.app.live.EpgNow.Slot slot : slots) {
+            if (slot == null) {
+                labels.add("—— 以下已经播过（按确定键回看）——");
+                continue;
+            }
+            String marker = hasReminder(slot.startMs) ? "⏰ " : "";
+            labels.add(marker + (slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
+                    + slot.endLabel() + "　" + slot.title);
+        }
+        return labels;
+    }
+
+    /** Whether this moment already has a reminder on it. */
+    private boolean hasReminder(long startMs) {
+        if (reminders == null) return false;
+        for (com.nukacast.app.live.ProgrammeReminder reminder : reminders.all()) {
+            if (reminder.startMs == startMs) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Sets a reminder for a programme in the guide, or cancels the one already there.
+     *
+     * <p>Only programmes that have not started can be remembered: a reminder for something that is already
+     * on is a reminder to watch what is on.
+     */
+    private void toggleReminder(com.nukacast.app.live.model.LiveCatalog.Channel channel,
+                               List<com.nukacast.app.live.EpgNow.Slot> slots, int which) {
+        if (which < 0 || which >= slots.size()) return;
+        com.nukacast.app.live.EpgNow.Slot slot = slots.get(which);
+        if (slot == null) return;
+        if (slot.startMs <= System.currentTimeMillis()) {
+            toast("这个节目已经开始了");
+            AppLog.i("直播", "预约跳过：这条已经开始了（" + slot.title + "）");
+            return;
+        }
+        if (reminders == null) return;
+        for (com.nukacast.app.live.ProgrammeReminder existing : reminders.all()) {
+            if (existing.startMs == slot.startMs && existing.channelId.equals(channel.id)) {
+                reminders.remove(existing.key());
+                toast("已取消预约：" + slot.title);
+                AppLog.i("直播", "取消预约：" + channel.name + " · " + slot.title);
+                return;
+            }
+        }
+        reminders.add(new com.nukacast.app.live.ProgrammeReminder(liveSourceId, channel.id, channel.name,
+                slot.title, slot.startMs));
+        toast("已预约：" + slot.startLabel() + " " + slot.title + "（到点自动切到 " + channel.name + "）");
+        AppLog.i("直播", "预约：" + channel.name + " · " + slot.title + "（" + slot.startLabel() + "）");
     }
 
     /** The channel the viewer is on, or the first one of the visible list. */
@@ -3305,6 +3506,61 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     "按返回键退出", true);
         }
         playEpisode(detail, next, episode, 0);
+    }
+
+    /**
+     * Acts on any reminder whose moment has come: the television switches to that channel by itself.
+     *
+     * <p>Runs while the window is on screen. Once acted on, the reminder is dropped — the viewer asked to be
+     * taken there, and they are there.
+     */
+    private void checkReminders() {
+        if (reminders == null) return;
+        long now = System.currentTimeMillis();
+        com.nukacast.app.live.ProgrammeReminder due =
+                com.nukacast.app.live.ReminderPolicy.due(reminders.all(), now);
+        if (due == null) return;
+        reminders.remove(due.key());
+        com.nukacast.app.live.model.LiveCatalog.Channel channel = findChannel(due.channelId);
+        if (channel == null) {
+            // The playlist changed since the reminder was set (a source removed, a channel renamed).
+            AppLog.w("直播", "预约的频道已经不在了：" + due.channelName + "（" + due.title + "）");
+            toast("预约的频道已经不在了：" + due.channelName);
+            return;
+        }
+        if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
+        playLiveChannel(channel);
+        AppLog.i("直播", "预约到点：" + due.channelName + " · " + due.title);
+        toast(due.channelName + " · " + due.title + " 开始了");
+    }
+
+    /** The playlist the live page has loaded (debug API). */
+    public String liveSourceIdForDebug() {
+        return liveSourceId;
+    }
+
+    /** A channel of the loaded playlist by name or id, for the debug API. */
+    public com.nukacast.app.live.model.LiveCatalog.Channel liveChannelForDebug(String wanted) {
+        com.nukacast.app.live.model.LiveCatalog catalog = liveCatalog;
+        if (catalog == null || wanted == null || wanted.isEmpty()) return null;
+        for (com.nukacast.app.live.model.LiveCatalog.Group group : catalog.groups) {
+            for (com.nukacast.app.live.model.LiveCatalog.Channel channel : group.channels) {
+                if (channel.name.contains(wanted) || channel.id.equals(wanted)) return channel;
+            }
+        }
+        return null;
+    }
+
+    /** The channel with this id in the loaded playlist, or null. */
+    private com.nukacast.app.live.model.LiveCatalog.Channel findChannel(String channelId) {
+        com.nukacast.app.live.model.LiveCatalog catalog = liveCatalog;
+        if (catalog == null) return null;
+        for (com.nukacast.app.live.model.LiveCatalog.Group group : catalog.groups) {
+            for (com.nukacast.app.live.model.LiveCatalog.Channel channel : group.channels) {
+                if (channel.id.equals(channelId)) return channel;
+            }
+        }
+        return null;
     }
 
     /** Zaps to the neighbouring channel while watching live TV. */
