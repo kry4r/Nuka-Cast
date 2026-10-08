@@ -444,6 +444,16 @@ async function main() {
   check("track API answers for the playing media",
     Array.isArray(trackApi.tracks) && trackApi.applied === true,
     `tracks=${JSON.stringify(trackApi.tracks)}${subtitleEvidence ? " · " + subtitleEvidence : ""}`);
+  // Version check: the TV reads the release feed itself, so this also proves the device can reach
+  // GitHub over TLS (which it could not until the bundled roots were fixed).
+  const update = await call("GET", "/api/update");
+  check("update check reads the release feed", update.status === 200 && !!update.data.currentVersion,
+    `当前 ${update.data.currentVersion} · 最新 ${update.data.latestVersion} · ${update.data.summary}`);
+  const pretendOld = await call("GET", "/api/debug/update?current=0.0.1");
+  check("an older build is told there is a newer release",
+    pretendOld.status === 200 && pretendOld.data.updateAvailable === true,
+    `假装 0.0.1 → ${pretendOld.data.summary}`);
+
   const badTrack = await call("GET", "/api/debug/player/track?type=nonsense&index=0");
   check("track API rejects an unknown type", badTrack.status === 400,
     `type=nonsense → HTTP ${badTrack.status}`);

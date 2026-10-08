@@ -650,6 +650,10 @@ public final class PlayerController {
             url = mediaUrl;
             error = "";
             state = "loading";
+            // The previous stream's last subtitle line must not sit over the new picture: a stream
+            // without any text track never reports an empty cue group of its own.
+            subtitleText = "";
+            notifyCue("");
             AppLog.i("播放器", "开始播放：" + (title.isEmpty() ? "未命名媒体" : title));
             appState.updateActiveMedia(title);
 
@@ -976,6 +980,10 @@ public final class PlayerController {
                 url = "";
                 error = "";
                 appState.updateActiveMedia("");
+                // Measured on the device: a stream without subtitles never reports "no cues", so the last
+                // line of the previous stream stayed on screen over the next one. Cleared here instead.
+                subtitleText = "";
+                notifyCue("");
             }
         }
     }

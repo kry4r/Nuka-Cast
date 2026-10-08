@@ -159,6 +159,16 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/debug/probe".equals(path) && Method.POST.equals(session.getMethod())) {
             return json(Response.Status.OK, debugProbe(session));
         }
+        if ("/api/debug/update".equals(path)) {
+            // current= lets a test act as an older build: "a newer version exists" cannot be observed on
+            // a device that already runs the newest one.
+            String pretend = safe(session.getParms().get("current"));
+            com.nukacast.app.update.Updates.Result result = pretend.isEmpty()
+                    ? runtime.getUpdateChecker().check("1".equals(safe(session.getParms().get("refresh"))))
+                    : com.nukacast.app.update.Updates.evaluate(pretend,
+                            com.nukacast.app.update.Updates.parse(fetchReleaseJson()));
+            return json(Response.Status.OK, result);
+        }
         if ("/api/debug/tls".equals(path)) {
             // "Why does this host fail on the television?": the handshake plus each trust store's verdict.
             String url = safe(session.getParms().get("url"));
@@ -601,6 +611,19 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("logs", entries.subList(from, entries.size()));
         }
         return payload;
+    }
+
+    /** The release feed as the device sees it, for the debug update check. */
+    private String fetchReleaseJson() throws java.io.IOException {
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(com.nukacast.app.update.Updates.RELEASES_API)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "NukaCast-debug")
+                .build();
+        try (okhttp3.Response response = com.nukacast.app.net.HttpStack.client().newCall(request).execute()) {
+            if (response.body() == null) return "{}";
+            return response.body().string();
+        }
     }
 
     /** The HTTP stack only exposes the frozen boot state; the debug API wants it named. */
@@ -1398,6 +1421,12 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("kind", kind);
             payload.put("removed", removed);
             return json(Response.Status.OK, payload);
+        }
+        if ("/api/update".equals(path)) {
+            com.nukacast.app.update.UpdateChecker checker = runtime.getUpdateChecker();
+            boolean force = "1".equals(safe(session.getParms().get("refresh")));
+            // force is for the console's "检查更新" button; every other caller gets the cached answer.
+            return json(Response.Status.OK, checker.check(force));
         }
         if ("/api/player".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getPlayerController().snapshot());

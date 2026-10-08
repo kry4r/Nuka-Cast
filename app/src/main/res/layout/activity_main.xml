@@ -486,6 +486,28 @@
                                 </LinearLayout>
                             </LinearLayout>
                         </LinearLayout>
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                style="@style/SettingsBand"
+                                android:layout_width="match_parent"
+                                android:layout_marginStart="0dp"
+                                android:layout_marginEnd="0dp"
+                                android:minHeight="104dp">
+                                <TextView style="@style/PanelTitle" android:text="@string/update_title" />
+                                <TextView android:id="@+id/updateSummary" style="@style/PanelValue" />
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal">
+                                    <Button android:id="@+id/checkUpdateButton" style="@style/ActionButton" android:text="@string/update_check" />
+                                    <Button android:id="@+id/openReleaseButton" style="@style/ActionButton" android:text="@string/update_address" />
+                                </LinearLayout>
+                            </LinearLayout>
+                        </LinearLayout>
                     </LinearLayout>
                 </ScrollView>
             </FrameLayout>

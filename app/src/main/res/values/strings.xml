@@ -4,6 +4,10 @@
     <string name="nav_home">首页</string>
     <string name="nav_movies">影视</string>
     <string name="nav_live">直播</string>
+    <string name="update_title">版本更新</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_address">下载地址</string>
+    <string name="update_checking">正在检查…</string>
     <string name="nav_cast">投屏</string>
     <string name="nav_settings">设置</string>
     <string name="status_ready">等待连接</string>

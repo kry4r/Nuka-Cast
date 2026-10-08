@@ -215,6 +215,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView codecSummary;
     private TextView sourceSummary;
     private TextView storageSummary;
+    private TextView updateSummary;
+    private Button checkUpdateButton;
+    private Button openReleaseButton;
     private View featuredPanel;
     /** The title the hero panel is showing, so a click on it can open that title. */
     private SearchItem featuredItem;
@@ -593,6 +596,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         codecSummary = (TextView) findViewById(R.id.codecSummary);
         sourceSummary = (TextView) findViewById(R.id.sourceSummary);
         storageSummary = (TextView) findViewById(R.id.storageSummary);
+        updateSummary = (TextView) findViewById(R.id.updateSummary);
+        checkUpdateButton = (Button) findViewById(R.id.checkUpdateButton);
+        openReleaseButton = (Button) findViewById(R.id.openReleaseButton);
         refreshSourcesButton = (Button) findViewById(R.id.refreshSourcesButton);
         scanStorageButton = (Button) findViewById(R.id.scanStorageButton);
         themeToggleButton = (Button) findViewById(R.id.themeToggleButton);
@@ -642,6 +648,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         scanStorageButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { scanStorage(); }
         });
+        checkUpdateButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { checkForUpdates(true); }
+        });
+        openReleaseButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showReleaseAddress(); }
+        });
+        // The band shows the running version immediately; the feed is asked in the background.
+        if (updateSummary != null) {
+            updateSummary.setText("当前版本 " + runtime.versionName());
+            checkForUpdates(false);
+        }
         themeToggleButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
                 TvTheme.toggle(MainActivity.this);
@@ -3773,6 +3790,47 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
             runtime.getPlayerController().stop();
         }
+    }
+
+    /**
+     * Asks whether a newer release exists.
+     *
+     * <p>Off the UI thread: the feed is a network call, and the check must never delay the settings page.
+     * Nothing is installed by itself — a television that installs an update behind the viewer's back is
+     * worse than one that is a version behind.
+     */
+    private void checkForUpdates(final boolean force) {
+        if (checkUpdateButton != null) checkUpdateButton.setEnabled(false);
+        if (updateSummary != null) updateSummary.setText(getString(R.string.update_checking));
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final com.nukacast.app.update.Updates.Result result =
+                        runtime.getUpdateChecker().check(force);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        if (checkUpdateButton != null) checkUpdateButton.setEnabled(true);
+                        if (updateSummary != null) updateSummary.setText(result.summary);
+                        if (openReleaseButton != null) {
+                            openReleaseButton.setEnabled(!result.apkUrl.isEmpty()
+                                    || !result.pageUrl.isEmpty());
+                        }
+                    }
+                });
+            }
+        }, "update-check").start();
+    }
+
+    /** Shows where the new build can be downloaded: a television has no browser to open it with. */
+    private void showReleaseAddress() {
+        com.nukacast.app.update.Updates.Result result = runtime.getUpdateChecker().last();
+        String address = result != null && !result.apkUrl.isEmpty()
+                ? result.apkUrl : com.nukacast.app.update.Updates.RELEASES_PAGE;
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.update_address)
+                .setMessage(address)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
     }
 
     private void scanStorage() {

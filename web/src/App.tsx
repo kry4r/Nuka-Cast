@@ -37,6 +37,7 @@ import { hostOf, kindTone, probeDotClass, probeState } from "@/lib/kind"
 import { rankLeafSources, selectPreferredSource } from "@/lib/source-ranking"
 import { createLatestRequestGate } from "@/lib/latest-request"
 import { PlaybackSettingsCard } from "@/components/playback-settings"
+import { UpdateCard } from "@/components/update-card"
 import { RecommendedShelf } from "@/components/source-shelf"
 import { SiteHealthCard } from "@/components/site-health"
 import { ViewBoundary } from "@/components/view-boundary"
@@ -1574,6 +1575,7 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <PlaybackSettingsCard onError={setError} />
+        <UpdateCard onError={setError} />
       <SectionCard title="设备信息">
           <div className="divide-y">
             {rows.map(([label, value]) => (

@@ -45,6 +45,7 @@ public final class NukaRuntime {
     private final com.nukacast.app.dlna.DlnaRenderer dlnaRenderer;
     private final com.nukacast.app.dlna.DlnaService dlnaService;
     private com.nukacast.app.dlna.DlnaSsdp dlnaSsdp;
+    private final com.nukacast.app.update.UpdateChecker updateChecker;
     private ControlServer controlServer;
 
     public NukaRuntime(Context context) {
@@ -66,6 +67,7 @@ public final class NukaRuntime {
         contentService.useTitleIndex(searchEngine.titles());
         liveService = new LiveService(tvBoxRepository, tvBoxRepository.getLiveSourceStore());
         mediaLibrary = new MediaLibraryStore(this.context);
+        updateChecker = new com.nukacast.app.update.UpdateChecker(versionName());
         playerController = new PlayerController(state, new PlayerController.ProgressListener() {
             @Override public void onProgress(int positionMs, int durationMs) {
                 mediaLibrary.updateActiveProgress(positionMs, durationMs);
@@ -168,6 +170,27 @@ public final class NukaRuntime {
     public StorageLibrary getStorageLibrary() { return storageLibrary; }
     public LiveService getLiveService() { return liveService; }
     public MediaLibraryStore getMediaLibrary() { return mediaLibrary; }
+
+    /** Whether a newer release exists; the answer is cached inside the checker. */
+    public com.nukacast.app.update.UpdateChecker getUpdateChecker() { return updateChecker; }
+
+    /**
+     * The running build's version name.
+     *
+     * <p>Read from the package rather than {@code BuildConfig}: the debug build carries a "-debug"
+     * suffix there, and comparing that against a release tag would make every debug build look newer.
+     */
+    public String versionName() {
+        try {
+            String name = context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).versionName;
+            if (name == null) return "";
+            int suffix = name.indexOf('-');
+            return suffix > 0 ? name.substring(0, suffix) : name;
+        } catch (Throwable unavailable) {
+            return "";
+        }
+    }
     /**
      * Bounds of everything currently visible, for diagnosing "something is cut off".
      *

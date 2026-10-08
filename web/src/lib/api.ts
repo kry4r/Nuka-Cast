@@ -469,6 +469,18 @@ export interface LibraryEntry {
   durationMs: number
 }
 
+/** What the device reports about its own version and the newest release it can see. */
+export interface UpdateStatus {
+  currentVersion: string
+  latestVersion: string
+  updateAvailable: boolean
+  apkUrl: string
+  pageUrl: string
+  error: string
+  summary: string
+  checkedAt: number
+}
+
 export interface PlaybackSettings {
   autoNextEpisode: boolean
   quality: "auto" | "highest" | "lowest"
@@ -485,6 +497,7 @@ export const api = {
   status: () => request<Status>("/api/status"),
   device: () => request<Device>("/api/device"),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
+  update: (refresh = false) => request<UpdateStatus>(`/api/update${refresh ? "?refresh=1" : ""}`),
   logs: () => request<LogEntry[]>("/api/logs"),
   clearLogs: () => request<{ cleared: boolean }>("/api/logs", { method: "DELETE" }),
   exportDiagnostics: (level?: LogLevel) =>
