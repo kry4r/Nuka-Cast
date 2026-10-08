@@ -12,12 +12,31 @@
 
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const host = process.argv[2] || "192.168.5.3";
+const host = process.argv[2] || "";
 const port = Number(process.argv[3] || 9978);
 const intervalSeconds = Number(process.argv[4] || 20);
-const base = `http://${host}:${port}`;
+let base = host ? `http://${host.split(":")[0]}:${port}` : "";
+
+/**
+ * Finds the TV when its address moved.
+ *
+ * <p>A watchdog pointed at a stale address watches nothing: measured, one run collected 890 samples
+ * of "not running (timeout)" because the TV was simply on another address. The address is therefore
+ * re-discovered whenever the app has been unreachable for a while, and the change is logged.
+ */
+async function discover() {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "tv-discover.mjs");
+  return await new Promise((resolve) => {
+    execFile(process.execPath, [script], { timeout: 60000 }, (error, stdout) => {
+      const first = String(stdout || "").trim().split(/\r?\n/)[0];
+      resolve(error || !first ? "" : first.replace(/\/$/, ""));
+    });
+  });
+}
 const dir = path.join(process.cwd(), ".preview");
 const out = path.join(dir, "tv-watch.jsonl");
 const pidFile = path.join(dir, "tv-watch.pid");
@@ -90,6 +109,16 @@ async function main() {
       emptyPolls++;
       if (emptyPolls === 1 || emptyPolls % 15 === 0) {
         console.log(`[${line.at}] not running (${status.error}) — waiting`);
+      }
+      // Nothing has answered for a while: the TV may simply be on another address, which is how one
+      // run of this tool spent six hours reporting a TV that was never there.
+      if (emptyPolls === 3 || emptyPolls % 300 === 0) {
+        const found = await discover();
+        if (found && found !== base) {
+          console.log(`[${line.at}] address changed: ${base} → ${found}`);
+          base = found;
+          emptyPolls = 0;
+        }
       }
     }
     wasUp = up;

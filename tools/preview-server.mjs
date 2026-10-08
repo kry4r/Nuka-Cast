@@ -45,7 +45,7 @@ const channels = (prefix, names) => names.map((name, index) => ({
 const api = {
   "/api/status": {
     name: "NukaCast",
-    version: "0.3.5",
+    version: "0.5.0",
     message: "运行中",
     serviceState: "ready",
     stateVersion: 42,
@@ -187,7 +187,7 @@ const api = {
     ],
     lastRun: {
       startedAt: now - 11400000, endedAt: now - 10500000, endedCleanly: false,
-      durationMs: 900000, device: "Sharp SHARP-TVC", version: "0.3.7",
+      durationMs: 900000, device: "Sharp SHARP-TVC", version: "0.5.0",
       peakHeapPercent: 84, lastStage: "airplay/video/codec_config", lastHeapPercent: 84,
       lastAvailableMemoryBytes: 96000000,
       samples: [{ "at": 1750000000000, "heapPercent": 22, "heapUsedBytes": 42240000, "nativeHeapBytes": 6600000, "availableMemoryBytes": 227000000, "stage": "startup" },{ "at": 1750000030000, "heapPercent": 24, "heapUsedBytes": 46080000, "nativeHeapBytes": 7200000, "availableMemoryBytes": 224000000, "stage": "source/PyramidStore/persist" },{ "at": 1750000060000, "heapPercent": 31, "heapUsedBytes": 59520000, "nativeHeapBytes": 9300000, "availableMemoryBytes": 213500000, "stage": "search" },{ "at": 1750000090000, "heapPercent": 38, "heapUsedBytes": 72960000, "nativeHeapBytes": 11400000, "availableMemoryBytes": 203000000, "stage": "airplay/video/native_listen" },{ "at": 1750000120000, "heapPercent": 52, "heapUsedBytes": 99840000, "nativeHeapBytes": 15600000, "availableMemoryBytes": 182000000, "stage": "airplay/video/codec_config" },{ "at": 1750000150000, "heapPercent": 61, "heapUsedBytes": 117120000, "nativeHeapBytes": 18300000, "availableMemoryBytes": 168500000, "stage": "airplay/video/first_output" },{ "at": 1750000180000, "heapPercent": 70, "heapUsedBytes": 134400000, "nativeHeapBytes": 21000000, "availableMemoryBytes": 155000000, "stage": "airplay/video/codec_config" },{ "at": 1750000210000, "heapPercent": 78, "heapUsedBytes": 149760000, "nativeHeapBytes": 23400000, "availableMemoryBytes": 143000000, "stage": "airplay/video/codec_config" },{ "at": 1750000240000, "heapPercent": 84, "heapUsedBytes": 161280000, "nativeHeapBytes": 25200000, "availableMemoryBytes": 134000000, "stage": "airplay/video/codec_config" }],
