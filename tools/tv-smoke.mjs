@@ -676,6 +676,9 @@ async function main() {
     const created = (await call("POST", "/api/live/sources", { name: "smoke-回退", url: playlist })).data;
     // The live page loaded its source list when it was opened, before this playlist existed, so the page is
     // rebuilt here — otherwise the debug "select this source" step finds nothing and nothing plays.
+    // A modal left over from the guide check would swallow the navigation, so it goes first.
+    await call("GET", "/api/debug/close");
+    await new Promise((r) => setTimeout(r, 1200));
     await call("GET", "/api/debug/navigate?page=home");
     await new Promise((r) => setTimeout(r, 2500));
     await call("GET", "/api/debug/navigate?page=live");
@@ -683,7 +686,8 @@ async function main() {
     // silently does nothing (measured: the channel was then not found and nothing played).
     for (let attempt = 0; attempt < 15; attempt++) {
       await new Promise((r) => setTimeout(r, 1000));
-      if (((await call("GET", "/api/debug/live")).data.sources || []).length > 0) break;
+      const names = (await call("GET", "/api/debug/live")).data.sources || [];
+      if (names.some((name) => String(name).includes("smoke-回退"))) break;
     }
     await new Promise((r) => setTimeout(r, 1500));
     const catalog = (await call("GET", `/api/live/catalog?sourceId=${encodeURIComponent("user:" + created.id)}`)).data;
@@ -693,8 +697,13 @@ async function main() {
       !!first && (first.urls || []).length === 3 && channels.filter((c) => c.name === "回退测试台").length === 1,
       `回退测试台：${(first && first.urls || []).length} 个地址，同名条目 ${channels.filter((c) => c.name === "回退测试台").length} 个`);
 
-    const started = (await call("GET", "/api/debug/live?source=" + encodeURIComponent("smoke-回退") +
-      "&query=" + encodeURIComponent("回退测试台") + "&play=" + encodeURIComponent("回退测试台"))).data;
+    let started = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      started = (await call("GET", "/api/debug/live?source=" + encodeURIComponent("smoke-回退") +
+        "&query=" + encodeURIComponent("回退测试台") + "&play=" + encodeURIComponent("回退测试台"))).data;
+      if (String(started.play || "").startsWith("playing:")) break;
+      await new Promise((r) => setTimeout(r, 4000)); // the page may still be reloading its source list
+    }
     // The proof is which address it ended up on, not whether it is still playing: the fixture is a short
     // clip, so by the time the third address is reached the clip may already have finished.
     let landed = {};
@@ -712,8 +721,9 @@ async function main() {
     const switched = (await smokeLogMessages(200))
       .filter((m) => m.includes("换源") && Number(String(m).split("|")[0]) >= createdAt).slice(-2);
     check("a dead mirror is skipped for the next one", reachedWorking,
-      `最终地址 ${String(landed.url || "").split("/").pop() || "(无)"} · 换源日志 ${switched.join(" / ") || "(无)"}` +
-      (started.error ? ` · ${started.error}` : ""));
+      `最终地址 ${String(landed.url || "").split("/").pop() || "(无)"} · ` +
+      `选源 ${(started.state || {}).sourceName || "(无)"} · ${started.play || started.error || "(没有播放结果)"} · ` +
+      `换源日志 ${switched.join(" / ") || "(无)"}`);
 
     await call("GET", "/api/debug/player/action?name=stop");
     await new Promise((r) => setTimeout(r, 2000));

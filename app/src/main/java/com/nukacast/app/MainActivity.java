@@ -204,9 +204,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private com.nukacast.app.live.model.LiveCatalog.Channel livePlayingChannel;
     private int liveUrlIndex;
     private int liveUrlTries;
+    /** When the current address started waiting for a picture, and whether live has ever shown one. */
+    private long liveWaitingSince;
+    private boolean liveEverPlayed;
+    /** Set once every address and channel has been tried, so the switching stops instead of looping. */
+    private boolean liveGaveUp;
 
     /** How many addresses of one channel may be tried before moving on to the next channel. */
     private static final int MAX_LIVE_URL_TRIES = 3;
+    /** How long a channel may take to show its first frame before another address is tried. */
+    private static final long LIVE_START_TIMEOUT_MS = 12000L;
+    /** How long a picture that was playing may stay gone before another address is tried. */
+    private static final long LIVE_STALL_TIMEOUT_MS = 25000L;
     /** Category browsing state: which site and category the movies page is showing. */
     private final java.util.List<com.nukacast.app.tvbox.model.Category> browseCategories =
             new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
@@ -1168,24 +1177,30 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Selects a live source by name fragment (debug API); returns its name or an empty string. */
     public String selectLiveSourceForDebug(final String fragment) {
         if (!PAGE_LIVE.equals(currentPage)) showPage(PAGE_LIVE);
-        if (liveSources.isEmpty()) {
-            loadLive();
-            return "";
-        }
-        for (com.nukacast.app.live.model.LiveSourceInfo info : liveSources) {
-            if (fragment == null || info.name == null) continue;
-            if (info.name.contains(fragment)) {
-                if (!info.id.equals(liveSourceId)) {
-                    liveSourceId = info.id;
-                    liveCatalog = null;
-                    liveGroupName = "";
-                    renderLiveSourceRow();
-                    loadLiveCatalog(liveSourceId);
-                }
-                return info.name;
-            }
-        }
+        String found = matchLiveSourceForDebug(fragment);
+        if (found != null) return found;
+        // The source list is cached for a few seconds, so a playlist added a moment ago would not be in it
+        // and "select nothing" looks like a broken source. Reload once; the caller retries.
+        liveLoadedAt = 0;
+        loadLive();
         return "";
+    }
+
+    /** The name of the live source matching a fragment, or null when the loaded list has none. */
+    private String matchLiveSourceForDebug(String fragment) {
+        if (liveSources.isEmpty() || fragment == null) return null;
+        for (com.nukacast.app.live.model.LiveSourceInfo info : liveSources) {
+            if (info.name == null || !info.name.contains(fragment)) continue;
+            if (!info.id.equals(liveSourceId)) {
+                liveSourceId = info.id;
+                liveCatalog = null;
+                liveGroupName = "";
+                renderLiveSourceRow();
+                loadLiveCatalog(liveSourceId);
+            }
+            return info.name;
+        }
+        return null;
     }
 
     /** Names of the live sources currently known to the page (debug API). */
@@ -2879,10 +2894,40 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         advanceEpisodeWhenFinished();
         if (livePlayingIndex < 0 && activeDetail != null) tryNextLine();
         if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
+        if (liveGaveUp) return;
         if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
-        if (!"error".equals(playback.state)) return;
+        // A free channel that hangs is as broken as one that errors out: measured on the television, one
+        // mirror of CCTV1 sat in "buffering" for as long as it was left alone. The viewer gets a spinner
+        // that never stops, which looks exactly like a crash.
+        if (!"error".equals(playback.state)) {
+            if ("playing".equals(playback.state) && playback.positionMs > 0) {
+                liveEverPlayed = true;
+                liveWaitingSince = 0;
+                return;
+            }
+            long now = System.currentTimeMillis();
+            if (liveWaitingSince == 0) {
+                liveWaitingSince = now;
+                return;
+            }
+            long waitedMs = now - liveWaitingSince;
+            if (waitedMs < (liveEverPlayed ? LIVE_STALL_TIMEOUT_MS : LIVE_START_TIMEOUT_MS)) return;
+            liveWaitingSince = 0;
+            AppLog.i("直播", "等了 " + (waitedMs / 1000) + " 秒没有画面，换下一个地址或频道");
+            moveOnFromLiveChannel();
+            return;
+        }
+        moveOnFromLiveChannel();
+    }
+
+    /**
+     * The next address of the current channel, or the next channel when there is none left.
+     *
+     * <p>Shared by the two ways a channel can fail: an error, and a stream that never arrives.
+     */
+    private void moveOnFromLiveChannel() {
         if (livePlayingChannel != null && liveUrlIndex + 1 < livePlayingChannel.urls.size()
                 && liveUrlTries < MAX_LIVE_URL_TRIES - 1) {
             liveUrlTries++;
@@ -2890,15 +2935,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return;
         }
         if (liveAutoSwitch >= 3) {
+            // Nothing left to try. Without this flag the counter reset and the next tick started switching
+            // channels again, so a viewer on a dead network watched the channel name change forever.
+            liveGaveUp = true;
+            AppLog.i("直播", "连着 " + liveAutoSwitch + " 个频道都播不了，停止自动换台，等观众自己换");
             if (playerHud != null) {
-                playerHud.showError("这个频道的地址播不了，按返回键退出或上/下键换台");
+                playerHud.showError("这个频道的地址都播不了，按返回键退出或上/下键换台");
             }
-            liveAutoSwitch = 0;
             return;
         }
         liveAutoSwitch++;
         AppLog.i("直播", "频道播放失败，自动换到下一个（第 " + liveAutoSwitch + " 次）");
-        switchLiveChannel(1);
+        autoAdvanceLiveChannel();
     }
 
     /** Set once the end of a series was reached, so the notice is shown only once. */
@@ -3050,6 +3098,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Zaps to the neighbouring channel while watching live TV. */
     private void switchLiveChannel(int delta) {
+        // The viewer asked for this channel, so the failure counters start over.
+        liveAutoSwitch = 0;
+        liveGaveUp = false;
+        moveLiveChannelTo(delta);
+    }
+
+    /** Moves on because the current channel will not play; the run of failures keeps counting. */
+    private void autoAdvanceLiveChannel() {
+        moveLiveChannelTo(1);
+    }
+
+    private void moveLiveChannelTo(int delta) {
         if (livePlaying.isEmpty()) return;
         liveSwitchAt = System.currentTimeMillis();
         int next = livePlayingIndex + delta;
@@ -3058,10 +3118,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         com.nukacast.app.live.model.LiveCatalog.Channel channel = livePlaying.get(next);
         if (channel.urls.isEmpty()) return;
         livePlayingIndex = next;
-        // Same door as starting a channel: zapping to a channel has to reset which address is being tried,
-        // or a failed address from the previous channel would follow the viewer here.
+        // Same door as starting a channel: moving channels has to reset which address is being tried, or a
+        // failed address from the previous channel would follow along.
         livePlayingChannel = channel;
         liveUrlTries = 0;
+        liveEverPlayed = false;
+        liveWaitingSince = 0;
         startLiveUrl(channel, 0, false);
     }
 

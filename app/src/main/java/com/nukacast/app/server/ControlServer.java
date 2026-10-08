@@ -529,8 +529,10 @@ public final class ControlServer extends NanoHTTPD {
                     });
             // Watches a channel through the television's own path, which is where a dead mirror gets
             // skipped for the next one; /api/live/play would play the address directly and prove nothing.
+            // The result is reported: "nothing played" and "there is no such channel" are different bugs.
+            String playing = null;
             if (play != null && !play.isEmpty()) {
-                activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                playing = activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
                     @Override public String call() {
                         return activity.playLiveChannelForDebug(play);
                     }
@@ -551,6 +553,7 @@ public final class ControlServer extends NanoHTTPD {
                     }));
             payload.put("query", query);
             payload.put("hits", hits);
+            payload.put("play", playing);
             payload.put("sources", names);
             return json(Response.Status.OK, payload);
         }
