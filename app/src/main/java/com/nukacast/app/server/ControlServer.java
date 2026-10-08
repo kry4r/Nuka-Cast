@@ -213,6 +213,19 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("page", runtime.navigateTo(page));
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/focus".equals(path)) {
+            final String target = safe(session.getParms().get("target"));
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            String outcome = activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                @Override public String call() {
+                    return activity.focusForDebug(target);
+                }
+            });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("focus", outcome);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/scroll".equals(path)) {
             int delta = debugIntParam(session, "delta", 600);
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
@@ -331,6 +344,7 @@ public final class ControlServer extends NanoHTTPD {
                 long now = System.currentTimeMillis();
                 payload.put("channel", schedule.channel);
                 payload.put("programs", schedule.programs.size());
+                payload.put("reason", schedule.error);
                 payload.put("label", com.nukacast.app.live.EpgNow.label(schedule, now));
                 com.nukacast.app.live.EpgNow.Slot current =
                         com.nukacast.app.live.EpgNow.current(schedule, now);

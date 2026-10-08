@@ -119,34 +119,89 @@ public final class LiveService {
         String date = requestedDate == null || requestedDate.trim().isEmpty()
                 ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date())
                 : requestedDate.trim();
-        String template = source.epg == null || source.epg.trim().isEmpty()
-                ? DEFAULT_EPG_TEMPLATE : source.epg.trim();
-        EpgSchedule best = null;
-        // EPG services key channels on plain names, playlists decorate them, so every candidate is
-        // tried until one yields programmes (the first candidate is the name as written).
-        for (String candidate : EpgChannelId.candidates(channel.epgId)) {
-            EpgSchedule schedule = fetchEpg(template, candidate, date, source);
-            if (schedule == null || schedule.programs.isEmpty()) continue;
-            if (EpgNow.isPlaceholder(schedule)) {
-                // The service answered, but with "no guide information" slots for every channel.
-                if (best == null) best = schedule;
-                continue;
+        String cacheKey = sourceId + "|" + channelId + "|" + date;
+        EpgSchedule cached = cachedSchedule(cacheKey);
+        if (cached != null) return cached;
+
+        // A guide service that is down must not take the feature with it, so the mirrors are tried in
+        // order until one answers (a source that declares its own template keeps it first).
+        List<String> templates = new ArrayList<String>();
+        if (source.epg != null && !source.epg.trim().isEmpty()) {
+            templates.add(source.epg.trim());
+        } else {
+            templates.add(DEFAULT_EPG_TEMPLATE);
+        }
+        for (String mirror : DEFAULT_EPG_MIRRORS) {
+            if (!templates.contains(mirror)) templates.add(mirror);
+        }
+
+        boolean answered = false;
+        EpgSchedule placeholder = null;
+        // EPG services key channels on plain names, playlists decorate them, so every candidate is tried
+        // until one yields programmes (the first candidate is the name as written).
+        for (String template : templates) {
+            for (String candidate : EpgChannelId.candidates(channel.epgId)) {
+                EpgSchedule schedule = fetchEpg(template, candidate, date, source);
+                if (schedule == null) continue;
+                answered = true;
+                if (schedule.programs.isEmpty()) continue;
+                if (EpgNow.isPlaceholder(schedule)) {
+                    // The service answered, but with "no guide information" slots for every channel.
+                    if (placeholder == null) placeholder = schedule;
+                    continue;
+                }
+                schedule.channel = channel.name;
+                schedule.error = "";
+                remember(cacheKey, schedule, SCHEDULE_TTL_MS);
+                return schedule;
             }
-            schedule.channel = channel.name;
-            return schedule;
+            // This template answered (even if only with placeholders): the next mirror would return the
+            // same thing for the same channel name.
+            if (answered) break;
         }
-        if (best != null) {
-            // Only placeholder data: report an empty schedule so the page says so instead of showing a
-            // fake programme name.
-            EpgSchedule empty = new EpgSchedule();
-            empty.channel = channel.name;
-            empty.date = date;
-            return empty;
-        }
+
         EpgSchedule empty = new EpgSchedule();
         empty.channel = channel.name;
         empty.date = date;
+        if (placeholder == null && !answered) {
+            empty.error = "节目单服务暂时不可用";
+            // Retried sooner than a real answer, but not once per key press either.
+            remember(cacheKey, empty, SCHEDULE_ERROR_TTL_MS);
+            return empty;
+        }
+        remember(cacheKey, empty, SCHEDULE_TTL_MS);
         return empty;
+    }
+
+    /** A cached guide for that channel and date, or null when there is none or it has gone stale. */
+    private EpgSchedule cachedSchedule(String key) {
+        synchronized (schedules) {
+            ScheduleEntry entry = schedules.get(key);
+            if (entry == null) return null;
+            if (System.currentTimeMillis() - entry.atMs > entry.ttlMs) {
+                schedules.remove(key);
+                return null;
+            }
+            return entry.schedule;
+        }
+    }
+
+    private void remember(String key, EpgSchedule schedule, long ttlMs) {
+        synchronized (schedules) {
+            if (schedules.size() > 64) schedules.clear();
+            schedules.put(key, new ScheduleEntry(schedule, ttlMs));
+        }
+    }
+
+    private static final class ScheduleEntry {
+        final EpgSchedule schedule;
+        final long atMs = System.currentTimeMillis();
+        final long ttlMs;
+
+        ScheduleEntry(EpgSchedule schedule, long ttlMs) {
+            this.schedule = schedule;
+            this.ttlMs = ttlMs;
+        }
     }
 
     /** One EPG request; null when the service did not answer usefully. */
@@ -183,6 +238,17 @@ public final class LiveService {
      * <p>Playlists in the wild almost never carry an {@code x-tvg-url}, so the TV would show no
      * programme list at all; this one answers per channel name and date.
      */
+    /** Guide services tried in order when a source declares none (measured: the first one does go down). */
+    private static final String[] DEFAULT_EPG_MIRRORS = {
+            "http://epg.51zmt.top:8000/api/diyp/?ch={name}&date={date}",
+            "https://diyp.112114.xyz/?ch={name}&date={date}",
+            "https://epg.112114.xyz/?ch={name}&date={date}",
+    };
+    /** How long a fetched guide is reused, and how long a failed fetch is remembered. */
+    private static final long SCHEDULE_TTL_MS = 30L * 60L * 1000L;
+    private static final long SCHEDULE_ERROR_TTL_MS = 2L * 60L * 1000L;
+    private final Map<String, ScheduleEntry> schedules = new HashMap<String, ScheduleEntry>();
+
     private static final String DEFAULT_EPG_TEMPLATE =
             "http://epg.51zmt.top:8000/api/diyp/?ch={name}&date={date}";
 

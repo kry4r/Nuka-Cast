@@ -216,6 +216,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private TextView sourceSummary;
     private TextView storageSummary;
     private View featuredPanel;
+    /** The title the hero panel is showing, so a click on it can open that title. */
+    private SearchItem featuredItem;
     private TextView featuredEyebrow;
     private TextView featuredTitle;
     private TextView featuredMeta;
@@ -1103,6 +1105,29 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** The browse filter currently in effect (debug API). */
     public String browseFilterForDebug() {
         return browseFilter.isEmpty() ? "" : browseFilter.label();
+    }
+
+    /**
+     * Moves the focus to a known widget (debug API).
+     *
+     * <p>Focus movement itself is done by the input system before the key reaches the app, so a caller
+     * that cannot inject real key events needs a way to put the focus where it wants to test from.
+     */
+    public String focusForDebug(String target) {
+        if ("hero".equals(target) || "featured".equals(target)) {
+            if (featuredPanel == null) return "no-hero";
+            if (!featuredPanel.requestFocus()) return "hero-not-focusable";
+            return featuredItem == null ? "hero" : "hero:" + featuredItem.name;
+        }
+        if ("search".equals(target)) {
+            android.view.View button = findViewById(R.id.searchButton);
+            return button != null && button.requestFocus() ? "search" : "search-not-focusable";
+        }
+        if ("nav".equals(target)) {
+            android.view.View nav = findViewById(R.id.navHome);
+            return nav != null && nav.requestFocus() ? "nav" : "nav-not-focusable";
+        }
+        return "unknown-target";
     }
 
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
@@ -2152,7 +2177,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         lines.add((slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
                                 + slot.endLabel() + "　" + slot.title);
                     }
-                    if (lines.isEmpty()) failure = "这个源没有提供节目单";
+                    if (lines.isEmpty()) failure = schedule.error.isEmpty()
+                            ? "这个源没有提供节目单" : schedule.error;
                 } catch (Throwable error) {
                     failure = error.getMessage() == null ? "节目单读取失败" : error.getMessage();
                 }
@@ -2233,15 +2259,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         epgIo.execute(new Runnable() {
             @Override public void run() {
                 String line = "";
+                String reason = "";
                 try {
                     com.nukacast.app.live.model.EpgSchedule schedule =
                             runtime.getLiveService().epg(source, channel.id, "");
                     line = com.nukacast.app.live.EpgNow.label(schedule, System.currentTimeMillis());
+                    if (line.isEmpty()) reason = schedule.error;
                 } catch (Throwable error) {
                     line = "";
+                    reason = "节目单读取失败";
                 }
-                final String text = line.isEmpty()
-                        ? channel.name + "：这个源没有提供节目单" : channel.name + "　" + line;
+                final String text = !line.isEmpty() ? channel.name + "　" + line
+                        : channel.name + "：" + (reason.isEmpty() ? "这个源没有提供节目单" : reason);
                 epgPending.remove(cacheKey);
                 liveEpgLines.put(cacheKey, text);
                 runOnUiThread(new Runnable() {
@@ -2678,8 +2707,17 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         panel.setOrientation(LinearLayout.HORIZONTAL);
         panel.setGravity(Gravity.CENTER_VERTICAL);
         panel.setPadding(dp(20), dp(16), dp(16), dp(16));
-        panel.setBackgroundDrawable(TvTheme.panel(this));
+        // The hero is the biggest thing on the home page, and it was neither focusable nor clickable —
+        // a viewer could look at the recommendation but not open it. It is now a focusable card like any
+        // other (the focus state keeps the panel look and adds the ring).
+        panel.setBackgroundDrawable(TvTheme.focusable(this));
+        panel.setFocusable(true);
         panel.setClipChildren(false);
+        panel.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                if (featuredItem != null) openMedia(featuredItem);
+            }
+        });
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
@@ -2746,6 +2784,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             featuredPoster.setImageDrawable(null);
             return;
         }
+        featuredItem = item;
         featuredEyebrow.setText(safe(item.siteName).isEmpty()
                 ? getString(R.string.featured_recommendation) : item.siteName);
         featuredTitle.setText(safe(item.name));

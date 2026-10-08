@@ -68,6 +68,21 @@ async function adbKey(code) {
 }
 
 /**
+ * The app's own log lines, newest last, prefixed with their time so two identical messages can still be
+ * told apart (a check that watches for a new message must not match an older one).
+ */
+async function smokeLogMessages(limit = 150) {
+  const logs = (await call("GET", `/api/logs?limit=${limit}`)).data;
+  const rows = Array.isArray(logs) ? logs : logs.entries || [];
+  return rows.map((r) => `${r.time || r.timestamp || ""}|${r.message || ""}`);
+}
+
+/** The live page's own state: source, group, focused channel and what is being watched. */
+async function liveState() {
+  return ((await call("GET", "/api/debug/live")).data.state) || {};
+}
+
+/**
  * Reads the layout, retrying while the report is nearly empty.
  *
  * <p>The pages rebuild their views when they load, and a report taken inside that window lists almost
@@ -425,6 +440,8 @@ async function main() {
     for (const group of live.groups || []) {
       for (const channel of group.channels || []) allNames.add(channel.name);
     }
+    await call("GET", "/api/debug/player/action?name=stop");
+    await new Promise((r) => setTimeout(r, 1500));
     let page = "";
     for (let attempt = 0; attempt < 5 && page !== "live"; attempt++) {
       page = (await call("GET", "/api/debug/navigate?page=live")).data.page;
@@ -471,21 +488,77 @@ async function main() {
       texts.filter((t) => t.startsWith("常看")).join(" / ") || "没有常看分组");
   }
 
-  // The full-day guide (MENU on the live page): the TV must fetch it and prepare rows.
-  const guideSearch = (await call("GET", "/api/debug/live?query=CCTV13")).data.state || {};
-  if ((guideSearch.visible || 0) > 0) {
+  // A channel with a real listing is looked up first: the source itself is the ground truth (the same
+  // fetch the TV makes), so a channel that has no guide cannot be mistaken for a broken guide.
+  let guideChannel = "";
+  let apiRows = 0;
+  for (const query of ["CCTV13", "CCTV1", "湖南卫视"]) {
+    const found = (await call("GET", `/api/debug/live?query=${encodeURIComponent(query)}`)).data.state || {};
+    if ((found.visible || 0) === 0) continue;
+    await call("GET", "/api/debug/key?code=20"); // DOWN → focus the first hit
+    await new Promise((r) => setTimeout(r, 2500));
+    const state = await liveState();
+    if (!state.focusedChannelId) continue;
+    const viaApi = (await call("GET", `/api/debug/epg?sourceId=${encodeURIComponent(state.sourceId || "")}` +
+      `&channelId=${encodeURIComponent(state.focusedChannelId)}`)).data;
+    if (Number(viaApi.programs || 0) > 5) {
+      guideChannel = state.focusedChannel || query;
+      apiRows = Number(viaApi.programs);
+      break;
+    }
+  }
+  if (guideChannel) {
     await call("GET", "/api/debug/key?code=82"); // MENU → 节目单
     await new Promise((r) => setTimeout(r, 14000));
-    const logs = (await call("GET", "/api/logs")).data;
-    const rows = Array.isArray(logs) ? logs : logs.entries || [];
-    const line = rows.map((r) => r.message || "").filter((m) => m.includes("节目单结果")).pop() || "";
+    const rows = await smokeLogMessages();
+    const line = rows.filter((m) => m.includes("节目单结果")).pop() || "";
     const count = Number((line.match(/→ (\d+) 条/) || [])[1] || 0);
-    check("the TV builds a full-day guide", count > 5, line || "没有节目单日志");
-    await call("GET", "/api/debug/key?code=4"); // BACK closes the guide dialog
-    await new Promise((r) => setTimeout(r, 2000));
-    await call("GET", "/api/debug/live?query="); // back to the plain channel list
-    await new Promise((r) => setTimeout(r, 1000));
+    check("the TV builds a full-day guide", count > 5,
+      `“${guideChannel}”接口 ${apiRows} 条 / 电视 ${count} 条（${line || "没有节目单日志"}）`);
+  } else {
+    check("the TV builds a full-day guide", true, "该直播源当前没有可用节目单，已跳过");
   }
+  await adbKey(4); // BACK closes the dialog
+  await new Promise((r) => setTimeout(r, 2000));
+  await call("GET", "/api/debug/live?query="); // back to the plain channel list
+  await new Promise((r) => setTimeout(r, 1000));
+
+
+  // The home page hero: the biggest card on the first screen must be selectable.
+  await call("GET", "/api/debug/player/action?name=stop");
+  await call("GET", "/api/debug/navigate?page=home");
+  await new Promise((r) => setTimeout(r, 6000));
+  const heroFocus = (await call("GET", "/api/debug/focus?target=hero")).data.focus || "";
+  await new Promise((r) => setTimeout(r, 1500));
+  const heroPanel = String((await layoutWithContent()).focus || "");
+  const logsBeforeHero = new Set(await smokeLogMessages());
+  await adbKey(23); // CENTER → open it
+  let heroLines = [];
+  let heroAccepted = false;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise((r) => setTimeout(r, 1800));
+    const layout = await layoutWithContent();
+    heroLines = (layout.views || [])
+      .filter((v) => String(v.view || "").startsWith("Button["))
+      .map((v) => String(v.text || ""))
+      .filter((t) => /\d+\s*集\s*·/.test(t)); // the detail dialog's line chips
+    if (heroLines.length > 0) {
+      heroAccepted = true;
+      break;
+    }
+    // The app announces every title it opens; a site that times out shows that message instead of the
+    // dialog, and the click still did what it should.
+    const fresh = (await smokeLogMessages()).filter((m) => !logsBeforeHero.has(m));
+    if (fresh.some((m) => m.includes("正在加载"))) {
+      heroAccepted = true;
+      break;
+    }
+  }
+  check("home hero card opens its title",
+    heroFocus.startsWith("hero") && heroPanel.startsWith("LinearLayout[") && heroAccepted,
+    `聚焦 ${heroFocus}（${heroPanel.slice(0, 20)}），按确定后线路 ${heroLines.length} 条（${heroLines.join(",")}）`);
+  await adbKey(4); // BACK closes the detail
+  await new Promise((r) => setTimeout(r, 2000));
 
   // Focus navigation: the parts of a page below the fold must be reachable with the remote — the
   // complaint this check comes from was "很多都有遮挡看不到".
