@@ -134,18 +134,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private boolean dramaBrowseRunning;
     private NukaRuntime runtime;
     private View appShell;
-    private View homePage;
-    private View moviesPage;
-    private View searchPage;
-    private View castPage;
-    private View settingsPage;
+    private android.view.ViewGroup homePage;
+    private android.view.ViewGroup moviesPage;
+    private android.view.ViewGroup searchPage;
+    private android.view.ViewGroup castPage;
+    private android.view.ViewGroup settingsPage;
     private android.view.ViewGroup pageContainer;
     private LinearLayout homeContent;
     private LinearLayout moviesContent;
     private LinearLayout movieFilters;
     // ---- 直播 ----------------------------------------------------------------
     private Button navLive;
-    private LinearLayout livePage;
+    private LinearLayout livePage;   // also a ViewGroup, so it fits currentPageContainer()
     private LinearLayout liveSourceRow;
     private LinearLayout liveGroupRow;
     private LinearLayout liveChannelGrid;
@@ -509,6 +509,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (handleLiveDigits(keyCode)) return true;
+        // Measured on the device: rebuilding a page's rows (a home refresh, a category reload) leaves the
+        // window with no focused view at all, and then every remote key does nothing — the app looks dead
+        // even though it is on screen and running. The cursor is put back before the key is handled.
+        //
+        // Not while something is playing full screen: the player has no focusable view on purpose and
+        // handles the keys itself, and putting the cursor back on the page behind it makes the keys stop
+        // reaching the player (measured: 快退 and 暂停 stopped working during playback).
+        if (getCurrentFocus() == null && isArrowKey(keyCode) && !isFullScreenMedia()) {
+            ensureSomethingFocused();
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && sidebarHasFocus()) {
+            android.view.View first = firstFocusableIn(currentPageContainer());
+            if (first != null && first.requestFocus()) return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && sidebarHasFocus()
+                && PAGE_HOME.equals(currentPage)) {
+            // On the home page the sidebar and the hero card share the left edge, so LEFT from the sidebar
+            // has nowhere to go; swallowing it avoided a dead key that did nothing at all.
+            return true;
+        }
         if (isFullScreenMedia()) {
             // Any key brings the HUD back; it fades by itself so the picture stays clean.
             if (playerHud != null) playerHud.reveal();
@@ -670,16 +690,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void bindNavigation() {
         findViewById(R.id.navHome).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showPage(PAGE_HOME); }
+            @Override public void onClick(View view) {
+                showPage(PAGE_HOME);
+                focusIntoPageLater();
+            }
         });
         findViewById(R.id.navMovies).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showMovies(""); }
+            @Override public void onClick(View view) {
+                showMovies("");
+                focusIntoPageLater();
+            }
         });
         findViewById(R.id.navCast).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showPage(PAGE_CAST); }
+            @Override public void onClick(View view) {
+                showPage(PAGE_CAST);
+                focusIntoPageLater();
+            }
         });
         findViewById(R.id.navSettings).setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showPage(PAGE_SETTINGS); }
+            @Override public void onClick(View view) {
+                showPage(PAGE_SETTINGS);
+                focusIntoPageLater();
+            }
         });
         findViewById(R.id.searchButton).setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) { showSearchPage(); }
@@ -822,12 +854,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             autoNextButton.setText(enabled
                     ? getString(R.string.playback_auto_next_button_on)
                     : getString(R.string.playback_auto_next_button_off));
-            TextView summary = (TextView) findViewById(R.id.autoNextSummary);
-            if (summary != null) {
-                summary.setText(enabled
-                        ? getString(R.string.playback_auto_next_on)
-                        : getString(R.string.playback_auto_next_off));
-            }
         }
         if (qualityButton != null) {
             qualityButton.setText(getString(R.string.playback_quality_button,
@@ -852,10 +878,6 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             boolean enabled = com.nukacast.app.core.AppSettings.startOnBoot(this);
             startOnBootButton.setText(getString(enabled
                     ? R.string.start_on_boot_button_on : R.string.start_on_boot_button_off));
-            TextView summary = (TextView) findViewById(R.id.startOnBootSummary);
-            if (summary != null) {
-                summary.setText(enabled ? R.string.start_on_boot_on : R.string.start_on_boot_off);
-            }
         }
         TextView qualitySummary = (TextView) findViewById(R.id.qualitySummary);
         if (qualitySummary != null) {
@@ -1019,6 +1041,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         else if ("cast".equals(name)) showPage(PAGE_CAST);
         else if ("settings".equals(name)) showPage(PAGE_SETTINGS);
         else showPage(PAGE_HOME);
+        focusIntoPageLater();
     }
 
     /** Switches the movies page to one of its views; used by the debug API to inspect them. */
@@ -1243,6 +1266,125 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return handled;
     }
 
+    /** The keys that need somewhere for the cursor to be. */
+    private boolean isArrowKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_UP
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                || keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER;
+    }
+
+    /**
+     * Puts the cursor back when a rebuild dropped it: the page's first control, else the sidebar entry.
+     *
+     * <p>Doing nothing is not an option — with no focused view the remote is dead, and the viewer has no
+     * way to tell that from a crash.
+     */
+    private void ensureSomethingFocused() {
+        android.view.View first = firstFocusableIn(currentPageContainer());
+        if (first != null && first.requestFocus()) {
+            com.nukacast.app.diagnostics.AppLog.i("焦点", "焦点丢失，已回到页面上的第一个控件");
+            return;
+        }
+        android.view.View nav = findViewById(navIdForPage(currentPage));
+        boolean placed = nav != null && nav.requestFocus();
+        com.nukacast.app.diagnostics.AppLog.i("焦点", "焦点丢失，"
+                + (placed ? "已回到侧栏" : "侧栏也没有接住")
+                + "（页面第一个可聚焦控件：" + (first == null ? "没有" : "有但聚焦失败") + "）");
+    }
+
+    /** The sidebar entry that belongs to a page. */
+    private int navIdForPage(String page) {
+        if (PAGE_MOVIES.equals(page) || PAGE_SEARCH.equals(page)) return R.id.navMovies;
+        if (PAGE_LIVE.equals(page)) return R.id.navLive;
+        if (PAGE_CAST.equals(page)) return R.id.navCast;
+        if (PAGE_SETTINGS.equals(page)) return R.id.navSettings;
+        return R.id.navHome;
+    }
+
+    /**
+     * Moves the focus from the sidebar into the page that was just opened.
+     *
+     * <p>Deliberately after a frame: the page's contents are built during this pass, so asking before the
+     * layout has run finds nothing focusable.
+     */
+    private void focusIntoPageLater() {
+        getWindow().getDecorView().post(new Runnable() {
+            @Override public void run() {
+                android.view.View first = firstFocusableIn(currentPageContainer());
+                if (first != null) first.requestFocus();
+            }
+        });
+    }
+
+    /** The container of the page on screen, or null when nothing is showing. */
+    private android.view.ViewGroup currentPageContainer() {
+        if (PAGE_HOME.equals(currentPage)) return homePage;
+        if (PAGE_MOVIES.equals(currentPage)) return moviesPage;
+        if (PAGE_SEARCH.equals(currentPage)) return searchPage;
+        if (PAGE_CAST.equals(currentPage)) return castPage;
+        if (PAGE_SETTINGS.equals(currentPage)) return settingsPage;
+        if (PAGE_LIVE.equals(currentPage)) return livePage;
+        return homePage;
+    }
+
+    /**
+     * The first thing a viewer can focus inside a container, depth first.
+     *
+     * <p>Used to leave the sidebar with the RIGHT key: without it the focus stayed on the sidebar entry
+     * whenever nothing happened to line up to the right of it on screen (measured: from 设置 in the sidebar
+     * the focus could not reach the page at all).
+     */
+    private android.view.View firstFocusableIn(android.view.ViewGroup group) {
+        if (group == null || group.getVisibility() != android.view.View.VISIBLE) return null;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            android.view.View child = group.getChildAt(i);
+            if (child.getVisibility() != android.view.View.VISIBLE) continue;
+            if (child.isFocusable() && child.getWidth() > 0 && child.getHeight() > 0) return child;
+            if (child instanceof android.view.ViewGroup) {
+                android.view.View found = firstFocusableIn((android.view.ViewGroup) child);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    /** "Button#navHome" for a report line. */
+    private static String widgetName(android.view.View view) {
+        if (view == null) return "null";
+        String id = view.getId() == android.view.View.NO_ID ? "" : "#"
+                + (view.getResources() == null ? "" : view.getResources().getResourceEntryName(view.getId()));
+        String label = view instanceof android.widget.TextView
+                ? "「" + ((android.widget.TextView) view).getText() + "」" : "";
+        return view.getClass().getSimpleName() + id + label;
+    }
+
+    /** True when the focus is on one of the sidebar entries. */
+    private boolean sidebarHasFocus() {
+        android.view.View focused = getCurrentFocus();
+        if (focused == null) return false;
+        android.view.View sidebar = findViewById(R.id.navHome);
+        return sidebar != null && sidebar.getParent() == focused.getParent();
+    }
+
+    /**
+     * Gives a sidebar or chip button its own background drawable.
+     *
+     * <p>Measured on the television: after visiting 直播 and coming back, the 直播 tile kept its filled box
+     * while the layout said no state was set on it — the buttons were sharing one {@code StateListDrawable}
+     * from the XML, so the first tile that changed state decided how all of them were painted and the rest
+     * were never invalidated. A drawable built per view cannot be shared, so the tile the viewer is looking
+     * at is the tile's own state.
+     */
+    private void giveOwnBackground(Button button) {
+        if (button == null) return;
+        button.setBackgroundDrawable(com.nukacast.app.ui.TvTheme.navigation(this));
+    }
+
+    /** Whether a modal is on screen (debug API). */
+    public boolean hasDialogForDebug() {
+        return activeDialog != null && activeDialog.isShowing();
+    }
+
     /** Closes the dialog on screen, if there is one (debug API). */
     public boolean closeTopDialogForDebug() {
         AlertDialog dialog = activeDialog;
@@ -1341,6 +1483,22 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if (!panel.requestFocus()) return "hero-not-focusable";
             return featuredItem == null ? "hero" : "hero:" + featuredItem.name;
         }
+        if ("page".equals(target)) {
+            android.view.View first = firstFocusableIn(currentPageContainer());
+            if (first == null) return "page-has-nothing-focusable";
+            return first.requestFocus() ? "page:" + widgetName(first) : "page-not-focusable";
+        }
+        if ("down".equals(target) || "up".equals(target) || "right".equals(target)) {
+            // Focus search, asked directly: "nothing happened when I pressed down" is either "no candidate
+            // below" or "the candidate refused the focus", and those need different fixes.
+            android.view.View current = getCurrentFocus();
+            if (current == null) return "nothing-focused";
+            int direction = "down".equals(target) ? android.view.View.FOCUS_DOWN
+                    : "up".equals(target) ? android.view.View.FOCUS_UP : android.view.View.FOCUS_RIGHT;
+            android.view.View next = current.focusSearch(direction);
+            if (next == null || next == current) return "no-candidate";
+            return (next.requestFocus() ? "moved:" : "refused:") + widgetName(next);
+        }
         if ("search".equals(target)) {
             android.view.View button = findViewById(R.id.searchButton);
             return button != null && button.requestFocus() ? "search" : "search-not-focusable";
@@ -1435,6 +1593,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (!PAGE_MOVIES.equals(page)) setFilterSelection("");
         if (PAGE_HOME.equals(page)) renderHome();
         if (PAGE_LIVE.equals(page)) loadLive();
+        // Debug navigation and the "back to the page" paths land here without a cursor; a page you cannot
+        // drive with the remote is worse than one that looks slightly different.
+        getWindow().getDecorView().post(new Runnable() {
+            @Override public void run() {
+                if (getCurrentFocus() == null) ensureSomethingFocused();
+            }
+        });
         // The movies page is a container the filter chips fill in; entering it from the sidebar used to
         // show only those four chips above an empty screen until one was pressed. It now opens on the
         // category browser, which is what the page is mostly used for.
@@ -1895,12 +2060,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             moviesContent.addView(sectionTitle(siteName + " · " + categoryName
                     + (browseFilter.isEmpty() ? "" : " · " + browseFilter.label())));
             renderBrowseFilterBar();
-        } else {
-            // Remove the previous “下一页” button before appending.
-            if (loadMoreRow != null) {
-                moviesContent.removeView(loadMoreRow);
-                loadMoreRow = null;
-            }
+        } else if (loadMoreRow != null) {
+            // The status line of the previous page is replaced rather than stacked.
+            moviesContent.removeView(loadMoreRow);
+            loadMoreRow = null;
         }
         if (items.isEmpty() && page <= 1) {
             moviesContent.addView(bodyText(browseFilter.isEmpty()
@@ -1908,23 +2071,40 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     : "这个筛选条件在已抓取的记录里没有匹配，取消筛选或换一个分类试试。"));
             return;
         }
-        appendGrid(moviesContent, items, gridColumns());
+        appendGrid(moviesContent, items, gridColumns(), new Runnable() {
+            @Override public void run() { loadCategoryPage(browsePage + 1); }
+        });
         if (!items.isEmpty()) {
+            // A quiet line at the bottom: it says what walking onto the last card will do, and becomes a
+            // button only when the next page failed and the viewer has to ask for it again.
             LinearLayout row = new LinearLayout(this);
-            loadMoreRow = row;
             row.setOrientation(LinearLayout.HORIZONTAL);
-            Button more = actionButton("下一页（第 " + (page + 1) + " 页）", 0);
-            more.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) { loadCategoryPage(browsePage + 1); }
-            });
-            row.addView(more);
+            loadMoreRow = row;
+            TextView note = bodyText(browseMoreLabel());
+            row.addView(note);
             moviesContent.addView(row);
-            if (page == 1) more.requestFocus();
         }
     }
 
-    /** The “下一页” row currently shown, so it can be replaced instead of stacking up. */
+    /**
+     * What the bottom line of a browsed category says.
+     *
+     * <p>One short sentence: it exists so the line the previous page left is replaced by the next one, and
+     * so the viewer is told that walking to the end loads more instead of being asked to press a button.
+     */
+    private String browseMoreLabel() {
+        if (browseFilter != null && !browseFilter.isEmpty()) {
+            return browseLoading ? "正在继续匹配…" : "往下走到最后一张会继续匹配";
+        }
+        return browseLoading ? "正在加载第 " + (browsePage + 1) + " 页…"
+                : "往下走到底会自动加载第 " + (browsePage + 1) + " 页";
+    }
+
+    /** The “下一頁” status line currently shown, so it can be replaced instead of stacking up. */
     private LinearLayout loadMoreRow;
+
+    /** The “more to come” line of the drama tab, so a redraw replaces it instead of stacking up. */
+    private TextView dramaMoreNote;
     private String sourceIdOf(String siteKey) {
         for (com.nukacast.app.tvbox.model.Category category : browseSites) {
             if (category.siteKey.equals(siteKey)) return category.sourceId;
@@ -1946,6 +2126,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 @Override public void onClick(View view) { showPage(PAGE_LIVE); }
             });
         }
+        giveOwnBackground((Button) findViewById(R.id.navHome));
+        giveOwnBackground((Button) findViewById(R.id.navMovies));
+        giveOwnBackground(navLive);
+        giveOwnBackground((Button) findViewById(R.id.navCast));
+        giveOwnBackground((Button) findViewById(R.id.navSettings));
 
         livePage = new LinearLayout(this);
         livePage.setOrientation(LinearLayout.VERTICAL);
@@ -2845,6 +3030,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         for (com.nukacast.app.drama.model.DramaProviderConfig provider : providers) {
             if (provider.id.equals(dramaBrowseProviderId)) name = provider.name;
         }
+        if (dramaMoreNote != null) {
+            moviesContent.removeView(dramaMoreNote);
+            dramaMoreNote = null;
+        }
         moviesContent.addView(sectionTitle("短剧 · " + name + " · " + dramaItems.size() + " 部"));
 
         // A chip row rather than a paging footer: on a television the viewer walks the grid with the arrow
@@ -2863,14 +3052,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             });
             chips.addView(chip);
         }
-        Button more = actionButton(dramaBrowseRunning ? "正在加载…" : "更多", 0);
-        more.setEnabled(!dramaBrowseRunning);
-        more.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { loadDramaBrowse(dramaBrowsePage + 1); }
-        });
-        chips.addView(more);
         moviesContent.addView(chipRowHolder(chips));
-        appendGrid(moviesContent, dramaItems, gridColumns());
+        appendGrid(moviesContent, dramaItems, gridColumns(), new Runnable() {
+            @Override public void run() { loadDramaBrowse(dramaBrowsePage + 1); }
+        });
+        // The same quiet line as the category browser: walking onto the last card loads the next page, so
+        // there is no pager chip sitting among the sources.
+        dramaMoreNote = bodyText(dramaBrowseRunning
+                ? "正在加载更多…" : "往下走到底会自动加载第 " + (dramaBrowsePage + 1) + " 页");
+        moviesContent.addView(dramaMoreNote);
     }
 
     /**
@@ -3292,6 +3482,19 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void appendGrid(LinearLayout target, List<SearchItem> items, int columns) {
+        appendGrid(target, items, columns, null);
+    }
+
+    /**
+     * Lays out a grid, and calls {@code onLastCardFocused} when the viewer walks onto the last card.
+     *
+     * <p>That is where the next page is fetched: a “下一页” button under the grid put a large control in the
+     * middle of the film list and took the focus on arrival, so the viewer had to walk past it to reach the
+     * first card. Loading as the last card is reached is what the mainstream players do, and there is
+     * nothing extra on screen to look at.
+     */
+    private void appendGrid(LinearLayout target, List<SearchItem> items, int columns,
+                            final Runnable onLastCardFocused) {
         LinearLayout row = null;
         for (int i = 0; i < items.size(); i++) {
             if (i % columns == 0) {
@@ -3309,6 +3512,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 @Override public void onClick(View view) { openMedia(item); }
             });
             bindFavoriteShortcut(card, item);
+            if (onLastCardFocused != null && i == items.size() - 1) {
+                card.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                    @Override public void onFocusChange(View view, boolean hasFocus) {
+                        if (hasFocus) onLastCardFocused.run();
+                    }
+                });
+            }
             row.addView(card, cardParams());
         }
     }

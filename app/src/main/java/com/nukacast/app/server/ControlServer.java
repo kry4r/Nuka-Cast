@@ -290,6 +290,23 @@ public final class ControlServer extends NanoHTTPD {
                         }
                     }));
         }
+        if ("/api/debug/close".equals(path)) {
+            // Closes whatever modal is up, and reports whether there was one.
+            //
+            // <p>An automated page walk needs this: pressing BACK on a plain page closes the window and
+            // leaves the app, so a walk that presses BACK "to be safe" ends up photographing a black
+            // screen for every screen after it (measured).
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            Boolean closed = activity.onUiThreadNow(new java.util.concurrent.Callable<Boolean>() {
+                @Override public Boolean call() {
+                    return activity.closeTopDialogForDebug();
+                }
+            });
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("closed", Boolean.TRUE.equals(closed));
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/focus".equals(path)) {
             final String target = safe(session.getParms().get("target"));
             com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();

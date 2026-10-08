@@ -380,163 +380,228 @@
                         android:orientation="vertical"
                         android:paddingBottom="24dp">
                         <LinearLayout
+                            style="@style/SettingsBand"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:baselineAligned="false"
+                            android:minHeight="64dp"
                             android:orientation="horizontal">
                             <LinearLayout
-                                style="@style/SettingsBand"
                                 android:layout_width="0dp"
-                                android:layout_marginStart="0dp"
-                                android:layout_marginEnd="7dp"
+                                android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:minHeight="96dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/device_profile" />
-                                <TextView android:id="@+id/deviceSummary" style="@style/PanelValue" android:text="@string/device_checking" />
-                                <TextView android:id="@+id/codecSummary" style="@style/PanelBody" />
-                            </LinearLayout>
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="0dp"
-                                android:layout_marginStart="7dp"
-                                android:layout_marginEnd="0dp"
-                                android:layout_weight="1"
-                                android:minHeight="220dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/source_health" />
-                                <TextView android:id="@+id/sourceSummary" style="@style/PanelValue" android:text="@string/source_empty" />
-                                <TextView style="@style/PanelBody" android:text="@string/source_web_note" />
-                                <Button android:id="@+id/refreshSourcesButton" style="@style/ActionButton" android:text="@string/refresh_sources" />
-                            </LinearLayout>
-                        </LinearLayout>
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:baselineAligned="false"
-                            android:orientation="horizontal">
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="match_parent"
-                                android:layout_marginStart="0dp"
-                                android:layout_marginEnd="0dp"
-                                android:minHeight="104dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/storage_title" />
-                                <TextView android:id="@+id/storageSummary" style="@style/PanelValue" android:text="@string/storage_empty" />
-                                <TextView style="@style/PanelBody" android:text="@string/storage_web_note" />
-                                <Button android:id="@+id/scanStorageButton" style="@style/ActionButton" android:text="@string/scan_library" />
-                            </LinearLayout>
-                        </LinearLayout>
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:baselineAligned="false"
-                            android:orientation="horizontal">
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="0dp"
-                                android:layout_marginStart="0dp"
-                                android:layout_marginEnd="7dp"
-                                android:layout_weight="1"
-                                android:minHeight="104dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/appearance_title" />
-                                <TextView style="@style/PanelBody" android:text="@string/appearance_note" />
-                                <Button android:id="@+id/themeToggleButton" style="@style/ActionButton" android:text="@string/theme_toggle" />
-                            </LinearLayout>
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="0dp"
-                                android:layout_marginStart="7dp"
-                                android:layout_marginEnd="0dp"
-                                android:layout_weight="1"
-                                android:minHeight="104dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/diagnostics_title" />
-                                <TextView style="@style/PanelBody" android:text="@string/diagnostics_note" />
-                                <Button android:id="@+id/viewLogsButton" style="@style/ActionButton" android:text="@string/view_logs" />
-                            </LinearLayout>
-                        </LinearLayout>
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:baselineAligned="false"
-                            android:orientation="horizontal">
-                            <LinearLayout
-                                style="@style/SettingsBand"
-                                android:layout_width="0dp"
-                                android:layout_marginStart="0dp"
-                                android:layout_marginEnd="7dp"
-                                android:layout_weight="1"
-                                android:minHeight="132dp">
+                                android:orientation="vertical">
                                 <TextView style="@style/PanelTitle" android:text="@string/playback_title" />
-                                <TextView android:id="@+id/autoNextSummary" style="@style/PanelBody" />
-                                <Button android:id="@+id/autoNextButton" style="@style/ActionButton" />
-                                <!-- 片头与片尾并排：三个按钮挤在一行时第三个被容器裁掉（实测）。 -->
-                                <LinearLayout
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:orientation="horizontal">
-                                    <Button
-                                        android:id="@+id/skipIntroButton"
-                                        style="@style/ActionButton"
-                                        android:layout_width="0dp"
-                                        android:layout_weight="1" />
-                                    <Button
-                                        android:id="@+id/skipOutroButton"
-                                        style="@style/ActionButton"
-                                        android:layout_width="0dp"
-                                        android:layout_weight="1" />
-                                </LinearLayout>
                             </LinearLayout>
+                                <Button android:id="@+id/autoNextButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
                             <LinearLayout
-                                style="@style/SettingsBand"
                                 android:layout_width="0dp"
-                                android:layout_marginStart="7dp"
-                                android:layout_marginEnd="0dp"
+                                android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:minHeight="132dp">
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/skip_intro_title" />
+                            </LinearLayout>
+                                <Button android:id="@+id/skipIntroButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/skip_outro_title" />
+                            </LinearLayout>
+                                <Button android:id="@+id/skipOutroButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
                                 <TextView style="@style/PanelTitle" android:text="@string/playback_quality_title" />
                                 <TextView android:id="@+id/qualitySummary" style="@style/PanelBody" />
-                                <LinearLayout
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:orientation="horizontal">
-                                    <Button android:id="@+id/qualityButton" style="@style/ActionButton" />
-                                    <Button android:id="@+id/decoderButton" style="@style/ActionButton" />
-                                </LinearLayout>
                             </LinearLayout>
+                                <Button android:id="@+id/qualityButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
                         </LinearLayout>
                         <LinearLayout
+                            style="@style/SettingsBand"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:baselineAligned="false"
+                            android:minHeight="64dp"
                             android:orientation="horizontal">
                             <LinearLayout
-                                style="@style/SettingsBand"
                                 android:layout_width="0dp"
-                                android:layout_marginStart="0dp"
-                                android:layout_marginEnd="7dp"
+                                android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:minHeight="104dp">
-                                <TextView style="@style/PanelTitle" android:text="@string/start_on_boot_title" />
-                                <TextView android:id="@+id/startOnBootSummary" style="@style/PanelBody" />
-                                <Button android:id="@+id/startOnBootButton" style="@style/ActionButton" />
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/playback_decoder_title" />
                             </LinearLayout>
+                                <Button android:id="@+id/decoderButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
                             <LinearLayout
-                                style="@style/SettingsBand"
                                 android:layout_width="0dp"
-                                android:layout_marginStart="7dp"
-                                android:layout_marginEnd="0dp"
+                                android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:minHeight="104dp">
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/source_health" />
+                                <TextView android:id="@+id/sourceSummary" style="@style/PanelValue" />
+                            </LinearLayout>
+                                <Button android:id="@+id/refreshSourcesButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/refresh_sources" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/storage_title" />
+                                <TextView android:id="@+id/storageSummary" style="@style/PanelValue" />
+                            </LinearLayout>
+                                <Button android:id="@+id/scanStorageButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/scan_library" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/start_on_boot_title" />
+                            </LinearLayout>
+                                <Button android:id="@+id/startOnBootButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/appearance_title" />
+                            </LinearLayout>
+                                <Button android:id="@+id/themeToggleButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/theme_toggle" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/diagnostics_title" />
+                            </LinearLayout>
+                                <Button android:id="@+id/viewLogsButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/view_logs" />
+                        </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="64dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
                                 <TextView style="@style/PanelTitle" android:text="@string/update_title" />
                                 <TextView android:id="@+id/updateSummary" style="@style/PanelValue" />
-                                <LinearLayout
-                                    android:layout_width="match_parent"
-                                    android:layout_height="wrap_content"
-                                    android:orientation="horizontal">
-                                    <Button android:id="@+id/checkUpdateButton" style="@style/ActionButton" android:text="@string/update_check" />
-                                    <Button android:id="@+id/openReleaseButton" style="@style/ActionButton" android:text="@string/update_address" />
-                                </LinearLayout>
                             </LinearLayout>
+                                <Button android:id="@+id/checkUpdateButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/update_check" />
+                                <Button android:id="@+id/openReleaseButton" style="@style/ActionButton"
+                                    android:layout_width="wrap_content" android:minWidth="140dp"
+                                    android:layout_gravity="center_vertical" android:text="@string/update_address" />
                         </LinearLayout>
+                        <LinearLayout
+                            style="@style/SettingsBand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:baselineAligned="false"
+                            android:minHeight="96dp"
+                            android:orientation="horizontal">
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+                                <TextView style="@style/PanelTitle" android:text="@string/device_profile" />
+                                <TextView android:id="@+id/deviceSummary" style="@style/PanelValue" />
+                            </LinearLayout>
+
+                        </LinearLayout>
+                        <TextView android:id="@+id/codecSummary" style="@style/PanelBody" />
                     </LinearLayout>
                 </ScrollView>
             </FrameLayout>

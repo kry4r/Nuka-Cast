@@ -215,6 +215,10 @@ public final class NukaRuntime {
                 java.util.Map<String, Object> report = com.nukacast.app.diagnostics.LayoutInspector
                         .report(decor, metrics.widthPixels, metrics.heightPixels);
                 report.put("page", activity.currentPageName());
+                // Whether a modal is up: it holds the focus, so a caller driving the remote has to know
+                // before it presses BACK — pressing BACK with no modal closes the window and leaves the
+                // app (measured: a page walk reported fifteen empty screens because of exactly that).
+                report.put("dialog", activity.hasDialogForDebug());
                 return report;
             }
         });

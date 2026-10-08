@@ -67,11 +67,30 @@ public final class LayoutInspector {
                 entry.put("text", shown.length() > 40 ? shown.substring(0, 40) : shown);
             }
         }
+        // Whether a control can be reached with the remote at all: a card that is not focusable is a card
+        // the viewer cannot open, and nothing else in the report says so.
+        if (view.isFocusable()) entry.put("focusable", true);
         if (view instanceof ScrollView) {
             ScrollView scroll = (ScrollView) view;
             entry.put("scroll", scroll.getScrollY() + "/" + Math.max(0,
                     scroll.getChildCount() > 0
                             ? scroll.getChildAt(0).getHeight() - scroll.getHeight() : 0));
+        }
+        // The states a viewer sees: a sidebar entry that stayed "selected" after leaving its page, or a
+        // button that looks pressed for no reason, is a bug that coordinates alone cannot show.
+        if (view.isFocusable() || view.isSelected() || view.isPressed() || view instanceof TextView) {
+            Map<String, Object> states = new LinkedHashMap<String, Object>();
+            if (view.isFocused()) states.put("focused", true);
+            if (view.isSelected()) states.put("selected", true);
+            if (view.isPressed()) states.put("pressed", true);
+            if (view.isActivated()) states.put("activated", true);
+            if (!view.isEnabled()) states.put("disabled", true);
+            if (view instanceof android.widget.CheckBox || view instanceof android.widget.ToggleButton
+                    || view instanceof android.widget.RadioButton
+                    || view instanceof android.widget.CompoundButton) {
+                states.put("checked", ((android.widget.CompoundButton) view).isChecked());
+            }
+            if (!states.isEmpty()) entry.put("states", states);
         }
         out.add(entry);
 
