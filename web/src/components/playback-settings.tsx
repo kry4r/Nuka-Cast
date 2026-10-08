@@ -29,7 +29,10 @@ export function PlaybackSettingsCard({ onError }: { onError: (message: string) =
 
   if (!settings) return null
 
-  const update = async (name: "autoNextEpisode" | "quality" | "softDecoder", value: string) => {
+  const update = async (
+    name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot",
+    value: string,
+  ) => {
     setBusy(true)
     try {
       setSettings(await api.updateSetting(name, value))
@@ -74,6 +77,17 @@ export function PlaybackSettingsCard({ onError }: { onError: (message: string) =
         </InlineButton>
         <span className="text-xs text-muted-foreground">
           硬件解码器花屏或无输出时，改成软件解码
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm">
+        <span className="w-24 text-muted-foreground">开机自启</span>
+        <InlineButton disabled={busy} onClick={() => update("startOnBoot", settings.startOnBoot ? "0" : "1")}>
+          {settings.startOnBoot ? "开" : "关"}
+        </InlineButton>
+        <span className="text-xs text-muted-foreground">
+          {settings.startOnBoot
+            ? "电视开机后自动待机接收：手机不用先打开电视端应用"
+            : "需要先在电视上打开本应用，手机才能找到它"}
         </span>
       </div>
     </SectionCard>

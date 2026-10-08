@@ -494,9 +494,21 @@
                             android:orientation="horizontal">
                             <LinearLayout
                                 style="@style/SettingsBand"
-                                android:layout_width="match_parent"
+                                android:layout_width="0dp"
                                 android:layout_marginStart="0dp"
+                                android:layout_marginEnd="7dp"
+                                android:layout_weight="1"
+                                android:minHeight="104dp">
+                                <TextView style="@style/PanelTitle" android:text="@string/start_on_boot_title" />
+                                <TextView android:id="@+id/startOnBootSummary" style="@style/PanelBody" />
+                                <Button android:id="@+id/startOnBootButton" style="@style/ActionButton" />
+                            </LinearLayout>
+                            <LinearLayout
+                                style="@style/SettingsBand"
+                                android:layout_width="0dp"
+                                android:layout_marginStart="7dp"
                                 android:layout_marginEnd="0dp"
+                                android:layout_weight="1"
                                 android:minHeight="104dp">
                                 <TextView style="@style/PanelTitle" android:text="@string/update_title" />
                                 <TextView android:id="@+id/updateSummary" style="@style/PanelValue" />

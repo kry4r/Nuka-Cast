@@ -5,6 +5,11 @@
     <string name="nav_movies">影视</string>
     <string name="nav_live">直播</string>
     <string name="update_title">版本更新</string>
+    <string name="start_on_boot_title">开机自启</string>
+    <string name="start_on_boot_on">开机自启已开：电视开机后自动开始接收投屏，手机不用先开电视端应用。</string>
+    <string name="start_on_boot_off">开机自启已关：需要先打开本应用，手机才能找到这台电视。</string>
+    <string name="start_on_boot_button_on">已开启</string>
+    <string name="start_on_boot_button_off">已关闭</string>
     <string name="update_check">检查更新</string>
     <string name="update_address">下载地址</string>
     <string name="update_checking">正在检查…</string>

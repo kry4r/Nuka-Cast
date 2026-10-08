@@ -647,6 +647,10 @@ public final class ControlServer extends NanoHTTPD {
         values.put("qualityLabel", com.nukacast.app.player.PlaybackSettings.qualityLabel(settings.quality()));
         values.put("softDecoder",
                 com.nukacast.app.player.DecoderPreference.prefersSoftware(runtime.getContext()));
+        // The console shows this next to the playback switches: whether the box accepts a cast without
+        // anyone opening the app first.
+        values.put("startOnBoot",
+                com.nukacast.app.core.AppSettings.startOnBoot(runtime.getContext()));
         return values;
     }
 
@@ -666,6 +670,9 @@ public final class ControlServer extends NanoHTTPD {
             } else {
                 com.nukacast.app.player.DecoderPreference.preferSoftware(runtime.getContext());
             }
+        } else if ("startOnBoot".equals(name)) {
+            com.nukacast.app.core.AppSettings.setStartOnBoot(runtime.getContext(),
+                    !"0".equals(value) && !"false".equals(value));
         } else {
             throw new IllegalArgumentException("未知设置：" + name);
         }

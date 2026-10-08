@@ -103,15 +103,23 @@ async function layoutWithContent(minimum = 5) {
  * that would only report "界面未在前台").
  */
 async function ensureForeground() {
-  const layout = (await call("GET", "/api/debug/layout")).data;
-  if (layout && layout.views) return true;
+  try {
+    const layout = (await call("GET", "/api/debug/layout")).data;
+    if (layout && layout.views) return true;
+  } catch {
+    // No window at all: launching it is the whole point.
+  }
   const adb = adbPath();
   for (let attempt = 0; attempt < 3; attempt++) {
     spawnSync(adb, ["shell", "monkey", "-p", "com.nukacast.app.debug",
       "-c", "android.intent.category.LAUNCHER", "1"], { timeout: 20000 });
     await new Promise((r) => setTimeout(r, 8000));
-    const again = (await call("GET", "/api/debug/layout")).data;
-    if (again && again.views) return true;
+    try {
+      const again = (await call("GET", "/api/debug/layout")).data;
+      if (again && again.views) return true;
+    } catch {
+      // Still coming up.
+    }
   }
   return false;
 }
@@ -185,6 +193,14 @@ async function main() {
     process.exit(2);
   }
   check("app reachable", true, `v${statusInfo.version}, ${statusInfo.siteCount} sites`);
+
+  // The app can legitimately be running with no window: that is exactly what start-on-boot does, and a
+  // plain restart leaves the same state. Every UI check below would report "not in the foreground", so
+  // the window is brought up first rather than counted as eleven failures (measured once).
+  if (!(await ensureForeground())) {
+    console.error("could not bring the app window to the front (adb available?)");
+    process.exit(2);
+  }
 
   const sources = (await call("GET", "/api/sources")).data;
   const list = Array.isArray(sources) ? sources : sources.sources || [];
@@ -759,6 +775,36 @@ async function main() {
     `“湖南” → ${byName.hits} channels of ${(byName.sources || []).length} sources`);
   check("live channel search by initials", Number(byInitials.hits) > 0,
     `“hnws” → ${byInitials.hits} channels`);
+
+  // Casting without a remote: the box starts its endpoints by itself when it powers on. Run last on
+  // purpose — it force-stops the app, and everything after it would only report "not in the foreground".
+  const settingsBefore = (await call("GET", "/api/settings")).data;
+  const toggled = (await call("POST", "/api/settings", { name: "startOnBoot", value: "1" })).data;
+  check("start-on-boot can be switched on", toggled.startOnBoot === true,
+    `startOnBoot ${settingsBefore.startOnBoot} → ${toggled.startOnBoot}`);
+  const { spawnSync: run } = await import("node:child_process");
+  run(adbPath(), ["shell", "am", "force-stop", "com.nukacast.app.debug"], { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 3000));
+  run(adbPath(), ["shell", "am", "broadcast", "-a", "android.intent.action.BOOT_COMPLETED",
+    "-n", "com.nukacast.app.debug/com.nukacast.app.service.BootReceiver"], { timeout: 20000 });
+  let alive = null;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    try {
+      const status = (await call("GET", "/api/status")).data;
+      if (status && status.version) {
+        alive = status;
+        break;
+      }
+    } catch {
+      // Not up yet.
+    }
+  }
+  check("a powered-on box accepts a cast without anyone opening it", Boolean(alive),
+    alive ? `开机广播后 ${Math.round(0)}s 内已应答（版本 ${alive.version}）` : "开机广播后接口一直没有响应");
+  const dlnaAfterBoot = (await call("GET", "/api/debug/dlna")).data;
+  check("the cast receiver is listening after boot", Boolean(dlnaAfterBoot.running),
+    `DLNA ${dlnaAfterBoot.running ? "running" : "not running"} @ ${dlnaAfterBoot.address || "?"}`);
 
   finish();
 }

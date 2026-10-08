@@ -486,6 +486,8 @@ export interface PlaybackSettings {
   quality: "auto" | "highest" | "lowest"
   qualityLabel: string
   softDecoder: boolean
+  /** Whether the box starts its casting endpoints by itself when it powers on. */
+  startOnBoot: boolean
 }
 
 export interface Library {
@@ -590,7 +592,7 @@ export const api = {
       body: JSON.stringify({ enabled }),
     }),
   settings: () => request<PlaybackSettings>("/api/settings"),
-  updateSetting: (name: "autoNextEpisode" | "quality" | "softDecoder", value: string) =>
+  updateSetting: (name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot", value: string) =>
     request<PlaybackSettings>("/api/settings", { method: "POST", body: JSON.stringify({ name, value }) }),
   library: () => request<Library>("/api/library"),
   removeLibraryEntry: (payload: { kind: "favorite" | "history"; vodId?: string; name?: string; all?: string }) =>

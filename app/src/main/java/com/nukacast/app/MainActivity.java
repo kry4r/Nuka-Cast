@@ -238,6 +238,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private Button scanStorageButton;
     private Button themeToggleButton;
     private Button autoNextButton;
+    /** 开机自启的开关（默认关；设置页与网页控制台共用同一份设置）。 */
+    private Button startOnBootButton;
     private Button qualityButton;
     private Button decoderButton;
     /**
@@ -701,6 +703,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
             });
         }
+        startOnBootButton = (Button) findViewById(R.id.startOnBootButton);
+        if (startOnBootButton != null) {
+            startOnBootButton.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    com.nukacast.app.core.AppSettings.setStartOnBoot(MainActivity.this,
+                            !com.nukacast.app.core.AppSettings.startOnBoot(MainActivity.this));
+                    renderPlaybackSettings();
+                }
+            });
+        }
         renderPlaybackSettings();
 
     }
@@ -730,6 +742,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             boolean software = com.nukacast.app.player.DecoderPreference.prefersSoftware(this);
             decoderButton.setText(getString(R.string.playback_decoder_button,
                     getString(software ? R.string.decoder_software : R.string.decoder_auto)));
+        }
+        if (startOnBootButton != null) {
+            boolean enabled = com.nukacast.app.core.AppSettings.startOnBoot(this);
+            startOnBootButton.setText(getString(enabled
+                    ? R.string.start_on_boot_button_on : R.string.start_on_boot_button_off));
+            TextView summary = (TextView) findViewById(R.id.startOnBootSummary);
+            if (summary != null) {
+                summary.setText(enabled ? R.string.start_on_boot_on : R.string.start_on_boot_off);
+            }
         }
         TextView qualitySummary = (TextView) findViewById(R.id.qualitySummary);
         if (qualitySummary != null) {
@@ -777,6 +798,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         values.put("qualityLabel", com.nukacast.app.player.PlaybackSettings
                 .qualityLabel(playbackSettings().quality()));
         values.put("softDecoder", com.nukacast.app.player.DecoderPreference.prefersSoftware(this));
+        values.put("startOnBoot", com.nukacast.app.core.AppSettings.startOnBoot(this));
         return values;
     }
 
@@ -792,6 +814,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             } else {
                 com.nukacast.app.player.DecoderPreference.preferSoftware(this);
             }
+        } else if ("startOnBoot".equals(name)) {
+            com.nukacast.app.core.AppSettings.setStartOnBoot(this,
+                    !"0".equals(value) && !"false".equals(value));
         }
         runOnUiThread(new Runnable() {
             @Override public void run() { renderPlaybackSettings(); }
