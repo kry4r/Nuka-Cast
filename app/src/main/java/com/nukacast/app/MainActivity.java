@@ -3105,7 +3105,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 labels.add("—— 以下已经播过（按确定键回看）——");
                 continue;
             }
-            String marker = hasReminder(slot.startMs) ? "⏰ " : "";
+            // "【约】" rather than a clock emoji: this Android's font has no glyph for ⏰, so the marker
+            // came out as nothing at all (measured on the emulator: the row looked exactly like the others).
+            String marker = hasReminder(slot.startMs) ? "【约】" : "";
             labels.add(marker + (slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
                     + slot.endLabel() + "　" + slot.title);
         }
@@ -3116,7 +3118,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private boolean hasReminder(long startMs) {
         if (reminders == null) return false;
         for (com.nukacast.app.live.ProgrammeReminder reminder : reminders.all()) {
-            if (reminder.startMs == startMs) return true;
+            // The channel matters as well as the moment: two channels often show something at 20:00.
+            if (reminder.startMs == startMs
+                    && reminder.channelId.equals(liveFocusedChannelId)) return true;
         }
         return false;
     }
