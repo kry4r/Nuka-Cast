@@ -1131,7 +1131,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             // stale instance for focus quietly fails, and the caller then sees "hero-not-focusable"
             // even though the card on screen is perfectly focusable.
             View panel = featuredPanel;
-            if (panel != null && !panel.isAttachedToWindow()) panel = null;
+            // getWindowToken() is the API 17-safe way to ask the same question as isAttachedToWindow().
+            if (panel != null && panel.getWindowToken() == null) panel = null;
             if (panel == null) {
                 android.view.View root = getWindow() == null ? null : getWindow().getDecorView();
                 panel = findFocusablePanel(root);
