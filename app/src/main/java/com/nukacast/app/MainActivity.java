@@ -209,6 +209,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private boolean liveEverPlayed;
     /** Set once every address and channel has been tried, so the switching stops instead of looping. */
     private boolean liveGaveUp;
+    /** True while an earlier programme is playing: the channel ticker must not zap it. */
+    private boolean liveCatchupPlaying;
+    /** The listings behind the guide dialog, for the rows the viewer picks. */
+    private final java.util.Map<String, com.nukacast.app.live.model.EpgSchedule> liveVisibleSchedules =
+            new java.util.HashMap<String, com.nukacast.app.live.model.EpgSchedule>();
 
     /** How many addresses of one channel may be tried before moving on to the next channel. */
     private static final int MAX_LIVE_URL_TRIES = 3;
@@ -333,6 +338,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         hideSystemUi();
         render();
         if (PAGE_HOME.equals(currentPage)) renderHome();
+        applyThemeNow();
     }
 
     @Override
@@ -387,6 +393,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         } catch (java.util.concurrent.RejectedExecutionException gone) {
             // The window closed while this was being queued.
         }
+    }
+
+    /** Rebuilds the window with the other theme (debug API). */
+    public void recreateForThemeChange() {
+        onUi(new Runnable() {
+            @Override public void run() { recreate(); }
+        });
     }
 
     /** Posts a task to the UI thread unless the activity has been destroyed. */
@@ -1257,7 +1270,34 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 activeDialog = null;
             }
         });
+        // A dialog is its own window and is built by whoever opened it, so it never went through the pass at
+        // start-up: in the light theme its rows came out in the dark theme's colours.
+        dialog.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override public void onShow(DialogInterface shown) {
+                if (shown instanceof AlertDialog) {
+                    android.view.Window window = ((AlertDialog) shown).getWindow();
+                    if (window != null && window.getDecorView() != null) {
+                        TvTheme.apply(MainActivity.this, window.getDecorView());
+                    }
+                }
+            }
+        });
         dialog.show();
+    }
+
+    /**
+     * Paints the current colours onto everything on screen.
+     *
+     * <p>Called again after the pages that build themselves row by row: the single pass at start-up never
+     * reached those views, and in the light theme that left white icons and white text on a white sheet
+     * (reported from the television: “切换浅色之后图标啥的都看不见了”).
+     */
+    private void applyThemeNow() {
+        TvTheme.apply(this, appShell);
+        android.view.Window dialogWindow = activeDialog == null ? null : activeDialog.getWindow();
+        if (dialogWindow != null && dialogWindow.getDecorView() != null) {
+            TvTheme.apply(this, dialogWindow.getDecorView());
+        }
     }
 
     /** The window the debug layout reader should inspect: the modal when one is up, else the page. */
@@ -1643,6 +1683,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 if (getCurrentFocus() == null) ensureSomethingFocused();
             }
+        });
+        // The chips and cards below are built on the way through this method.
+        getWindow().getDecorView().post(new Runnable() {
+            @Override public void run() { applyThemeNow(); }
         });
         // The movies page is a container the filter chips fill in; entering it from the sidebar used to
         // show only those four chips above an empty screen until one was pressed. It now opens on the
@@ -2502,6 +2546,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             });
             liveGroupRow.addView(chip);
         }
+        applyThemeNow();
     }
 
     private static final int LIVE_PAGE_SIZE = 120;
@@ -2701,6 +2746,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         epgIo.execute(new Runnable() {
             @Override public void run() {
                 final List<String> lines = new java.util.ArrayList<String>();
+                // The programmes behind the lines, so a row the viewer picks can be played back.
+                final List<com.nukacast.app.live.EpgNow.Slot> slots =
+                        new java.util.ArrayList<com.nukacast.app.live.EpgNow.Slot>();
                 String failure = "";
                 int liveIndex = -1;
                 try {
@@ -2713,7 +2761,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         if (slot.isLive(now)) liveIndex = lines.size();
                         lines.add((slot.isLive(now) ? "▶ " : "　") + slot.startLabel() + "–"
                                 + slot.endLabel() + "　" + slot.title);
+                        slots.add(slot);
                     }
+                    liveVisibleSchedules.put(channel.id, schedule);
                     if (lines.isEmpty()) failure = schedule.error.isEmpty()
                             ? "这个源没有提供节目单" : schedule.error;
                 } catch (Throwable error) {
@@ -2742,9 +2792,19 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                             return;
                         }
                         final String[] rows = lines.toArray(new String[0]);
+                        final List<com.nukacast.app.live.EpgNow.Slot> programmeSlots = slots;
+                        final com.nukacast.app.live.model.EpgSchedule programmeSchedule =
+                                liveVisibleSchedules.get(channel.id);
                         AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
                                 .setTitle(channel.name + " 节目单")
-                                .setItems(rows, null)
+                                .setItems(rows, new DialogInterface.OnClickListener() {
+                                    @Override public void onClick(DialogInterface listed, int which) {
+                                        if (which < 0 || which >= programmeSlots.size()) return;
+                                        listed.dismiss();
+                                        openProgramme(channel, programmeSchedule,
+                                                programmeSlots.get(which));
+                                    }
+                                })
                                 .setPositiveButton("关闭", null)
                                 .create();
                         // Opening a 24-hour list at 00:00 when it is half past nine in the evening would
@@ -2764,6 +2824,131 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 });
             }
         });
+    }
+
+    /**
+     * Plays a programme from the guide by position, for the debug API.
+     *
+     * <p>Called on the HTTP server's thread, because reading the guide is a network call and would throw
+     * NetworkOnMainThreadException on the UI thread; the playback itself is posted there.
+     *
+     * <p>With {@code play} false it only answers the question, which is what a scan of the listing needs: a
+     * scan that played would leave whichever programme it read last on the screen.
+     */
+    public Map<String, Object> playProgrammeForDebug(final String channelName, final int index,
+                                                     final boolean play) {
+        Map<String, Object> answer = new java.util.LinkedHashMap<String, Object>();
+        com.nukacast.app.live.model.LiveCatalog.Channel channel = null;
+        com.nukacast.app.live.model.LiveCatalog catalog = liveCatalog;
+        for (com.nukacast.app.live.model.LiveCatalog.Group group : catalog == null
+                ? new java.util.ArrayList<com.nukacast.app.live.model.LiveCatalog.Group>()
+                : catalog.groups) {
+            for (com.nukacast.app.live.model.LiveCatalog.Channel candidate : group.channels) {
+                if (candidate.name.equals(channelName) || candidate.id.equals(channelName)) {
+                    channel = candidate;
+                }
+            }
+        }
+        if (channel == null) {
+            answer.put("error", "没有这个频道:" + channelName);
+            return answer;
+        }
+        com.nukacast.app.live.model.EpgSchedule schedule;
+        try {
+            schedule = runtime.getLiveService().epg(liveSourceId, channel.id, "");
+        } catch (Exception error) {
+            // The guide service being down is an answer, not a crash.
+            answer.put("error", error.getMessage() == null ? "节目单读取失败" : error.getMessage());
+            return answer;
+        }
+        List<com.nukacast.app.live.EpgNow.Slot> slots =
+                new java.util.ArrayList<com.nukacast.app.live.EpgNow.Slot>();
+        for (com.nukacast.app.live.EpgNow.Slot slot : com.nukacast.app.live.EpgNow.slots(schedule)) {
+            if (!slot.isPlaceholder()) slots.add(slot);
+        }
+        if (index < 0 || index >= slots.size()) {
+            answer.put("error", "节目单里没有第 " + index + " 条（共 " + slots.size() + " 条）");
+            answer.put("programmes", slots.size());
+            return answer;
+        }
+        final com.nukacast.app.live.EpgNow.Slot slot = slots.get(index);
+        long now = System.currentTimeMillis();
+        com.nukacast.app.live.model.EpgSchedule.Program program = programmeAt(schedule, slot);
+        long end = program == null ? slot.endMs
+                : com.nukacast.app.live.CatchupUrl.endOf(program, schedule.date, slot.startMs);
+        answer.put("title", slot.title);
+        answer.put("start", slot.startLabel());
+        answer.put("live", slot.isLive(now));
+        answer.put("future", slot.startMs > now);
+        answer.put("reason", com.nukacast.app.live.CatchupUrl.reason(channel, slot.startMs, now));
+        answer.put("url", com.nukacast.app.live.CatchupUrl.url(channel, slot.startMs, end, now));
+        answer.put("catchup", com.nukacast.app.live.CatchupUrl.canCatchUp(channel));
+        if (play) {
+            final com.nukacast.app.live.model.LiveCatalog.Channel target = channel;
+            final com.nukacast.app.live.model.EpgSchedule listing = schedule;
+            final com.nukacast.app.live.EpgNow.Slot picked = slot;
+            runOnUiThread(new Runnable() {
+                @Override public void run() {
+                    playLiveChannelForDebug(channelName);
+                    openProgramme(target, listing, picked);
+                }
+            });
+        }
+        return answer;
+    }
+
+    /**
+     * Plays a programme from the guide: the one that is on is the live stream, an earlier one is catch-up.
+     *
+     * <p>Taking a programme off the list and doing nothing at all is what the guide used to do, which on a
+     * television is indistinguishable from a broken remote.
+     */
+    private void openProgramme(final com.nukacast.app.live.model.LiveCatalog.Channel channel,
+                               final com.nukacast.app.live.model.EpgSchedule schedule,
+                               final com.nukacast.app.live.EpgNow.Slot slot) {
+        long now = System.currentTimeMillis();
+        if (slot.isLive(now)) {
+            playLiveChannel(channel);
+            return;
+        }
+        if (slot.startMs > now) {
+            toast(slot.title + " 还没开始（" + slot.startLabel() + "）");
+            return;
+        }
+        com.nukacast.app.live.model.EpgSchedule.Program program =
+                schedule == null ? null : programmeAt(schedule, slot);
+        long end = program == null ? slot.endMs
+                : com.nukacast.app.live.CatchupUrl.endOf(program, schedule.date, slot.startMs);
+        String reason = com.nukacast.app.live.CatchupUrl.reason(channel, slot.startMs, now);
+        String url = com.nukacast.app.live.CatchupUrl.url(channel, slot.startMs, end, now);
+        if (url.isEmpty()) {
+            String said = reason.isEmpty() ? "这个节目看不了回看" : reason;
+            toast(said);
+            if (liveEpgLine != null && channel.id.equals(liveFocusedChannelId)) {
+                liveEpgLine.setText(channel.name + "：" + said);
+            }
+            return;
+        }
+        AppLog.i("直播", "回看 " + channel.name + " · " + slot.title + "（" + slot.startLabel() + "）→ "
+                + url);
+        liveCatchupPlaying = true;
+        liveUrlTries = 0;
+        liveGaveUp = false;
+        runtime.getPlayerController().play(this, url, channel.name + " · 回看", channel.headers);
+        if (playerHud != null) {
+            playerHud.show(channel.name + " · 回看", slot.startLabel() + " " + slot.title,
+                    "按返回键退出", true);
+        }
+    }
+
+    /** The listing line behind a guide row, for the times it wrote. */
+    private com.nukacast.app.live.model.EpgSchedule.Program programmeAt(
+            com.nukacast.app.live.model.EpgSchedule schedule,
+            com.nukacast.app.live.EpgNow.Slot slot) {
+        for (com.nukacast.app.live.model.EpgSchedule.Program program : schedule.programs) {
+            if (program.title != null && program.title.equals(slot.title)) return program;
+        }
+        return null;
     }
 
     /** The channel the viewer is on, or the first one of the visible list. */
@@ -2847,6 +3032,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         livePlayingChannel = channel;
         liveUrlIndex = 0;
         liveUrlTries = 0;
+        // The viewer is watching live again, so a previous 回看 no longer owns the screen.
+        liveCatchupPlaying = false;
         startLiveUrl(channel, 0, false);
     }
 
@@ -2917,6 +3104,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (livePlayingIndex < 0 && activeDetail != null) tryNextLine();
         if (livePlayingIndex < 0 || livePlaying.isEmpty()) return;
         if (liveGaveUp) return;
+        // A programme being watched again is not a channel: there is nothing to zap away from.
+        if (liveCatchupPlaying) return;
         if (System.currentTimeMillis() - liveSwitchAt < 6000L) return;
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
@@ -3120,9 +3309,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Zaps to the neighbouring channel while watching live TV. */
     private void switchLiveChannel(int delta) {
-        // The viewer asked for this channel, so the failure counters start over.
+        // The viewer asked for this channel, so the failure counters start over — and a 回看 does not
+        // survive zapping.
         liveAutoSwitch = 0;
         liveGaveUp = false;
+        liveCatchupPlaying = false;
         moveLiveChannelTo(delta);
     }
 

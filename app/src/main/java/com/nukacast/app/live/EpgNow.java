@@ -187,6 +187,23 @@ public final class EpgNow {
         if (value == null) return 0L;
         String text = value.trim();
         if (text.isEmpty()) return 0L;
+        // The XMLTV standard writes 14 digits with an offset: 20261008200000 +0800. Playlists that ship
+        // their own guide use it, and without this the whole feed reads as "no programmes".
+        java.util.regex.Matcher xmltv = java.util.regex.Pattern
+                .compile("(\\d{14})\\s*([+-]\\d{2}:?\\d{2})?").matcher(text);
+        if (xmltv.matches()) {
+            String format = xmltv.group(2) == null ? "yyyyMMddHHmmss" : "yyyyMMddHHmmss Z";
+            String stamped = format.endsWith(" Z")
+                    ? xmltv.group(1) + " " + xmltv.group(2) : xmltv.group(1);
+            try {
+                SimpleDateFormat parser = new SimpleDateFormat(format, Locale.US);
+                parser.setLenient(false);
+                Date date = parser.parse(stamped);
+                if (date != null) return date.getTime();
+            } catch (Exception ignored) {
+                // Fall through to the other shapes.
+            }
+        }
         String[] formats = {
                 "yyyy-MM-dd HH:mm:ss",
                 "yyyy-MM-dd HH:mm",

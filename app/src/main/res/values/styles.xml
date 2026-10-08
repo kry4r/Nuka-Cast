@@ -10,6 +10,8 @@
 
     <style name="AppTheme" parent="@style/AppThemeBase" />
 
+    <!-- Light mode keeps the platform's light dialog colours: the app's own colours are painted on top of
+         the view tree, while a dialog's text and list selector come from this theme. -->
     <style name="AppThemeLight" parent="android:style/Theme.Holo.Light.NoActionBar">
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>

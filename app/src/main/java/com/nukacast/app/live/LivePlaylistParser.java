@@ -22,6 +22,12 @@ public final class LivePlaylistParser {
     private static LiveCatalog parseM3u(String body) {
         LiveCatalog catalog = new LiveCatalog();
         Map<String, LiveCatalog.Group> groups = new LinkedHashMap<String, LiveCatalog.Group>();
+        // url-tvg / x-tvg-url sit on the #EXTM3U line; without reading them a source's own guide is
+        // ignored and only the public mirrors are asked, which do not know these channels.
+        java.util.regex.Matcher guide = java.util.regex.Pattern
+                .compile("(?i)(?:url-tvg|x-tvg-url|tvg-url)=\"([^\"]+)\"")
+                .matcher(body);
+        if (guide.find()) catalog.tvgUrl = guide.group(1).trim();
         String pendingInfo = null;
         String pendingUserAgent = null;
         // One #EXTINF can be followed by several address lines, one per mirror — that is how an m3u lists a

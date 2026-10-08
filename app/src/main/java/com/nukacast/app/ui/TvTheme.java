@@ -24,6 +24,11 @@ public final class TvTheme {
         return preferences(context).getBoolean(LIGHT, false);
     }
 
+    /** Sets the theme outright, for the debug API; the caller decides when to redraw. */
+    public static void setLight(Context context, boolean light) {
+        preferences(context).edit().putBoolean(LIGHT, light).apply();
+    }
+
     public static boolean toggle(Context context) {
         boolean value = !isLight(context);
         preferences(context).edit().putBoolean(LIGHT, value).apply();
@@ -85,7 +90,7 @@ public final class TvTheme {
             Button button = (Button) view;
             int id = button.getId();
             boolean primaryNavigation = id == R.id.navHome || id == R.id.navMovies
-                    || id == R.id.navCast || id == R.id.navSettings;
+                    || id == R.id.navLive || id == R.id.navCast || id == R.id.navSettings;
             boolean navigation = primaryNavigation || id == R.id.filterAll || id == R.id.filterMovie
                     || id == R.id.filterSeries || id == R.id.filterVariety || id == R.id.filterAnime;
             button.setTextColor(id == R.id.searchButton ? secondary(context) : primary(context));

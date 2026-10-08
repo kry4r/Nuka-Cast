@@ -290,6 +290,28 @@ public final class ControlServer extends NanoHTTPD {
                         }
                     }));
         }
+        if ("/api/debug/theme".equals(path)) {
+            // Switches the light/dark theme from outside, so the pages can be looked at in both without
+            // driving the settings page with a remote (the pass that paints the colours runs on resume).
+            Map<String, String> query = session.getParms();
+            Map<String, Object> answer = new LinkedHashMap<String, Object>();
+            String want = query.get("light");
+            final boolean light = want == null
+                    ? !com.nukacast.app.ui.TvTheme.isLight(runtime.getContext())
+                    : !"0".equals(want) && !"false".equalsIgnoreCase(want);
+            com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            com.nukacast.app.ui.TvTheme.setLight(runtime.getContext(), light);
+            answer.put("light", light);
+            if (activity == null) {
+                answer.put("note", "界面不在前台，下次启动时生效");
+                return json(Response.Status.OK, answer);
+            }
+            // Through the activity's own handler: it refuses once the window is gone, which a raw
+            // runOnUiThread does not.
+            activity.recreateForThemeChange();
+            answer.put("applied", true);
+            return json(Response.Status.OK, answer);
+        }
         if ("/api/debug/close".equals(path)) {
             // Closes whatever modal is up, and reports whether there was one.
             //
@@ -571,6 +593,24 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("favorites", favorites);
             payload.put("history", history);
             return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/catchup".equals(path)) {
+            // Picks a programme out of the television's own guide: the live one, a catch-up one, or one that
+            // has not started. The answer carries the address and the reason, which is what a check needs to
+            // tell "played the wrong thing" from "refused for a good reason".
+            Map<String, String> query = session.getParms();
+            final String channelName = safe(query.get("channel"));
+            final int index = debugIntParam(session, "index", -1);
+            // play=0 answers the question without starting anything: reading the whole listing otherwise
+            // starts a stream per programme, and the last one read would be the one left playing.
+            final boolean play = !"0".equals(query.get("play"));
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
+            // Not through onUiThreadNow: this reads the guide, which is a network call and throws on the UI
+            // thread; the method itself posts the playback to the UI thread.
+            Map<String, Object> answer = activity.playProgrammeForDebug(channelName, index, play);
+            return json(answer.containsKey("error") ? Response.Status.BAD_REQUEST : Response.Status.OK,
+                    answer);
         }
         if ("/api/debug/resume".equals(path)) {
             // What the player would do for one episode: the same two calls playEpisode makes. Checking it

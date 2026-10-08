@@ -738,6 +738,101 @@ async function main() {
   }
 
 
+  // Watching a programme that has already been on. The fixture playlist ships its own guide and declares
+  // catch-up, so the whole path — playlist-declared guide, the address it builds, and the refusal when the
+  // channel cannot do it — is checked against the television rather than in the abstract.
+  const catchupSource = ((await call("GET", "/api/debug/live")).data.sources || [])
+    .find((name) => String(name).includes("回看测试"));
+  if (fixtureReachable && catchupSource) {
+    await call("GET", "/api/debug/player/action?name=stop");
+    await new Promise((r) => setTimeout(r, 2000));
+    await call("GET", "/api/debug/live?source=" + encodeURIComponent("回看测试"));
+    await new Promise((r) => setTimeout(r, 4000));
+
+    const guide = [];
+    let past = null;
+    let onNow = null;
+    let later = null;
+    for (let index = 0; index < 48; index++) {
+      // play=0: reading the listing must not start a stream, or the last one read is the one left playing.
+      const row = (await call("GET", `/api/debug/catchup?channel=${encodeURIComponent("回看测试台")}&index=${index}&play=0`)).data;
+      if (!row || row.error) break;
+      guide.push(row);
+      if (!past && !row.future && !row.live) past = { index, row };
+      if (!onNow && row.live) onNow = { index, row };
+      if (!later && row.future) later = { index, row };
+      if (past && onNow && later) break;
+    }
+    check("清单自带的节目单被读到了", guide.length > 5,
+      `${guide.length} 条节目（url-tvg=guide.xml）`);
+
+    if (past) {
+      check("已播完的节目给得出带时间段的回看地址",
+        String(past.row.url).includes("start=") && String(past.row.url).includes("end=")
+          && past.row.reason === "",
+        `${past.row.title} 起=${past.row.start} → ${String(past.row.url)}`);
+      // And pressing it really plays that window of the stream.
+      await call("GET", `/api/debug/catchup?channel=${encodeURIComponent("回看测试台")}&index=${past.index}`);
+      let played = false;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const state = (await call("GET", "/api/player")).data;
+        if (String(state.url || "").includes("master.m3u8") && String(state.url || "").includes("start=")
+          && (state.state === "playing" || Number(state.positionMs || 0) > 0)) {
+          played = true;
+          break;
+        }
+      }
+      check("回看的地址真的在播", played,
+        `${past.row.title} → ${String((await call("GET", "/api/player")).data.url || "").slice(-60)}`);
+    } else {
+      check("已播完的节目给得出带时间段的回看地址", true, "节目单里没有已播完的节目，跳过");
+      check("回看的地址真的在播", true, "同上");
+    }
+
+    if (onNow) {
+      // What is on now is the channel itself: pressing it must not append a window to the address.
+      await call("GET", `/api/debug/catchup?channel=${encodeURIComponent("回看测试台")}&index=${onNow.index}`);
+      let liveUrl = "";
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        liveUrl = String((await call("GET", "/api/player")).data.url || "");
+        if (liveUrl.includes("master.m3u8")) break;
+      }
+      check("正在播的节目走直播地址",
+        liveUrl.includes("master.m3u8") && !liveUrl.includes("start="),
+        `${onNow.row.title} 起=${onNow.row.start} → ${liveUrl.slice(-60)}`);
+    } else {
+      check("正在播的节目走直播地址", true, "节目单里没有正在播的节目，跳过");
+    }
+
+    if (later) {
+      const before = String((await call("GET", "/api/player")).data.url || "");
+      await call("GET", `/api/debug/catchup?channel=${encodeURIComponent("回看测试台")}&index=${later.index}`);
+      await new Promise((r) => setTimeout(r, 3000));
+      const after = String((await call("GET", "/api/player")).data.url || "");
+      check("还没开始的节目不会切走正在看的", before === after,
+        `${later.row.title} 起=${later.row.start}（${before === after ? "播放没有被打断" : before + " → " + after}）`);
+    } else {
+      check("还没开始的节目不会切走正在看的", true, "节目单里没有还没开始的节目，跳过");
+    }
+
+    const plain = (await call("GET", `/api/debug/catchup?channel=${encodeURIComponent("无回看台")}&index=0`)).data;
+    check("不支持回看的频道说明原因",
+      plain.catchup === false && plain.url === "" && String(plain.reason || "").includes("不支持回看"),
+      `reason=${plain.reason} url=${JSON.stringify(plain.url)}`);
+
+    await call("GET", "/api/debug/player/action?name=stop");
+    await new Promise((r) => setTimeout(r, 1500));
+    await call("GET", "/api/debug/live?source=" + encodeURIComponent("IPTV"));
+    await new Promise((r) => setTimeout(r, 1500));
+  } else {
+    for (const name of ["清单自带的节目单被读到了", "已播完的节目给得出带时间段的回看地址", "回看的地址真的在播",
+      "正在播的节目走直播地址", "还没开始的节目不会切走正在看的", "不支持回看的频道说明原因"]) {
+      check(name, true, fixtureReachable ? "回看夹具清单不在设备上，跳过" : "测试流不可达，跳过");
+    }
+  }
+
   // The home page hero: the biggest card on the first screen must be selectable.
   await call("GET", "/api/debug/player/action?name=stop");
   await call("GET", "/api/debug/navigate?page=home");

@@ -89,6 +89,30 @@ public final class LivePlaylistParserTest {
         assertEquals(1, catalog.groups.get(0).channels.get(1).urls.size());
     }
 
+    /**
+     * The guide address a playlist declares must be read.
+     *
+     * <p>Sources ship their own listing this way, and it is the only one that knows their channels: asking a
+     * public mirror for a regional channel returns nothing, so the guide is empty for every channel of that
+     * source (measured on a fixture playlist before this was read).
+     */
+    @Test
+    public void readsTheGuideAddressThePlaylistDeclares() {
+        String body = "#EXTM3U url-tvg=\"http://host/guide.xml\"\n"
+                + "#EXTINF:-1 tvg-id=\"one\" group-title=\"测试\",一台\n"
+                + "http://host/one.m3u8\n";
+        assertEquals("http://host/guide.xml", LivePlaylistParser.parse(body).tvgUrl);
+
+        // And it is optional: a playlist without one leaves the field empty rather than reading a neighbour.
+        String plain = "#EXTM3U\n#EXTINF:-1 group-title=\"测试\",一台\nhttp://host/one.m3u8\n";
+        assertEquals("", LivePlaylistParser.parse(plain).tvgUrl);
+
+        // The other spelling the same idea travels under.
+        String alternative = "#EXTM3U x-tvg-url=\"http://host/other.xml\"\n"
+                + "#EXTINF:-1 group-title=\"测试\",一台\nhttp://host/one.m3u8\n";
+        assertEquals("http://host/other.xml", LivePlaylistParser.parse(alternative).tvgUrl);
+    }
+
     /** Catch-up as the playlists that have it describe it. */
     @Test
     public void readsCatchUpAttributes() {

@@ -18,6 +18,24 @@ import static org.junit.Assert.assertTrue;
  * has to be right even when the times are written in one of the several formats sites use.
  */
 public class EpgNowTest {
+
+    /**
+     * The XMLTV standard time shape: fourteen digits with a zone offset.
+     *
+     * <p>Playlists that ship their own guide (the {@code url-tvg} ones) write this, so a feed that is
+     * otherwise perfect used to read as "no programmes at all".
+     */
+    @Test public void xmltvTimestampsAreRead() {
+        long stamped = EpgNow.parse("20261008200000 +0800", "");
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.setTimeInMillis(stamped);
+        assertEquals(2026, calendar.get(java.util.Calendar.YEAR));
+        assertEquals(java.util.Calendar.OCTOBER, calendar.get(java.util.Calendar.MONTH));
+        assertEquals(8, calendar.get(java.util.Calendar.DAY_OF_MONTH));
+        // The offset is honoured, so "20:00 +0800" is that one moment whatever zone the device is in.
+        assertEquals(1791460800000L, stamped);
+        assertTrue(EpgNow.parse("20261008200000", "") > 0);
+    }
     private static final String DATE = "2026-10-07";
 
     @Test

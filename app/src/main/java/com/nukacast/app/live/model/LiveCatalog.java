@@ -9,6 +9,13 @@ public final class LiveCatalog {
     public String sourceId = "";
     public String sourceName = "";
     public final List<Group> groups = new ArrayList<Group>();
+    /**
+     * The guide (XMLTV) address the playlist declares, if it declares one.
+     *
+     * <p>Sources ship their own listing this way, and it is the only one that knows regional and private
+     * channels; asking a public mirror for those returns nothing at all.
+     */
+    public String tvgUrl = "";
 
     public static final class Group {
         public String name = "";

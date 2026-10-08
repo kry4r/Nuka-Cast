@@ -3,6 +3,7 @@ package com.nukacast.app.live;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.live.model.LiveCatalog;
 import com.nukacast.app.live.model.EpgSchedule;
 import com.nukacast.app.live.model.LiveSourceInfo;
@@ -122,6 +123,18 @@ public final class LiveService {
         String cacheKey = sourceId + "|" + channelId + "|" + date;
         EpgSchedule cached = cachedSchedule(cacheKey);
         if (cached != null) return cached;
+
+        // The playlist's own listing first: it is the only one that has these channels.
+        String declared = declaredGuide(sourceId);
+        if (!declared.isEmpty()) {
+            EpgSchedule own = fetchDeclaredGuide(declared, sourceId, channel, date);
+            if (own != null && !own.programs.isEmpty() && !EpgNow.isPlaceholder(own)) {
+                own.channel = channel.name;
+                own.error = "";
+                remember(cacheKey, own, SCHEDULE_TTL_MS);
+                return own;
+            }
+        }
 
         // A guide service that is down must not take the feature with it, so the mirrors are tried in
         // order until one answers (a source that declares its own template keeps it first).
@@ -248,12 +261,63 @@ public final class LiveService {
     private static final long SCHEDULE_TTL_MS = 30L * 60L * 1000L;
     private static final long SCHEDULE_ERROR_TTL_MS = 2L * 60L * 1000L;
     private final Map<String, ScheduleEntry> schedules = new HashMap<String, ScheduleEntry>();
+    /** The playlist's own guide files, by address: one download serves every channel in the playlist. */
+    private final Map<String, String> guideBodies = new HashMap<String, String>();
 
     private static final String DEFAULT_EPG_TEMPLATE =
             "http://epg.51zmt.top:8000/api/diyp/?ch={name}&date={date}";
 
     public synchronized void clearCache() {
         cache.clear();
+    }
+
+    /** The guide address the loaded playlist declares, or "" when it declares none. */
+    private String declaredGuide(String sourceId) {
+        try {
+            LiveCatalog catalog = catalog(sourceId);
+            return catalog == null ? "" : catalog.tvgUrl;
+        } catch (Exception error) {
+            // A source that cannot be loaded has no declared guide; the mirrors below still get a chance.
+            return "";
+        }
+    }
+
+    /**
+     * Reads a programme list out of the playlist's own guide.
+     *
+     * <p>Kept whole rather than per channel: an XMLTV file carries every channel in the playlist, so it is
+     * downloaded once and cached, and the per-channel answer is picked out of it.
+     */
+    private EpgSchedule fetchDeclaredGuide(String url, String sourceId, LiveCatalog.Channel channel,
+                                           String date) {
+        String key = "tvg|" + url;
+        String body = guideBodies.get(key);
+        if (body == null) {
+            try {
+                Request request = new Request.Builder().url(url)
+                        .header("User-Agent", "NukaCast/0.1 Live").build();
+                try (Response response = HttpStack.client().newCall(request).execute()) {
+                    if (!response.isSuccessful() || response.body() == null) return null;
+                    body = ResponseBodies.text(response.body(), MAX_LIVE_BYTES);
+                }
+                guideBodies.put(key, body);
+                if (guideBodies.size() > 4) {
+                    guideBodies.remove(guideBodies.keySet().iterator().next());
+                }
+            } catch (Exception error) {
+                AppLog.w("直播", "清单自带的节目单读取失败：" + url + " → " + error);
+                return null;
+            }
+        }
+        for (String candidate : EpgChannelId.candidates(channel.epgId)) {
+            try {
+                EpgSchedule schedule = EpgParser.parse(body, candidate, date);
+                if (schedule != null && !schedule.programs.isEmpty()) return schedule;
+            } catch (Exception ignored) {
+                // Try the next spelling of the channel id.
+            }
+        }
+        return null;
     }
 
     private LiveCatalog download(TvBoxConfig.LiveSource source) throws Exception {
