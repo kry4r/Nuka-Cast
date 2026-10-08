@@ -76,12 +76,22 @@ function claim(name) {
   }
 }
 
-function press(code) {
-  try {
-    execFileSync(ADB, ["shell", "input", "keyevent", String(code)], { stdio: "ignore" })
-  } catch {
-    // A missing key press shows up as the wrong screen, which is visible in the report.
+/**
+ * Sends a remote key through the app's own key handling.
+ *
+ * <p>Not {@code adb shell input keyevent}: on this emulator those injections are dropped whenever the
+ * system is busy (logcat shows "ACTION_UP but key was not down"), which silently turns a page walk into a
+ * walk that pressed nothing — measured, a settings screen reported the first control as focused after
+ * eleven presses that were supposed to reach the last one. The app's dispatch path is the same one a real
+ * remote goes through, and it either works or reports that it did not.
+ */
+async function press(code) {
+  const result = await call("GET", `/api/debug/key?code=${code}`)
+  if (result.data && result.data.handled === false) {
+    // Not fatal: some keys are meant to fall through to the platform's focus search.
+    return false
   }
+  return true
 }
 
 /**
@@ -144,8 +154,8 @@ async function main() {
     }
     if (screen.toFirstCard) await focusFirstCard()
     for (const code of screen.keys || []) {
-      press(code)
-      await sleep(1200)
+      await press(code)
+      await sleep(700)
     }
     await sleep(screen.after || 1500)
     const layout = await call("GET", "/api/debug/layout")

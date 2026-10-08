@@ -3860,7 +3860,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             DramaEpisode episode = detail.episodes.get(i);
             labels[i] = episode.name + "  ·  " + (i + 1);
         }
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle("选择集数（共 " + detail.episodes.size() + " 集）")
                 .setItems(labels, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface dialog, int which) {
@@ -3873,7 +3873,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     }
                 })
                 .setNegativeButton("取消", null)
-                .show();
+         .create());
     }
 
     private void loadDramaLines(final SearchItem entry, final DramaDetail detail) {
@@ -3984,7 +3984,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             DramaLine line = lines.lines.get(i);
             labels[i] = joinMeta(line.siteName, line.name, line.remarks);
         }
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle("选择播放线路（未找到完全同名条目）")
                 .setItems(labels, new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface dialog, int which) {
@@ -3992,7 +3992,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     }
                 })
                 .setNegativeButton("取消", null)
-                .show();
+                .create());
     }
 
     private void openDramaLine(final DramaItem drama, final DramaLine line) {
@@ -4827,13 +4827,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return;
         }
         AppLog.i("诊断", "已导出诊断包：" + target.getAbsolutePath());
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle("诊断包已导出")
                 .setMessage("日志与设备状态已写入：\n" + target.getAbsolutePath()
                         + "\n\n可以用文件管理器打开，或在电脑上执行：\n"
                         + "adb pull " + target.getAbsolutePath())
                 .setPositiveButton("知道了", null)
-                .show();
+                .create());
     }
 
     private void updateLogText(TextView view, AppLog.Level level) {
@@ -4850,7 +4850,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return;
         }
         markCrashPrompted(report);
-        new AlertDialog.Builder(this)
+        showDialog(new AlertDialog.Builder(this)
                 .setTitle("检测到上次崩溃")
                 .setMessage(report)
                 .setPositiveButton("清除记录", new DialogInterface.OnClickListener() {
@@ -4859,7 +4859,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     }
                 })
                 .setNegativeButton("保留", null)
-                .show();
+                .create());
     }
 
     private static final String CRASH_PROMPT_PREFS = "crash_prompt";

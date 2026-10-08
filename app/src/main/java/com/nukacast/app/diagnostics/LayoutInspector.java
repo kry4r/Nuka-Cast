@@ -44,6 +44,22 @@ public final class LayoutInspector {
         return result;
     }
 
+    /**
+     * Whether this view scrolls its children, so a child that is only partly visible is by design.
+     *
+     * <p>{@code ScrollView} and {@code HorizontalScrollView} were the obvious two; a dialog's single-choice
+     * list is a {@code ListView}, and its last row being cut at the bottom edge is normal, not a defect —
+     * the layout report complained about exactly that, and a report that cries wolf gets ignored.
+     */
+    private static boolean isScrollingContainer(View view) {
+        return view instanceof ScrollView
+                || view instanceof android.widget.HorizontalScrollView
+                || view instanceof android.widget.ListView
+                || view instanceof android.widget.GridView
+                || view instanceof android.widget.AbsListView
+                || view.getClass().getName().contains("RecyclerView");
+    }
+
     private static void walk(View view, Rect visible, int depth, boolean inScroller,
                              List<Map<String, Object>> out, List<String> problems) {
         if (depth > MAX_DEPTH) return;
@@ -116,8 +132,7 @@ public final class LayoutInspector {
         // "有些东西被遮挡看不到" case, which the screen-overflow test above cannot see because the
         // clipped rectangle does fit on screen. Inside a scroll container, clipping is by design (that
         // is how content below the fold works), so those are not reported as problems.
-        boolean scroller = view instanceof ScrollView
-                || view instanceof android.widget.HorizontalScrollView;
+        boolean scroller = isScrollingContainer(view);
         if (!inScroller && !scroller && view.getWidth() > 0 && view.getHeight() > 0) {
             int lostHeight = view.getHeight() - bounds.height();
             int lostWidth = view.getWidth() - bounds.width();
