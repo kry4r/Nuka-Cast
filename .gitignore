@@ -17,3 +17,4 @@ web/vite.config.d.ts
 
 # Local dev artifacts
 .preview/
+.scratch/
