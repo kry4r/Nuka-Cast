@@ -1964,6 +1964,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void renderLiveGroups() {
         liveGroupRow.removeAllViews();
+        // The group row is also rendered while the playlist is still on its way (for example when the
+        // debug API or the viewer reaches the live page during start-up), and there are no groups yet.
+        if (liveCatalog == null) return;
         List<com.nukacast.app.live.model.LiveCatalog.Channel> recent = recentLiveChannels();
         if (!recent.isEmpty()) {
             Button chip = actionButton(LIVE_GROUP_RECENT + " (" + recent.size() + ")", 0);
@@ -2002,6 +2005,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             renderLiveSearchResults();
             return;
         }
+        if (liveCatalog == null) {
+            liveStatus.setText("正在加载直播源…");
+            liveChannelGrid.removeAllViews();
+            return;
+        }
         if (LIVE_GROUP_RECENT.equals(liveGroupName)) {
             List<com.nukacast.app.live.model.LiveCatalog.Channel> recent = recentLiveChannels();
             liveStatus.setText(liveCatalog.sourceName + " · 常看 · " + recent.size() + " 个频道");
@@ -2022,6 +2030,45 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         liveFocusedChannelId = "";
         if (liveEpgLine != null) liveEpgLine.setText("");
         renderLiveChannelList(group.channels, false);
+    }
+
+    /**
+     * One channel in the live grid: its logo, then the name.
+     *
+     * <p>A playlist's channels are easier to find by their logo than by their name — that is how every
+     * set-top box shows them — and half of a public list has no logo at all, so the tile falls back to
+     * the channel's initial rather than an empty square.
+     */
+    private View channelCell(final com.nukacast.app.live.model.LiveCatalog.Channel channel,
+                             String label) {
+        LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.HORIZONTAL);
+        cell.setGravity(Gravity.CENTER_VERTICAL);
+        cell.setFocusable(true);
+        cell.setBackgroundDrawable(TvTheme.focusable(this));
+        cell.setPadding(dp(6), 0, dp(6), 0);
+        cell.setContentDescription(label);
+
+        ImageView icon = new ImageView(this);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        icon.setImageBitmap(com.nukacast.app.ui.ChannelLogo.tile(channel.name));
+        cell.addView(icon, new LinearLayout.LayoutParams(dp(26), dp(18)));
+        if (channel.logo != null && !channel.logo.isEmpty()) {
+            // The initial stays underneath, so a logo that never arrives leaves a readable tile.
+            images.loadIcon(channel.logo, icon);
+        }
+
+        TextView name = new TextView(this);
+        name.setText(label);
+        name.setTextSize(12);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        name.setTextColor(TvTheme.primary(this));
+        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        nameParams.leftMargin = dp(6);
+        cell.addView(name, nameParams);
+        return cell;
     }
 
     /** Renders a channel list (one group, or the hits of a search), paged. */
@@ -2060,9 +2107,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if (fromSearch && channel.group != null && !channel.group.isEmpty()) {
                 label = channel.group + " · " + label;
             }
-            Button button = actionButton(label, 0);
-            button.setSingleLine(true);
-            button.setEllipsize(TextUtils.TruncateAt.END);
+            View button = channelCell(channel, label);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(30), 1f);
             params.setMargins(dp(2), 0, dp(2), 0);
             button.setLayoutParams(params);

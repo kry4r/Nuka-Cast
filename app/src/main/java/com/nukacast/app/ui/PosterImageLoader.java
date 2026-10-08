@@ -37,33 +37,55 @@ public final class PosterImageLoader {
      * the caller so the card can draw a placeholder instead of leaving a blank rectangle.
      */
     public void load(final String url, final ImageView target, final String referer) {
+        load(url, target, referer, 360, 540);
+    }
+
+    /**
+     * Loads a small icon (a channel logo), decoded to icon size rather than poster size.
+     *
+     * <p>A live page shows up to 120 channels at once and their logos are tiny; decoding each of them
+     * at 360x540, as a poster would be, is what turns a channel list into a memory spike on a 1.5GB
+     * device.
+     */
+    public void loadIcon(final String url, final ImageView target) {
+        load(url, target, null, 96, 96);
+    }
+
+    /**
+     * Loads an image into an image view.
+     *
+     * @param targetWidth height the bitmap is needed at; the decoder samples down towards it
+     */
+    public void load(final String url, final ImageView target, final String referer,
+                     final int targetWidth, final int targetHeight) {
         if (url == null || (!url.startsWith("http://") && !url.startsWith("https://"))) {
             if (fallback != null) fallback.onFailed(url, target);
             return;
         }
-        target.setTag(url);
-        Bitmap cached = cache.get(url);
+        final String key = "i" + targetWidth + "x" + targetHeight + "|" + url;
+        target.setTag(key);
+        Bitmap cached = cache.get(key);
         if (cached != null) {
             target.setImageBitmap(cached);
             return;
         }
         executor.execute(new Runnable() {
             @Override public void run() {
-                Bitmap bitmap = download(url, referer);
+                Bitmap bitmap = download(url, referer, targetWidth, targetHeight);
                 if (bitmap == null) {
                     if (fallback != null) {
                         main.post(new Runnable() {
                             @Override public void run() {
-                                if (url.equals(target.getTag())) fallback.onFailed(url, target);
+                                if (key.equals(target.getTag())) fallback.onFailed(url, target);
                             }
                         });
                     }
                     return;
                 }
-                cache.put(url, bitmap);
+                cache.put(key, bitmap);
                 main.post(new Runnable() {
                     @Override public void run() {
-                        if (url.equals(target.getTag())) target.setImageBitmap(bitmap);
+                        if (key.equals(target.getTag())) target.setImageBitmap(bitmap);
                     }
                 });
             }
@@ -81,7 +103,7 @@ public final class PosterImageLoader {
 
     public void shutdown() { executor.shutdownNow(); }
 
-    private static Bitmap download(String url, String referer) {
+    private static Bitmap download(String url, String referer, int targetWidth, int targetHeight) {
         Request.Builder builder = new Request.Builder().url(url)
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 4.2.2; NukaCast)");
         if (referer != null && !referer.isEmpty()) builder.header("Referer", referer);
@@ -99,7 +121,7 @@ public final class PosterImageLoader {
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inPreferredConfig = Bitmap.Config.RGB_565;
             options.inDither = true;
-            options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, 360, 540);
+            options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
             return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         } catch (Exception ignored) {
             return null;

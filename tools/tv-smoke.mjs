@@ -489,9 +489,12 @@ async function main() {
     let numbered = [];
     for (let attempt = 0; attempt < 10 && numbered.length < 3; attempt++) {
       const layout = await layoutWithContent(3);
+      // A channel cell is a row of [logo, name]; reading the names in layout order gives the same
+      // numbering the digit keys use, whichever widget type carries the text.
+      const seen = new Set();
       numbered = (layout.views || [])
-        .filter((v) => String(v.view || "").startsWith("Button[") && allNames.has(String(v.text || "")))
-        .map((v) => String(v.text));
+        .map((v) => String(v.text || ""))
+        .filter((text) => allNames.has(text) && !seen.has(text) && seen.add(text));
       if (numbered.length < 3) await new Promise((r) => setTimeout(r, 2000));
     }
     // The layout order is what the viewer counts on; the app's own list is the fallback when the grid
