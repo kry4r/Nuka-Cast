@@ -152,3 +152,18 @@ MCP 工具 `nukacast_epg` / `nukacast_live_catalog` / `nukacast_live_search` / `
 需要一条把焦点放到待测控件上的路）、`/api/debug/live` 的 `state.firstChannels`/`channelCount`、
 `/api/debug/live?query=` 空值退出搜索态、`/api/debug/epg` 的 `reason`、
 `/api/debug/player/action?name=stop`（注入 BACK 到不了 `onBackPressed`，脚本需要一条退出播放的路）。
+
+## 七、又一轮设备实测与修复（tv-smoke 34 项，CI 恢复全绿）
+
+| 问题 | 实测原因 | 处理 |
+| --- | --- | --- |
+| CI 连续三天红（EpgNowTest 3 个用例） | 节目单里的 `20:00` 被当作「今天 20:00」解析，而节目单属于某一天；CI 在 UTC、本机在 UTC+8，日期差一天就错开（本机之前只是命中了 Gradle 缓存） | `EpgNow.parse` 增加日期上下文：`20:00` 锚定到节目单自身的日期，节目单没写日期才退回今天；新增两个用例（跨日期、无日期）并在 4 个时区下验证通过 |
+| MCP 探测把能用的站点报成 TLS 失败 | `ProbeTool` 用 `HttpURLConnection`，API 19 的平台 TLS 根本协商不了 TLS 1.2（`SSL23_GET_SERVER_HELLO:unsupported protocol`），而应用自己的 OkHttp 客户端带 Conscrypt 走得好好的 | 探测改走 `HttpStack.client()`，结果里写明 `stack=okhttp+conscrypt`：同样的 8 个地址从「3 个失败」变成全部 `HTTP 200` |
+| 诊断包说「本机不支持的站点：（无）」，首页日志却说跳过 53 个 | 首页跳过 JAR 插件站点时只计数、不记录原因（只有搜索路径记录） | 首页跳过时也记录（含系统版本）；导出包先按原因汇总数量再列站点：`共 53 个：需要 JAR 插件，Android 4.4.2（API 19）无法加载` |
+| 「被外部结束」把装新版也当成崩溃 | 正常更新/重装会替换进程，与系统杀进程长得一样 | 记录安装包 `lastUpdateTime`，早于上次启动的更新标记为「被应用更新结束」，网页设备页区分显示 |
+| 调试包版本号是 0.3.8 | `app/build.gradle` 默认 versionName 一直没跟着发布走（发布流程显式传参，调试包就用默认值） | 默认值更新为 0.5.0 / 23 |
+| 看护工具 6 小时什么都没看 | `tv-watch` 对着旧地址轮询，890 次采样全是 timeout | 新增 `tools/tv-discover.mjs`（先试 adb 转发的模拟器，再 SSDP，最后扫 /24），`tv-watch` 连续 3 次失败即重新发现；判定只用设备独有的 `/api/debug/layout`（预览服务器也会答 `/api/status`，上一版就被它骗了） |
+| 看护每次都报 crash | 应用会一直保留上一次崩溃记录，直到用户清除 | 只在崩溃记录*变化*时报告，并打印新记录首行 |
+
+当前挂机验证：`tools/tv-soak.mjs 180` + `tools/tv-watch.mjs 127.0.0.1 19978 20` 同时运行（看护只读采样），
+15 轮后堆 40–42MB、RSS 99–105MB、线程 64–67，无事件、无掉线。
