@@ -252,18 +252,25 @@ async function main() {
   const items = search.items || [];
   check("search by title", items.length > 0, `${items.length} results, first “${items[0]?.name}”`);
 
+  // Drama hits travel in the same list but carry no site, so the playable ones are picked explicitly
+  // (measured: /api/detail on a drama hit returns no lines at all).
+  const playable = items.find((item) => item.sourceId && item.siteKey && item.vodId);
+  check("search returns playable (source-backed) hits", !!playable,
+    `${items.filter((i) => i.siteKey).length} of ${items.length} carry a site, e.g. “${playable?.name || "无"}”`);
+
   // Search by initials, which only works through the local title index.
   const initials = (await call("POST", "/api/search", { keyword: "LLDQ" })).data;
   check("search by initials", (initials.items || []).length > 0,
     `expanded to “${initials.expandedKeyword}”, ${(initials.items || []).length} results`);
 
-  if (items.length === 0) {
+  if (!playable) {
+    console.error("no source-backed search hit; the remaining checks need one");
     finish();
     return;
   }
 
   // Detail + episode list.
-  const first = items[0];
+  const first = playable || items[0];
   const detail = (await call("POST", "/api/detail",
     { sourceId: first.sourceId, siteKey: first.siteKey, vodId: first.vodId })).data;
   const lines = detail.playSources || [];
