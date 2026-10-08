@@ -130,6 +130,33 @@ public class EpgNowTest {
         assertNull(EpgNow.current(broken, at("2026-10-07 20:30")));
     }
 
+    @Test
+    public void bareTimesBelongToTheSchedulesOwnDate() {
+        // The bug this pins: a guide fetched for another day was read as if its times were today's, so
+        // "what is on now" was answered against the wrong date (and CI, whose clock is a day off the
+        // fixed date in these tests, failed on it).
+        EpgSchedule other = schedule(program("晚间新闻", "20:00", "21:00"));
+        other.date = "2026-10-09";
+        EpgNow.Slot slot = EpgNow.slots(other).get(0);
+        assertEquals(at("2026-10-09 20:00"), slot.startMs);
+        assertEquals(at("2026-10-09 21:00"), slot.endMs);
+        // Reading the same schedule on the 9th finds it, reading it on the 7th does not.
+        assertEquals("晚间新闻", EpgNow.current(other, at("2026-10-09 20:30")).title);
+        assertNull(EpgNow.current(other, at("2026-10-07 20:30")));
+    }
+
+    @Test
+    public void aScheduleWithoutADateFallsBackToToday() {
+        EpgSchedule undated = schedule(program("晚间新闻", "20:00", "21:00"));
+        undated.date = "";
+        EpgNow.Slot slot = EpgNow.slots(undated).get(0);
+        java.util.Calendar today = java.util.Calendar.getInstance();
+        java.util.Calendar at20 = java.util.Calendar.getInstance();
+        at20.setTimeInMillis(slot.startMs);
+        assertEquals(today.get(java.util.Calendar.DAY_OF_MONTH), at20.get(java.util.Calendar.DAY_OF_MONTH));
+        assertEquals(20, at20.get(java.util.Calendar.HOUR_OF_DAY));
+    }
+
     private static EpgSchedule.Program program(String title, String start, String end) {
         EpgSchedule.Program program = new EpgSchedule.Program();
         program.title = title;

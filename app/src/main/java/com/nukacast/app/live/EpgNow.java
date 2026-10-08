@@ -72,8 +72,8 @@ public final class EpgNow {
         List<Slot> slots = new ArrayList<Slot>();
         if (schedule == null) return slots;
         for (EpgSchedule.Program program : schedule.programs) {
-            Slot slot = slot(program);
-            if (slot != null && slot.isValid()) slots.add(slot);
+            Slot slot = slot(program, schedule.date);
+            if (slot.isValid()) slots.add(slot);
         }
         Collections.sort(slots, new Comparator<Slot>() {
             @Override public int compare(Slot left, Slot right) {
@@ -115,7 +115,7 @@ public final class EpgNow {
     public static Slot current(EpgSchedule schedule, long nowMs) {
         if (schedule == null) return null;
         for (EpgSchedule.Program program : schedule.programs) {
-            Slot slot = slot(program);
+            Slot slot = slot(program, schedule.date);
             if (slot.isValid() && nowMs >= slot.startMs && nowMs < slot.endMs) return slot;
         }
         return null;
@@ -127,7 +127,7 @@ public final class EpgNow {
         Slot current = current(schedule, nowMs);
         Slot best = null;
         for (EpgSchedule.Program program : schedule.programs) {
-            Slot slot = slot(program);
+            Slot slot = slot(program, schedule.date);
             if (!slot.isValid()) continue;
             if (slot.startMs <= nowMs) continue;
             if (current != null && slot.startMs < current.endMs) continue;
@@ -155,8 +155,12 @@ public final class EpgNow {
     }
 
     static Slot slot(EpgSchedule.Program program) {
-        long start = parse(program.start);
-        long end = parse(program.end);
+        return slot(program, "");
+    }
+
+    static Slot slot(EpgSchedule.Program program, String scheduleDate) {
+        long start = parse(program.start, scheduleDate);
+        long end = parse(program.end, scheduleDate);
         return new Slot(program.title, program.description, start, end);
     }
 
@@ -166,6 +170,20 @@ public final class EpgNow {
      * @return epoch millis, or 0 when the text cannot be read
      */
     static long parse(String value) {
+        return parse(value, "");
+    }
+
+    /**
+     * Parses the time formats EPG feeds actually use, with the schedule's own date as the anchor.
+     *
+     * <p>A feed answering for 2026-10-07 writes its programmes as {@code 20:00}, and reading that as
+     * "today at 20:00" makes "what is on now" answer the wrong question — measured in CI, where the
+     * machine clock is on a different date than the schedule being read.
+     *
+     * @param scheduleDate the date the schedule belongs to ({@code yyyy-MM-dd}), or empty for today
+     * @return epoch millis, or 0 when the text cannot be read
+     */
+    static long parse(String value, String scheduleDate) {
         if (value == null) return 0L;
         String text = value.trim();
         if (text.isEmpty()) return 0L;
@@ -176,9 +194,12 @@ public final class EpgNow {
                 "yyyy/MM/dd HH:mm",
                 "yyyyMMddHHmmss",
         };
-        for (String format : formats) {
+        for (int i = 0; i < formats.length; i++) {
             try {
-                Date date = new SimpleDateFormat(format, Locale.US).parse(text);
+                SimpleDateFormat parser = new SimpleDateFormat(formats[i], Locale.US);
+                // The first five shapes carry their own date; a two-digit time does not.
+                if (i < 5) parser.setLenient(false);
+                Date date = parser.parse(text);
                 if (date != null) return date.getTime();
             } catch (Exception ignored) {
                 // Try the next shape.
@@ -195,13 +216,13 @@ public final class EpgNow {
                 // Give up below.
             }
         }
-        // A bare "20:00" belongs to today.
+        // A bare "20:00" belongs to the day the schedule is for (today when it does not say).
         try {
             Date time = new SimpleDateFormat("HH:mm", Locale.US).parse(text);
             if (time != null) {
-                java.util.Calendar calendar = java.util.Calendar.getInstance();
                 java.util.Calendar hours = java.util.Calendar.getInstance();
                 hours.setTime(time);
+                java.util.Calendar calendar = dayOf(scheduleDate);
                 calendar.set(java.util.Calendar.HOUR_OF_DAY, hours.get(java.util.Calendar.HOUR_OF_DAY));
                 calendar.set(java.util.Calendar.MINUTE, hours.get(java.util.Calendar.MINUTE));
                 calendar.set(java.util.Calendar.SECOND, 0);
@@ -212,5 +233,32 @@ public final class EpgNow {
             // Unparsable.
         }
         return 0L;
+    }
+
+    /** Midnight of the schedule's date in the device's own time zone, or of today when it is unreadable. */
+    private static java.util.Calendar dayOf(String scheduleDate) {
+        java.util.Calendar calendar = java.util.Calendar.getInstance();
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        calendar.set(java.util.Calendar.MINUTE, 0);
+        calendar.set(java.util.Calendar.SECOND, 0);
+        calendar.set(java.util.Calendar.MILLISECOND, 0);
+        if (scheduleDate == null || scheduleDate.trim().isEmpty()) return calendar;
+        String text = scheduleDate.trim();
+        for (String format : new String[] { "yyyy-MM-dd", "yyyy/MM/dd", "yyyyMMdd" }) {
+            try {
+                Date date = new SimpleDateFormat(format, Locale.US).parse(text);
+                if (date != null) {
+                    java.util.Calendar parsed = java.util.Calendar.getInstance();
+                    parsed.setTime(date);
+                    calendar.set(java.util.Calendar.YEAR, parsed.get(java.util.Calendar.YEAR));
+                    calendar.set(java.util.Calendar.MONTH, parsed.get(java.util.Calendar.MONTH));
+                    calendar.set(java.util.Calendar.DAY_OF_MONTH, parsed.get(java.util.Calendar.DAY_OF_MONTH));
+                    return calendar;
+                }
+            } catch (Exception ignored) {
+                // Try the next shape.
+            }
+        }
+        return calendar;
     }
 }
