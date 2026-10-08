@@ -89,8 +89,15 @@ public final class PlayerController {
     /** Application context, kept so diagnostics can report the decoder preference. */
     private Context appContext;
     private DefaultTrackSelector trackSelector;
+    /** The opening of the current episode has been skipped (once per episode, never on a resume). */
+    private boolean introSkipped = true;
+    /** The closing credits have been reported as finished (once per episode). */
+    private boolean outroReported;
     /** Who draws the subtitle line on screen, if anyone. */
     private CueListener cueListener;
+    /** Read from the stored settings when a stream starts; 0 turns the skip off. */
+    private int skipIntroSeconds;
+    private int skipOutroSeconds;
     /** The subtitle line currently on screen, mirrored for the HTTP API. */
     private String subtitleText = "";
     private boolean subtitlesDisabled;
@@ -143,6 +150,7 @@ public final class PlayerController {
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
             mirrorPlayerState();
+            undoIntroSkipWhenTheMediaIsShort();
             // Every second: the activity's tick drives the live-channel switch, the automatic line
             // switch and the failure notice, and it is cheap (it reads the mirrored snapshot).
             reportProgress();
@@ -821,6 +829,11 @@ public final class PlayerController {
                 }
             });
             appContext = context.getApplicationContext();
+            PlaybackSettings settings = new PlaybackSettings(appContext);
+            skipIntroSeconds = settings.skipIntroSeconds();
+            skipOutroSeconds = settings.skipOutroSeconds();
+            introSkipped = false;
+            outroReported = false;
             currentUrl = mediaUrl;
             currentTitle = mediaTitle == null ? "" : mediaTitle;
             currentHeaders = headers == null ? Collections.<String, String>emptyMap() : headers;
@@ -830,7 +843,18 @@ public final class PlayerController {
             }
             created.setMediaItem(MediaItem.fromUri(mediaUrl));
             created.prepare();
-            if (startPositionMs > 0) created.seekTo(startPositionMs);
+            // The opening is skipped by starting the stream past it: seeking after the first frame
+            // shows the titles and then jumps, which looks like a fault. A resume keeps its own
+            // position, and a retry within the same episode does not jump again.
+            int effectiveStart = introStartMs(skipIntroSeconds, startPositionMs, !introSkipped);
+            if (effectiveStart > 0) {
+                created.seekTo(effectiveStart);
+                if (!introSkipped && skipIntroSeconds > 0) {
+                    introSkipped = true;
+                    AppLog.i("播放", "跳过片头 " + skipIntroSeconds + " 秒，从 "
+                            + (effectiveStart / 1000) + " 秒开始");
+                }
+            }
             created.play();
             mainHandler.removeCallbacks(progressTicker);
             mainHandler.postDelayed(progressTicker, MIRROR_INTERVAL_MS);
@@ -996,8 +1020,62 @@ public final class PlayerController {
             if (player == null) return;
             position = integerTime(player.getCurrentPosition());
             duration = player.getDuration() == C.TIME_UNSET ? 0 : integerTime(player.getDuration());
+            if (skipOutroReached(position, duration)) {
+                // Reported as finished so the series advances here rather than after the credits: the
+                // same path a stream that really ended takes (auto-advance, or leaving playback).
+                state = "ended";
+                outroReported = true;
+                notice = "";
+            }
         }
         progressListener.onProgress(position, duration);
+    }
+
+    /**
+     * Whether the closing credits have been reached.
+     *
+     * <p>Guarded so the jump happens once per episode: without the flag the tick would keep reporting
+     * "ended" while the names roll.
+     */
+    private boolean skipOutroReached(int positionMs, int durationMs) {
+        if (outroReported || durationMs <= 0) return false;
+        if (skipOutroSeconds <= 0) return false;
+        // A stream whose last seconds are missing cannot be trusted to reach the end.
+        return positionMs >= durationMs - skipOutroSeconds * 1000;
+    }
+
+    /**
+     * Takes back an opening skip that would have eaten the episode.
+     *
+     * <p>The length of a stream is only known once it is prepared, and a fixed "skip 60 seconds" is
+     * nonsense for a 90-second short drama: measured on the device, a 40-second clip with a 60-second
+     * skip reported "ended" immediately. When the skip turns out to be more than half of what is being
+     * watched, playback restarts from the beginning.
+     */
+    private void undoIntroSkipWhenTheMediaIsShort() {
+        if (!introSkipped || skipIntroSeconds <= 0 || player == null) return;
+        long duration = player.getDuration();
+        if (duration == C.TIME_UNSET || duration <= 0) return;
+        if (introSkipFits(skipIntroSeconds, integerTime(duration))) return;
+        introSkipped = false;
+        player.seekTo(0);
+        AppLog.i("播放", "片头 " + skipIntroSeconds + " 秒超过片长的一半，已从头播放");
+    }
+
+    /**
+     * Whether skipping the opening still leaves most of the episode.
+     *
+     * <p>Half is the line: 60 seconds of a two-minute short drama is not an opening, it is the episode.
+     */
+    static boolean introSkipFits(int skipSeconds, int durationMs) {
+        if (skipSeconds <= 0 || durationMs <= 0) return true;
+        return skipSeconds * 1000L <= durationMs / 2L;
+    }
+
+    /** Milliseconds into the episode to start at, 0 when the opening is not being skipped. */
+    static int introStartMs(int skipIntroSeconds, int requestedStartMs, boolean firstStart) {
+        if (!firstStart || requestedStartMs > 0 || skipIntroSeconds <= 0) return requestedStartMs;
+        return skipIntroSeconds * 1000;
     }
 
     private static int integerTime(long value) {

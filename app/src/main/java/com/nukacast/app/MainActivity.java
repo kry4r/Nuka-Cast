@@ -240,6 +240,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private Button autoNextButton;
     /** 开机自启的开关（默认关；设置页与网页控制台共用同一份设置）。 */
     private Button startOnBootButton;
+    /** 跳过片头/片尾的秒数（0 为关）。 */
+    private Button skipIntroButton;
+    private Button skipOutroButton;
     private Button qualityButton;
     private Button decoderButton;
     /**
@@ -703,6 +706,28 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
             });
         }
+        skipIntroButton = (Button) findViewById(R.id.skipIntroButton);
+        if (skipIntroButton != null) {
+            skipIntroButton.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    playbackSettings().setSkipIntroSeconds(com.nukacast.app.player.PlaybackSettings
+                            .nextStep(com.nukacast.app.player.PlaybackSettings.INTRO_STEPS,
+                                    playbackSettings().skipIntroSeconds()));
+                    renderPlaybackSettings();
+                }
+            });
+        }
+        skipOutroButton = (Button) findViewById(R.id.skipOutroButton);
+        if (skipOutroButton != null) {
+            skipOutroButton.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    playbackSettings().setSkipOutroSeconds(com.nukacast.app.player.PlaybackSettings
+                            .nextStep(com.nukacast.app.player.PlaybackSettings.OUTRO_STEPS,
+                                    playbackSettings().skipOutroSeconds()));
+                    renderPlaybackSettings();
+                }
+            });
+        }
         startOnBootButton = (Button) findViewById(R.id.startOnBootButton);
         if (startOnBootButton != null) {
             startOnBootButton.setOnClickListener(new View.OnClickListener() {
@@ -720,6 +745,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private String movieFilterSelected = "";
 
     /** The movies page: category browsing first, then the home feed, then short dramas. */
+    /** A seconds value from the console; anything else is refused rather than stored as zero. */
+    private static int parseSeconds(String value) {
+        try {
+            return Math.max(0, Integer.parseInt(value == null ? "" : value.trim()));
+        } catch (NumberFormatException notANumber) {
+            throw new IllegalArgumentException("需要一个秒数：" + value);
+        }
+    }
+
     /** Reflects the stored playback settings on the settings page. */
     private void renderPlaybackSettings() {
         if (autoNextButton != null) {
@@ -742,6 +776,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             boolean software = com.nukacast.app.player.DecoderPreference.prefersSoftware(this);
             decoderButton.setText(getString(R.string.playback_decoder_button,
                     getString(software ? R.string.decoder_software : R.string.decoder_auto)));
+        }
+        if (skipIntroButton != null) {
+            skipIntroButton.setText(getString(R.string.skip_intro_button,
+                    com.nukacast.app.player.PlaybackSettings.skipLabel(
+                            playbackSettings().skipIntroSeconds())));
+        }
+        if (skipOutroButton != null) {
+            skipOutroButton.setText(getString(R.string.skip_outro_button,
+                    com.nukacast.app.player.PlaybackSettings.skipLabel(
+                            playbackSettings().skipOutroSeconds())));
         }
         if (startOnBootButton != null) {
             boolean enabled = com.nukacast.app.core.AppSettings.startOnBoot(this);
@@ -799,6 +843,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 .qualityLabel(playbackSettings().quality()));
         values.put("softDecoder", com.nukacast.app.player.DecoderPreference.prefersSoftware(this));
         values.put("startOnBoot", com.nukacast.app.core.AppSettings.startOnBoot(this));
+        values.put("skipIntroSeconds", playbackSettings().skipIntroSeconds());
+        values.put("skipIntroLabel", com.nukacast.app.player.PlaybackSettings
+                .skipLabel(playbackSettings().skipIntroSeconds()));
+        values.put("skipOutroSeconds", playbackSettings().skipOutroSeconds());
+        values.put("skipOutroLabel", com.nukacast.app.player.PlaybackSettings
+                .skipLabel(playbackSettings().skipOutroSeconds()));
         return values;
     }
 
@@ -817,6 +867,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         } else if ("startOnBoot".equals(name)) {
             com.nukacast.app.core.AppSettings.setStartOnBoot(this,
                     !"0".equals(value) && !"false".equals(value));
+        } else if ("skipIntroSeconds".equals(name)) {
+            playbackSettings().setSkipIntroSeconds(parseSeconds(value));
+        } else if ("skipOutroSeconds".equals(name)) {
+            playbackSettings().setSkipOutroSeconds(parseSeconds(value));
         }
         runOnUiThread(new Runnable() {
             @Override public void run() { renderPlaybackSettings(); }
@@ -4118,7 +4172,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if ("error".equals(playback.state)) {
                 playerHud.showError(safe(playback.error).isEmpty() ? "播放失败" : playback.error);
             } else if (!hudWasVisible) {
-                playerHud.show(subtitle, "", "按返回键退出播放 · 按菜单键显示控制", true);
+                int skip = playbackSettings().skipIntroSeconds();
+                String footer = skip > 0
+                        ? "已跳过片头 " + skip + " 秒 · 按返回键退出播放 · 按菜单键显示控制"
+                        : "按返回键退出播放 · 按菜单键显示控制";
+                playerHud.show(subtitle, "", footer, true);
             } else {
                 playerHud.setProgress(playback.positionMs, playback.durationMs);
             }

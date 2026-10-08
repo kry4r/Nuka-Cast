@@ -468,6 +468,22 @@
                                 <TextView style="@style/PanelTitle" android:text="@string/playback_title" />
                                 <TextView android:id="@+id/autoNextSummary" style="@style/PanelBody" />
                                 <Button android:id="@+id/autoNextButton" style="@style/ActionButton" />
+                                <!-- 片头与片尾并排：三个按钮挤在一行时第三个被容器裁掉（实测）。 -->
+                                <LinearLayout
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal">
+                                    <Button
+                                        android:id="@+id/skipIntroButton"
+                                        style="@style/ActionButton"
+                                        android:layout_width="0dp"
+                                        android:layout_weight="1" />
+                                    <Button
+                                        android:id="@+id/skipOutroButton"
+                                        style="@style/ActionButton"
+                                        android:layout_width="0dp"
+                                        android:layout_weight="1" />
+                                </LinearLayout>
                             </LinearLayout>
                             <LinearLayout
                                 style="@style/SettingsBand"

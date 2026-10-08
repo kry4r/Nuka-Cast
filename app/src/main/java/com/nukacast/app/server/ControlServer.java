@@ -651,11 +651,26 @@ public final class ControlServer extends NanoHTTPD {
         // anyone opening the app first.
         values.put("startOnBoot",
                 com.nukacast.app.core.AppSettings.startOnBoot(runtime.getContext()));
+        values.put("skipIntroSeconds", settings.skipIntroSeconds());
+        values.put("skipIntroLabel", com.nukacast.app.player.PlaybackSettings
+                .skipLabel(settings.skipIntroSeconds()));
+        values.put("skipOutroSeconds", settings.skipOutroSeconds());
+        values.put("skipOutroLabel", com.nukacast.app.player.PlaybackSettings
+                .skipLabel(settings.skipOutroSeconds()));
         return values;
     }
 
     private com.nukacast.app.player.PlaybackSettings playbackSettingsStore() {
         return new com.nukacast.app.player.PlaybackSettings(runtime.getContext());
+    }
+
+    /** A seconds value from the console, refusing anything that is not a number. */
+    private static int seconds(String value) {
+        try {
+            return Math.max(0, Integer.parseInt(safe(value).trim()));
+        } catch (NumberFormatException notANumber) {
+            throw new IllegalArgumentException("需要一个秒数：" + value);
+        }
     }
 
     private Map<String, Object> applyPlaybackSetting(String name, String value) {
@@ -673,6 +688,10 @@ public final class ControlServer extends NanoHTTPD {
         } else if ("startOnBoot".equals(name)) {
             com.nukacast.app.core.AppSettings.setStartOnBoot(runtime.getContext(),
                     !"0".equals(value) && !"false".equals(value));
+        } else if ("skipIntroSeconds".equals(name)) {
+            settings.setSkipIntroSeconds(seconds(value));
+        } else if ("skipOutroSeconds".equals(name)) {
+            settings.setSkipOutroSeconds(seconds(value));
         } else {
             throw new IllegalArgumentException("未知设置：" + name);
         }

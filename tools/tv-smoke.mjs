@@ -776,6 +776,19 @@ async function main() {
   check("live channel search by initials", Number(byInitials.hits) > 0,
     `“hnws” → ${byInitials.hits} channels`);
 
+  // 跳过片头/片尾: the API has to accept a seconds value and refuse anything else, otherwise the
+  // settings page and the console disagree about what was stored.
+  const skips = (await call("POST", "/api/settings", { name: "skipIntroSeconds", value: "60" })).data;
+  check("the skip-intro setting is stored with its label",
+    skips.skipIntroSeconds === 60 && String(skips.skipIntroLabel).includes("60"),
+    `skipIntro=${skips.skipIntroSeconds} label=“${skips.skipIntroLabel}”`);
+  const badSkip = await call("POST", "/api/settings", { name: "skipOutroSeconds", value: "abc" });
+  check("a non-numeric skip is refused", badSkip.status === 400,
+    `HTTP ${badSkip.status} ${String(badSkip.data?.error || "").slice(0, 30)}`);
+  const cleared = (await call("POST", "/api/settings", { name: "skipIntroSeconds", value: "0" })).data;
+  check("the skip can be turned back off", cleared.skipIntroSeconds === 0,
+    `skipIntroLabel=“${cleared.skipIntroLabel}”`);
+
   // Casting without a remote: the box starts its endpoints by itself when it powers on. Run last on
   // purpose — it force-stops the app, and everything after it would only report "not in the foreground".
   const settingsBefore = (await call("GET", "/api/settings")).data;

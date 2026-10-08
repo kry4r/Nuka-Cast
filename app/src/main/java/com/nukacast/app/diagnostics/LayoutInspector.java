@@ -112,10 +112,54 @@ public final class LayoutInspector {
             ViewGroup group = (ViewGroup) view;
             Rect childVisible = new Rect(visible);
             boolean childInScroller = inScroller || scroller;
+            if (!inScroller && !scroller) reportRowOverflow(group, problems);
             for (int i = 0; i < group.getChildCount(); i++) {
                 walk(group.getChildAt(i), childVisible, depth + 1, childInScroller, out, problems);
             }
         }
+    }
+
+    /**
+     * Reports a horizontal row whose children do not fit.
+     *
+     * <p>Measured on the device: three buttons added to the playback band made the third one stick out
+     * past its parent and get clipped, and neither the screen-overflow test nor the clip test noticed —
+     * the row itself fits the screen, and the button's own rectangle is only cut on the sides. Comparing
+     * what the children ask for against what the row has is the direct question.
+     */
+    private static void reportRowOverflow(ViewGroup group, List<String> problems) {
+        if (!(group instanceof android.widget.LinearLayout)) return;
+        if (((android.widget.LinearLayout) group).getOrientation()
+                != android.widget.LinearLayout.HORIZONTAL) return;
+        if (group.getWidth() <= 0) return;
+        int needed = 0;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            ViewGroup.LayoutParams params = child.getLayoutParams();
+            if (!(params instanceof android.widget.LinearLayout.LayoutParams)) return;
+            android.widget.LinearLayout.LayoutParams linear =
+                    (android.widget.LinearLayout.LayoutParams) params;
+            // A weighted child takes a share of the row, so it can never be the one that overflows;
+            // counting its resolved width would double count it and report a row that fits.
+            if (linear.weight > 0) continue;
+            if (child.getVisibility() == View.GONE) continue;
+            needed += child.getWidth() + linear.leftMargin + linear.rightMargin;
+        }
+        if (rowOverflows(needed, group.getWidth())) {
+            problems.add("一行控件放不下，超出 " + (needed - group.getWidth()) + "px："
+                    + describe(group, new Rect())
+                    + "（需要 " + needed + "px，只有 " + group.getWidth() + "px）");
+        }
+    }
+
+    /**
+     * Whether a row's children need more room than it has.
+     *
+     * <p>A few pixels of rounding should not be reported; a whole button sticking out should be.
+     */
+    static boolean rowOverflows(int neededPx, int availablePx) {
+        if (neededPx <= 0 || availablePx <= 0) return false;
+        return neededPx - availablePx > 4;
     }
 
     private static String describe(View view, Rect visible) {

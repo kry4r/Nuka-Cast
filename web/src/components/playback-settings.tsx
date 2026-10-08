@@ -8,6 +8,12 @@ import { InlineButton, SectionCard } from "@/components/ui/primitives"
  * Auto-advance, picture quality and the decoder are the three settings a viewer actually changes; the
  * TV page shows the same values, and both write through the same endpoint.
  */
+/** The same step list the television's buttons walk through. */
+function nextStep(steps: number[], current: number): number {
+  const index = steps.indexOf(current)
+  return steps[(index + 1) % steps.length]
+}
+
 export function PlaybackSettingsCard({ onError }: { onError: (message: string) => void }) {
   const [settings, setSettings] = useState<PlaybackSettings | null>(null)
   const [busy, setBusy] = useState(false)
@@ -30,7 +36,7 @@ export function PlaybackSettingsCard({ onError }: { onError: (message: string) =
   if (!settings) return null
 
   const update = async (
-    name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot",
+    name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot" | "skipIntroSeconds" | "skipOutroSeconds",
     value: string,
   ) => {
     setBusy(true)
@@ -77,6 +83,34 @@ export function PlaybackSettingsCard({ onError }: { onError: (message: string) =
         </InlineButton>
         <span className="text-xs text-muted-foreground">
           硬件解码器花屏或无输出时，改成软件解码
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm">
+        <span className="w-24 text-muted-foreground">跳过片头</span>
+        <InlineButton
+          disabled={busy}
+          onClick={() => update("skipIntroSeconds", String(nextStep([0, 30, 60, 90, 120], settings.skipIntroSeconds)))}
+        >
+          {settings.skipIntroLabel}
+        </InlineButton>
+        <span className="text-xs text-muted-foreground">
+          {settings.skipIntroSeconds > 0
+            ? `每集从第 ${settings.skipIntroSeconds} 秒开始；超过片长一半时自动从头播放`
+            : "不开：每集从头播放"}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm">
+        <span className="w-24 text-muted-foreground">跳过片尾</span>
+        <InlineButton
+          disabled={busy}
+          onClick={() => update("skipOutroSeconds", String(nextStep([0, 30, 60, 90], settings.skipOutroSeconds)))}
+        >
+          {settings.skipOutroLabel}
+        </InlineButton>
+        <span className="text-xs text-muted-foreground">
+          {settings.skipOutroSeconds > 0
+            ? `片尾前 ${settings.skipOutroSeconds} 秒当作播完，配合自动连播直接进下一集`
+            : "不开：片尾照常播完"}
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3 text-sm">

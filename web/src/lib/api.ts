@@ -488,6 +488,12 @@ export interface PlaybackSettings {
   softDecoder: boolean
   /** Whether the box starts its casting endpoints by itself when it powers on. */
   startOnBoot: boolean
+  /** Seconds skipped at the start of every episode, 0 when off. */
+  skipIntroSeconds: number
+  skipIntroLabel: string
+  /** Seconds before the end that count as finished, 0 when off. */
+  skipOutroSeconds: number
+  skipOutroLabel: string
 }
 
 export interface Library {
@@ -592,7 +598,10 @@ export const api = {
       body: JSON.stringify({ enabled }),
     }),
   settings: () => request<PlaybackSettings>("/api/settings"),
-  updateSetting: (name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot", value: string) =>
+  updateSetting: (
+    name: "autoNextEpisode" | "quality" | "softDecoder" | "startOnBoot" | "skipIntroSeconds" | "skipOutroSeconds",
+    value: string,
+  ) =>
     request<PlaybackSettings>("/api/settings", { method: "POST", body: JSON.stringify({ name, value }) }),
   library: () => request<Library>("/api/library"),
   removeLibraryEntry: (payload: { kind: "favorite" | "history"; vodId?: string; name?: string; all?: string }) =>
