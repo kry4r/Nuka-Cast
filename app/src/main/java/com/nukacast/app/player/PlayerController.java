@@ -8,6 +8,7 @@ import android.view.SurfaceHolder;
 
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ExoPlayer;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
@@ -16,12 +17,19 @@ import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.source.DefaultMediaSourceFactory;
 import com.google.android.exoplayer2.DefaultRenderersFactory;
 import com.google.android.exoplayer2.Tracks;
+import com.google.android.exoplayer2.text.Cue;
+import com.google.android.exoplayer2.text.CueGroup;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
+import com.google.android.exoplayer2.trackselection.TrackSelectionOverride;
+import com.google.android.exoplayer2.trackselection.TrackSelectionParameters;
 import com.google.android.exoplayer2.upstream.DefaultDataSource;
 import com.nukacast.app.net.HttpStack;
 import com.nukacast.app.core.AppState;
 import com.nukacast.app.diagnostics.AppLog;
 import com.nukacast.app.net.HttpStack;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -55,6 +63,17 @@ public final class PlayerController {
         /** Selector parameters and the variants on offer, so a soft picture can be explained. */
         public String selectorParameters = "";
         public String availableVideoTracks = "";
+        /** Audio and subtitle tracks on offer, with the selected one marked by a check mark. */
+        public String availableAudioTracks = "";
+        public String availableTextTracks = "";
+        /** The subtitle line on screen right now, empty when there is none. */
+        public String subtitleText = "";
+        public boolean subtitlesDisabled;
+    }
+
+    /** Receives the subtitle line to display, or an empty string when there is nothing on screen. */
+    public interface CueListener {
+        void onCue(String text);
     }
 
     private final AppState appState;
@@ -70,6 +89,11 @@ public final class PlayerController {
     /** Application context, kept so diagnostics can report the decoder preference. */
     private Context appContext;
     private DefaultTrackSelector trackSelector;
+    /** Who draws the subtitle line on screen, if anyone. */
+    private CueListener cueListener;
+    /** The subtitle line currently on screen, mirrored for the HTTP API. */
+    private String subtitleText = "";
+    private boolean subtitlesDisabled;
     /** True while the best available variant is being forced; cleared when the decoder refuses it. */
     private boolean bestQualityForced;
     /** Ceiling on internal restarts, so no failure mode can become a restart loop. */
@@ -105,6 +129,17 @@ public final class PlayerController {
     private String videoMime = "";
     /** Variants offered by the current manifest, rebuilt once a second. */
     private String videoTracks = "";
+    /** Audio and subtitle tracks on offer, rebuilt alongside the variants. */
+    private String audioTracks = "";
+    private String textTracks = "";
+    /**
+     * The same tracks as lists the player menu cycles through.
+     *
+     * <p>Built while mirroring state on the main thread: {@code player.getCurrentTracks()} throws when
+     * it is read from the HTTP thread, which is exactly what the debug API used to do.
+     */
+    private List<String> audioTrackList = new ArrayList<String>();
+    private List<String> textTrackList = new ArrayList<String>();
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
             mirrorPlayerState();
@@ -281,6 +316,205 @@ public final class PlayerController {
         });
     }
 
+    public void setCueListener(CueListener listener) {
+        this.cueListener = listener;
+    }
+
+    /**
+     * Turns one subtitle track on, or all of them off.
+     *
+     * @param index the track's position in {@link #textTrackLabels()}, or -1 to turn subtitles off
+     */
+    public boolean selectTextTrack(int index) {
+        return selectTrack(C.TRACK_TYPE_TEXT, index);
+    }
+
+    /** Turns on one audio track, by its position in {@link #audioTrackLabels()}. */
+    public boolean selectAudioTrack(int index) {
+        return selectTrack(C.TRACK_TYPE_AUDIO, index);
+    }
+
+    /** Labels of the audio tracks on offer, in the order the menu cycles through them. */
+    public List<String> audioTrackLabels() {
+        synchronized (lock) {
+            return new ArrayList<String>(audioTrackList);
+        }
+    }
+
+    /** Labels of the subtitle tracks on offer. */
+    public List<String> textTrackLabels() {
+        synchronized (lock) {
+            return new ArrayList<String>(textTrackList);
+        }
+    }
+
+    /**
+     * Applies a track choice.
+     *
+     * <p>ExoPlayer takes the choice as a selector override rather than a direct call, because the
+     * tracks only exist once the manifest has been read; that is also why the menu offers what the
+     * media actually has instead of a fixed list.
+     */
+    private boolean selectTrack(final int type, final int index) {
+        final ExoPlayer target = player;
+        final DefaultTrackSelector selector = trackSelector;
+        if (target == null || selector == null) return false;
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                if (player != target) return;
+                TrackSelectionParameters.Builder parameters = selector.getParameters().buildUpon();
+                Tracks tracks = target.getCurrentTracks();
+                int groupIndex = -1;
+                int indexInGroup = -1;
+                int seen = 0;
+                for (int g = 0; g < tracks.getGroups().size(); g++) {
+                    Tracks.Group group = tracks.getGroups().get(g);
+                    if (group.getType() != type) continue;
+                    for (int i = 0; i < group.length; i++) {
+                        if (seen == index) {
+                            groupIndex = g;
+                            indexInGroup = i;
+                        }
+                        seen++;
+                    }
+                }
+                if (type == C.TRACK_TYPE_TEXT) {
+                    boolean off = index < 0 || groupIndex < 0;
+                    parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, off);
+                    if (off) parameters.clearOverridesOfType(C.TRACK_TYPE_TEXT);
+                    synchronized (lock) {
+                        subtitlesDisabled = off;
+                        subtitleText = "";
+                    }
+                    notifyCue("");
+                }
+                if (groupIndex >= 0 && indexInGroup >= 0) {
+                    Tracks.Group group = tracks.getGroups().get(groupIndex);
+                    parameters.setOverrideForType(new TrackSelectionOverride(
+                            group.getMediaTrackGroup(), indexInGroup));
+                    if (type == C.TRACK_TYPE_TEXT) {
+                        parameters.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false);
+                        synchronized (lock) {
+                            subtitlesDisabled = false;
+                        }
+                    }
+                }
+                selector.setParameters(parameters.build());
+            }
+        });
+        return true;
+    }
+
+    /** Track labels of one type, formatted the way the player menu shows them. Called on the main thread. */
+    private List<String> trackLabels(int type) {
+        List<String> labels = new ArrayList<String>();
+        ExoPlayer target = player;
+        if (target == null) return labels;
+        Tracks tracks = target.getCurrentTracks();
+        for (int g = 0; g < tracks.getGroups().size(); g++) {
+            Tracks.Group group = tracks.getGroups().get(g);
+            if (group.getType() != type) continue;
+            for (int i = 0; i < group.length; i++) {
+                Format format = group.getTrackFormat(i);
+                StringBuilder label = new StringBuilder(trackName(format, type));
+                if (group.isTrackSelected(i)) label.append(" ✓");
+                if (!group.isTrackSupported(i)) label.append("（本机不支持）");
+                labels.add(label.toString());
+            }
+        }
+        return labels;
+    }
+
+    /** A short human name for a track: its own label or language, plus the codec. */
+    static String trackName(Format format, int type) {
+        return trackName(format.label, format.language, format.sampleMimeType,
+                format.channelCount, type);
+    }
+
+    /**
+     * The same name, from plain values.
+     *
+     * <p>Kept separate from {@link com.google.android.exoplayer2.Format} so it can be tested without an
+     * Android runtime: building a Format goes through framework methods that plain JUnit does not have.
+     */
+    static String trackName(String label, String language, String mimeType, int channelCount,
+                            int type) {
+        StringBuilder name = new StringBuilder();
+        if (label != null && !label.trim().isEmpty()) {
+            name.append(label.trim());
+        } else if (language != null && !language.trim().isEmpty()) {
+            name.append(languageName(language.trim()));
+        } else {
+            name.append(type == C.TRACK_TYPE_TEXT ? "字幕" : "音轨");
+        }
+        String codec = codecName(mimeType);
+        if (!codec.isEmpty()) name.append(" · ").append(codec);
+        if (type == C.TRACK_TYPE_AUDIO && channelCount > 1) {
+            name.append(' ').append(channelCount).append("声道");
+        }
+        return name.toString();
+    }
+
+    /** The language codes that turn up in Chinese streams, spelled the way a viewer reads them. */
+    static String languageName(String language) {
+        String code = language.toLowerCase(java.util.Locale.US);
+        if (code.startsWith("zh") || code.startsWith("chi") || code.equals("cn")) {
+            return code.contains("hant") || code.contains("tw") || code.contains("hk")
+                    ? "繁体中文" : "中文";
+        }
+        if (code.startsWith("yue")) return "粤语";
+        if (code.startsWith("en")) return "英语";
+        if (code.startsWith("ja") || code.equals("jp")) return "日语";
+        if (code.startsWith("ko") || code.equals("kr")) return "韩语";
+        return language;
+    }
+
+    /** A codec's short name ("AAC", "AC-3", "WebVTT"), or an empty string when it is unknown. */
+    static String codecName(String mimeType) {
+        if (mimeType == null) return "";
+        String mime = mimeType.toLowerCase(java.util.Locale.US);
+        if (mime.contains("aac") || mime.contains("mp4a")) return "AAC";
+        if (mime.contains("eac3") || mime.contains("ec-3")) return "E-AC-3";
+        if (mime.contains("ac-3")) return "AC-3";
+        if (mime.contains("opus")) return "Opus";
+        if (mime.contains("vorbis")) return "Vorbis";
+        if (mime.contains("mp3")) return "MP3";
+        // ExoPlayer's WebVTT mime type is "text/vtt" ("webvtt" turns up in subtitles fetched by hand).
+        if (mime.contains("vtt")) return "WebVTT";
+        if (mime.contains("cea")) return "CC";
+        if (mime.contains("subrip")) return "SRT";
+        if (mime.contains("ttml")) return "TTML";
+        if (mime.contains("tx3g")) return "字幕";
+        return "";
+    }
+
+    /** Hands a subtitle line to whoever draws it. */
+    private void notifyCue(final String text) {
+        final CueListener listener = cueListener;
+        if (listener == null) return;
+        mainHandler.post(new Runnable() {
+            @Override public void run() {
+                listener.onCue(text == null ? "" : text);
+            }
+        });
+    }
+
+    /** Flattens a cue group into the one line a television shows. */
+    static String cueText(CueGroup cueGroup) {
+        if (cueGroup == null || cueGroup.cues.isEmpty()) return "";
+        StringBuilder text = new StringBuilder();
+        for (Cue cue : cueGroup.cues) {
+            // Bitmap subtitles (DVB, PGS) carry no text; only the text ones can be drawn as a line.
+            CharSequence cueLine = cue.text;
+            if (cueLine == null) continue;
+            String trimmed = cueLine.toString().replace("\r", "").trim();
+            if (trimmed.isEmpty()) continue;
+            if (text.length() > 0) text.append('\n');
+            text.append(trimmed);
+        }
+        return text.toString().trim();
+    }
+
     /** Changes playback speed; 1.0 is normal. Values outside 0.25…4 are ignored. */
     public void setSpeed(final float speed) {
         if (speed < 0.25f || speed > 4f) return;
@@ -342,6 +576,10 @@ public final class PlayerController {
                         + (forcedGroup == null ? "" : " forced@" + forcedTrack);
             }
             snapshot.availableVideoTracks = videoTracks;
+            snapshot.availableAudioTracks = audioTracks;
+            snapshot.availableTextTracks = textTracks;
+            snapshot.subtitleText = subtitleText;
+            snapshot.subtitlesDisabled = subtitlesDisabled;
             snapshot.softwareDecoderPreferred = DecoderPreference.prefersSoftware(
                     appState == null ? null : appContext);
             return snapshot;
@@ -381,6 +619,25 @@ public final class PlayerController {
                 }
             }
             videoTracks = tracks.toString();
+            audioTrackList = trackLabels(C.TRACK_TYPE_AUDIO);
+            textTrackList = trackLabels(C.TRACK_TYPE_TEXT);
+            StringBuilder audio = new StringBuilder();
+            StringBuilder text = new StringBuilder();
+            for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+                if (group.getType() != C.TRACK_TYPE_AUDIO && group.getType() != C.TRACK_TYPE_TEXT) {
+                    continue;
+                }
+                StringBuilder target = group.getType() == C.TRACK_TYPE_AUDIO ? audio : text;
+                for (int i = 0; i < group.length; i++) {
+                    Format format = group.getTrackFormat(i);
+                    if (target.length() > 0) target.append(", ");
+                    target.append(trackName(format, group.getType()));
+                    if (group.isTrackSelected(i)) target.append("*");
+                    if (!group.isTrackSupported(i)) target.append("!");
+                }
+            }
+            audioTracks = audio.toString();
+            textTracks = text.toString();
         }
     }
 
@@ -473,6 +730,14 @@ public final class PlayerController {
                     synchronized (lock) {
                         if (player == created) notice = "";
                     }
+                }
+
+                @Override public void onCues(CueGroup cueGroup) {
+                    String text = cueText(cueGroup);
+                    synchronized (lock) {
+                        subtitleText = text;
+                    }
+                    notifyCue(text);
                 }
 
                 @Override public void onTracksChanged(com.google.android.exoplayer2.Tracks tracks) {

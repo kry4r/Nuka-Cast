@@ -395,6 +395,68 @@ async function main() {
   check("something is playing before the key checks", playing,
     playing ? "正在播放" : "没有可播放的流（模拟器网络/解码器）");
 
+  // Audio and subtitle tracks. The two-track fixture (tools/../.fixture/hls, served on the host's 8899)
+  // is played when it is reachable; the API contract is checked either way, because a broken track
+  // endpoint is a 500 that a viewer would see as a menu that does nothing.
+  const subtitleFixture = "http://10.0.2.2:8899/master.m3u8";
+  const fixtureReachable = (await call("POST", "/api/debug/probe", { url: subtitleFixture })).data.status === 200;
+  let subtitleEvidence = "（测试流不可达，跳过）";
+  if (fixtureReachable) {
+    await call("POST", "/api/debug/play", { url: subtitleFixture, title: "smoke-subtitles" });
+    let fixture = {};
+    for (let attempt = 0; attempt < 14; attempt++) {
+      await new Promise((r) => setTimeout(r, 2500));
+      fixture = (await call("GET", "/api/player")).data;
+      if (fixture.title === "smoke-subtitles" && fixture.state === "playing") break;
+    }
+    const twoTracks = String(fixture.availableTextTracks || "").split("WebVTT").length - 1;
+    await call("GET", "/api/debug/player/track?type=text&index=0");
+    let withCue = {};
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const state = (await call("GET", "/api/player")).data;
+      if (state.title === "smoke-subtitles" && String(state.subtitleText || "").trim()) {
+        withCue = state;
+        break;
+      }
+    }
+    const cue = String(withCue.subtitleText || "");
+    const report = cue ? (await call("GET", "/api/debug/layout")).data : {};
+    const drawn = (report.views || []).some((v) => String(v.text || "").trim() === cue);
+    check("subtitles reach the screen",
+      fixture.state === "playing" && twoTracks === 2 && !!cue && drawn,
+      `state=${fixture.state} 字幕轨=${twoTracks} 字幕行=${cue || "(无)"} 画面上=${drawn ? "是" : "否"}`);
+    await call("GET", "/api/debug/player/track?type=text&index=-1");
+    let cleared = {};
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      cleared = (await call("GET", "/api/player")).data;
+      if (cleared.subtitlesDisabled && !String(cleared.subtitleText || "").trim()) break;
+    }
+    check("subtitles can be turned off", !!cleared.subtitlesDisabled && !String(cleared.subtitleText || "").trim(),
+      `disabled=${cleared.subtitlesDisabled} 字幕行=${cleared.subtitleText || "(空)"}`);
+    subtitleEvidence = cue || subtitleEvidence;
+  } else {
+    check("subtitles reach the screen", true, "测试流不可达（本机未起 8899 服务），跳过");
+    check("subtitles can be turned off", true, "同上");
+  }
+  const trackApi = (await call("GET", "/api/debug/player/track?type=text&index=0")).data;
+  check("track API answers for the playing media",
+    Array.isArray(trackApi.tracks) && trackApi.applied === true,
+    `tracks=${JSON.stringify(trackApi.tracks)}${subtitleEvidence ? " · " + subtitleEvidence : ""}`);
+  const badTrack = await call("GET", "/api/debug/player/track?type=nonsense&index=0");
+  check("track API rejects an unknown type", badTrack.status === 400,
+    `type=nonsense → HTTP ${badTrack.status}`);
+
+  // The fixture is done with; back to a normal stream for the key checks below.
+  const normalStream = "https://test-streams.mux.dev/x36xhzz/url_2/193039199_mp4_h264_aac_ld_7.m3u8";
+  await call("POST", "/api/debug/play", { url: normalStream, title: "smoke-keys" });
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const state = (await call("GET", "/api/player")).data;
+    if (state.title === "smoke-keys" && state.state === "playing" && state.positionMs > 1000) break;
+  }
+
   // Player menu: speed and aspect must actually change the player.
   const beforeSpeed = (await call("GET", "/api/debug/player/action?name=aspect")).data.aspect;
   const speedAction = (await call("GET", "/api/debug/player/action?name=speed")).data;
@@ -567,9 +629,20 @@ async function main() {
   await call("GET", "/api/debug/player/action?name=stop");
   await call("GET", "/api/debug/navigate?page=home");
   await new Promise((r) => setTimeout(r, 6000));
-  const heroFocus = (await call("GET", "/api/debug/focus?target=hero")).data.focus || "";
-  await new Promise((r) => setTimeout(r, 1500));
-  const heroPanel = String((await layoutWithContent()).focus || "");
+  // The home page rebuilds its rows as they arrive, so the card may not exist for the first second or
+  // two; the focus call is retried until the panel is there rather than reported as a broken card.
+  let heroFocus = "";
+  let heroPanel = "";
+  for (let attempt = 0; attempt < 8; attempt++) {
+    heroFocus = (await call("GET", "/api/debug/focus?target=hero")).data.focus || "";
+    await new Promise((r) => setTimeout(r, 1500));
+    heroPanel = String((await layoutWithContent()).focus || "");
+    if (heroFocus.startsWith("hero") && heroPanel.startsWith("LinearLayout[")) break;
+    if (heroFocus === "no-hero") {
+      await call("GET", "/api/debug/navigate?page=home");
+      await new Promise((r) => setTimeout(r, 4000));
+    }
+  }
   const logsBeforeHero = new Set(await smokeLogMessages());
   await adbKey(23); // CENTER → open it
   let heroLines = [];

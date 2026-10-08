@@ -225,6 +225,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private ImageView featuredPoster;
     private SurfaceView videoSurface;
     private com.nukacast.app.ui.PlayerHudView playerHud;
+    /** 字幕行：独立于 HUD，HUD 自动隐藏时字幕仍然显示。 */
+    private com.nukacast.app.ui.SubtitleOverlay subtitleOverlay;
     private Button refreshSourcesButton;
     private Button scanStorageButton;
     private Button themeToggleButton;
@@ -420,7 +422,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     /** Number feedback: on screen while watching, on the list otherwise. */
     private void showLiveJumpNotice(String text) {
         if (isFullScreenMedia() && playerHud != null) {
-            if (text.isEmpty()) playerHud.setSubtitle("");
+            if (text.isEmpty()) playerHud.setTitleSubtitle("");
             else playerHud.showSeek(text);
             return;
         }
@@ -601,6 +603,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 new android.widget.FrameLayout.LayoutParams(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        // Subtitle lines come from the player whenever the stream carries them. The overlay is separate
+        // from the HUD, which hides itself after a few seconds — subtitles must not.
+        subtitleOverlay = new com.nukacast.app.ui.SubtitleOverlay(this);
+        ((android.widget.FrameLayout) findViewById(R.id.rootFrame))
+                .addView(subtitleOverlay, subtitleOverlay.layoutParams());
+        runtime.getPlayerController().setCueListener(new com.nukacast.app.player.PlayerController.CueListener() {
+            @Override public void onCue(String text) {
+                if (subtitleOverlay != null) subtitleOverlay.setLine(text);
+            }
+        });
     }
 
     private void bindNavigation() {
@@ -1115,8 +1127,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      */
     public String focusForDebug(String target) {
         if ("hero".equals(target) || "featured".equals(target)) {
-            if (featuredPanel == null) return "no-hero";
-            if (!featuredPanel.requestFocus()) return "hero-not-focusable";
+            // The home page is rebuilt whenever its rows arrive, which replaces the panel; asking the
+            // stale instance for focus quietly fails, and the caller then sees "hero-not-focusable"
+            // even though the card on screen is perfectly focusable.
+            View panel = featuredPanel;
+            if (panel != null && !panel.isAttachedToWindow()) panel = null;
+            if (panel == null) {
+                android.view.View root = getWindow() == null ? null : getWindow().getDecorView();
+                panel = findFocusablePanel(root);
+                if (panel != null) featuredPanel = panel;
+            }
+            if (panel == null) return "no-hero";
+            if (!panel.requestFocus()) return "hero-not-focusable";
             return featuredItem == null ? "hero" : "hero:" + featuredItem.name;
         }
         if ("search".equals(target)) {
@@ -1128,6 +1150,24 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             return nav != null && nav.requestFocus() ? "nav" : "nav-not-focusable";
         }
         return "unknown-target";
+    }
+
+    /**
+     * The featured card of the home page, found by looking for the panel that owns the title view.
+     *
+     * <p>Only used when the field points at a detached instance (the page was just rebuilt).
+     */
+    private View findFocusablePanel(android.view.View view) {
+        if (view == null) return null;
+        if (view == featuredTitle && view.getParent() instanceof View) return (View) view.getParent();
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View found = findFocusablePanel(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     /** Runs a player-menu action on the UI thread; used by the debug API and the smoke test. */
@@ -2452,7 +2492,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 runtime.getPlayerController().snapshot();
         if (playback.notice != null && !playback.notice.isEmpty()) {
             // The player is retrying internally; say so rather than showing a black screen.
-            if (playerHud != null) playerHud.setSubtitle(playback.notice);
+            if (playerHud != null) playerHud.setTitleSubtitle(playback.notice);
             return;
         }
         boolean failed = "error".equals(playback.state);
@@ -3870,9 +3910,25 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         final float speed = runtime.getPlayerController().speed();
         String speedLabel = "倍速 " + trimSpeed(speed) + "x";
         String aspectLabel = "画面 " + ASPECT_MODES[Math.max(0, Math.min(aspectMode, ASPECT_MODES.length - 1))];
-        playerHud.showActions(new String[]{
-                "上一集", "下一集", speedLabel, aspectLabel, "退出"}, new String[]{
-                "prev", "next", "speed", "aspect", "exit"},
+        // Audio and subtitle entries only appear when the media actually offers them: a menu full of
+        // dead entries is what a viewer notices first about a player.
+        List<String> actions = new ArrayList<String>();
+        List<String> labels = new ArrayList<String>();
+        Collections.addAll(actions, "prev", "next", "speed", "aspect");
+        Collections.addAll(labels, "上一集", "下一集", speedLabel, aspectLabel);
+        java.util.List<String> audioTracks = runtime.getPlayerController().audioTrackLabels();
+        java.util.List<String> textTracks = runtime.getPlayerController().textTrackLabels();
+        if (audioTracks.size() > 1) {
+            actions.add("audio");
+            labels.add("音轨 " + com.nukacast.app.player.PlayerTrackMenu.selectedName(audioTracks));
+        }
+        if (!textTracks.isEmpty()) {
+            actions.add("subtitle");
+            labels.add("字幕 " + com.nukacast.app.player.PlayerTrackMenu.selectedName(textTracks));
+        }
+        actions.add("exit");
+        labels.add("退出");
+        playerHud.showActions(labels.toArray(new String[0]), actions.toArray(new String[0]),
                 runtime.getPlayerController().snapshot().playing ? "播放中" : "已暂停",
                 new com.nukacast.app.ui.PlayerHudView.ActionListener() {
                     @Override public void onAction(String action) {
@@ -3881,6 +3937,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 });
     }
 
+    /** The current episode or channel of the playing media. */
     private void onPlayerMenuAction(String action) {
         if ("stop".equals(action)) {
             // Leaving full-screen playback from a script: an injected BACK key event does not reach
@@ -3912,6 +3969,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if ("aspect".equals(action)) {
             aspectMode = (aspectMode + 1) % ASPECT_MODES.length;
             applyAspectMode();
+            togglePlayerMenu();
+            togglePlayerMenu();
+            return;
+        }
+        if ("audio".equals(action)) {
+            java.util.List<String> tracks = runtime.getPlayerController().audioTrackLabels();
+            int next = com.nukacast.app.player.PlayerTrackMenu.nextIndex(tracks);
+            if (next >= 0) {
+                runtime.getPlayerController().selectAudioTrack(next);
+                AppLog.i("播放器", "切换到音轨：" + tracks.get(next));
+            }
+            togglePlayerMenu();
+            togglePlayerMenu();
+            return;
+        }
+        if ("subtitle".equals(action)) {
+            java.util.List<String> tracks = runtime.getPlayerController().textTrackLabels();
+            int next = com.nukacast.app.player.PlayerTrackMenu.nextIndex(tracks);
+            runtime.getPlayerController().selectTextTrack(next);
+            AppLog.i("播放器", next < 0 ? "字幕已关闭" : "切换到字幕：" + tracks.get(next));
             togglePlayerMenu();
             togglePlayerMenu();
             return;

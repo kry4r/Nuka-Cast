@@ -254,7 +254,8 @@ public final class PlayerHudView extends FrameLayout {
         }
     };
 
-    public void setSubtitle(String subtitle) {
+    /** Sets the line under the title (the current episode, say). */
+    public void setTitleSubtitle(String subtitle) {
         subtitleView.setText(subtitle == null ? "" : subtitle);
         subtitleView.setVisibility(subtitle == null || subtitle.isEmpty() ? GONE : VISIBLE);
     }

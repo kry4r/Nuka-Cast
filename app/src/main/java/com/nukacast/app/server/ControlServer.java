@@ -166,6 +166,36 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/debug/player".equals(path) && Method.GET.equals(session.getMethod())) {
             return json(Response.Status.OK, runtime.getPlayerController().snapshot());
         }
+        if ("/api/debug/player/track".equals(path)) {
+            // Track choice from a script: the player menu cycles, but a test has to be able to ask for
+            // one exact track and then read what the player actually did with it.
+            String type = safe(session.getParms().get("type"));
+            String indexValue = safe(session.getParms().get("index"));
+            int index;
+            try {
+                index = indexValue.isEmpty() ? -1 : Integer.parseInt(indexValue.trim());
+            } catch (NumberFormatException invalid) {
+                return json(Response.Status.BAD_REQUEST, errorPayload("index 必须是数字"));
+            }
+            com.nukacast.app.player.PlayerController player = runtime.getPlayerController();
+            boolean applied;
+            java.util.List<String> labels;
+            if ("text".equals(type)) {
+                applied = player.selectTextTrack(index);
+                labels = player.textTrackLabels();
+            } else if ("audio".equals(type)) {
+                applied = player.selectAudioTrack(index);
+                labels = player.audioTrackLabels();
+            } else {
+                return json(Response.Status.BAD_REQUEST, errorPayload("type 必须是 text 或 audio"));
+            }
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("applied", applied);
+            payload.put("type", type);
+            payload.put("index", index);
+            payload.put("tracks", labels);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/categories".equals(path)) {
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
             List<Map<String, Object>> sites = new ArrayList<Map<String, Object>>();
