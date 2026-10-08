@@ -62,6 +62,8 @@ import com.nukacast.app.ui.TvTheme;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -111,6 +113,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final String PAGE_LIVE = "live";
 
     private final ExecutorService io = Executors.newFixedThreadPool(2);
+    /**
+     * Whether this activity has been destroyed.
+     *
+     * <p>The process keeps running after the window closes (the casting endpoints live in a service, and
+     * start-on-boot can bring them up before any window exists), so background work started by an
+     * activity can come back to a dead one: measured on the device, a pending home render ran after
+     * onDestroy, called into the shut-down image loader and killed the process with
+     * RejectedExecutionException.
+     */
+    private volatile boolean destroyed;
     private final PosterImageLoader images = new PosterImageLoader();
     private final List<SearchItem> homeItems = new ArrayList<SearchItem>();
     private static final String DRAMA_SOURCE_PREFIX = "drama:";
@@ -346,8 +358,34 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         }
     }
 
+    /**
+     * Runs a task on the background pool, doing nothing when the activity is already gone.
+     *
+     * <p>The pool is shut down in {@link #onDestroy()}, and the process may still be running, so a late
+     * submission is a normal event rather than a bug — it must not take the process down.
+     */
+    private void inBackground(Runnable task) {
+        if (destroyed) return;
+        try {
+            io.execute(task);
+        } catch (java.util.concurrent.RejectedExecutionException gone) {
+            // The window closed while this was being queued.
+        }
+    }
+
+    /** Posts a task to the UI thread unless the activity has been destroyed. */
+    private void onUi(final Runnable task) {
+        if (destroyed) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                if (!destroyed) task.run();
+            }
+        });
+    }
+
     @Override
     protected void onDestroy() {
+        destroyed = true;
         runtime.getState().removeListener(this);
         io.shutdownNow();
         images.shutdown();
@@ -357,7 +395,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     @Override
     public void onStateChanged(final AppState state) {
-        runOnUiThread(new Runnable() {
+        onUi(new Runnable() {
             @Override public void run() {
                 render();
                 if (state.getEnabledSiteCount() != lastSiteCount) {
@@ -754,6 +792,29 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         }
     }
 
+    /**
+     * What the home page is holding, for the debug API.
+     *
+     * <p>A home row that silently stays empty has several possible causes (the storage library, the site
+     * batch, the row limit) and no way to tell them apart from the outside; this gives the counts the
+     * page is working from.
+     */
+    public Map<String, Object> homeSummaryForDebug() {
+        Map<String, Object> summary = new LinkedHashMap<String, Object>();
+        summary.put("items", homeItems.size());
+        summary.put("loading", homeRequestRunning);
+        summary.put("loaded", homeLoaded);
+        summary.put("storageMounts", runtime.getStorageLibrary().mounts().size());
+        summary.put("storageEntries", runtime.getStorageLibrary().entries().size());
+        summary.put("storageRow", runtime.getStorageLibrary().home(36).size());
+        List<String> titles = new ArrayList<String>();
+        for (int i = 0; i < homeItems.size() && titles.size() < 6; i++) {
+            titles.add(homeItems.get(i).name + " · " + homeItems.get(i).siteName);
+        }
+        summary.put("firstTitles", titles);
+        return summary;
+    }
+
     /** Reflects the stored playback settings on the settings page. */
     private void renderPlaybackSettings() {
         if (autoNextButton != null) {
@@ -829,7 +890,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Re-renders the settings page after a change made from the web console. */
     public void refreshPlaybackSettings() {
-        runOnUiThread(new Runnable() {
+        onUi(new Runnable() {
             @Override public void run() { renderPlaybackSettings(); }
         });
     }
@@ -872,7 +933,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         } else if ("skipOutroSeconds".equals(name)) {
             playbackSettings().setSkipOutroSeconds(parseSeconds(value));
         }
-        runOnUiThread(new Runnable() {
+        onUi(new Runnable() {
             @Override public void run() { renderPlaybackSettings(); }
         });
         return playbackSettingsForDebug();
@@ -1121,7 +1182,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      */
     public void onDlnaAction(String action) {
         final com.nukacast.app.dlna.DlnaRenderer renderer = runtime.getDlnaRenderer();
-        runOnUiThread(new Runnable() {
+        onUi(new Runnable() {
             @Override public void run() {
                 if ("Stop".equals(action) || renderer.currentUri().isEmpty()) {
                     if (playerHud != null) playerHud.hideNow();
@@ -1164,6 +1225,24 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         return getWindow() == null ? null : getWindow().getDecorView();
     }
 
+    /**
+     * Sends a key to the dialog on screen, if there is one (debug API).
+     *
+     * <p>A dialog is its own window with its own focus, so a key dispatched to the activity never reaches
+     * the button inside it. Measured: pressing OK on the 播放 button of an item from local storage did
+     * nothing through the debug API while a real remote press played the file, which made a working
+     * feature look broken.
+     */
+    public boolean dispatchKeyToDialogForDebug(int code) {
+        AlertDialog dialog = activeDialog;
+        if (dialog == null || !dialog.isShowing() || dialog.getWindow() == null) return false;
+        boolean handled = dialog.dispatchKeyEvent(new android.view.KeyEvent(
+                android.view.KeyEvent.ACTION_DOWN, code));
+        handled |= dialog.dispatchKeyEvent(new android.view.KeyEvent(
+                android.view.KeyEvent.ACTION_UP, code));
+        return handled;
+    }
+
     /** Closes the dialog on screen, if there is one (debug API). */
     public boolean closeTopDialogForDebug() {
         AlertDialog dialog = activeDialog;
@@ -1174,7 +1253,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Re-renders the movies page, so a change made from the web console shows up on the TV. */
     public void refreshMoviesPage() {
-        runOnUiThread(new Runnable() {
+        onUi(new Runnable() {
             @Override public void run() {
                 if (PAGE_MOVIES.equals(currentPage)) showMovies(currentMovieFilter);
             }
@@ -1433,7 +1512,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     for (com.nukacast.app.tvbox.model.Category category : browseCategories()) {
                         sites.add(category);
                     }
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             // The viewer may have switched to another view of this page (短剧/收藏) while
                             // the category list was being read; rendering now would put the browser back
@@ -1677,7 +1756,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 final List<SearchItem> result = items;
                 final String reason = failure;
                 final String chosen = categoryId;
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         browseLoading = false;
                         moviesContent.removeAllViews();
@@ -2033,7 +2112,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     } catch (Throwable error) {
                         AppLog.w("直播", "读取直播源失败：" + error.getClass().getSimpleName());
                     }
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             liveLoading = false;
                             liveSources.clear();
@@ -2106,7 +2185,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 }
                 final com.nukacast.app.live.model.LiveCatalog result = catalog;
                 final String reason = failure;
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         if (result == null || result.groups.isEmpty()) {
                             liveFailedSources.add(sourceId);
@@ -2416,7 +2495,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 com.nukacast.app.diagnostics.AppLog.d("直播", "节目单结果：" + channel.name
                         + " → " + lines.size() + " 条"
                         + (problem.isEmpty() ? "" : "（" + problem + "）"));
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         if (!source.equals(liveSourceId)) {
                             com.nukacast.app.diagnostics.AppLog.d("直播",
@@ -2502,7 +2581,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         : channel.name + "：" + (reason.isEmpty() ? "这个源没有提供节目单" : reason);
                 epgPending.remove(cacheKey);
                 liveEpgLines.put(cacheKey, text);
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         // A slow answer for a channel the viewer has already left must not overwrite
                         // the line of the one being looked at (nor of another source entirely).
@@ -2809,7 +2888,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 ? providers.get(0).id : dramaBrowseProviderId;
         dramaBrowseProviderId = providerId;
         dramaBrowseRunning = true;
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 final com.nukacast.app.drama.model.DramaSearchResult result =
                         runtime.getDramaService().browse(providerId, "", page);
@@ -2817,7 +2896,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 if (result.ok) {
                     for (DramaItem item : result.items) entries.add(item.toSearchItem());
                 }
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         dramaBrowseRunning = false;
                         if (result.ok) {
@@ -2852,7 +2931,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (homeRequestRunning || (homeLoaded && !force)) return;
         homeRequestRunning = true;
         homeLoading.setVisibility(View.VISIBLE);
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 List<SearchItem> loaded;
                 try {
@@ -2863,7 +2942,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     loaded = runtime.getStorageLibrary().home(36);
                 }
                 final List<SearchItem> result = loaded;
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         homeRequestRunning = false;
                         homeLoaded = true;
@@ -2919,7 +2998,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void renderHomeCategoryRows() {
         if (homeCategoryLoading) return;
         homeCategoryLoading = true;
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 final java.util.List<Object[]> rows = new java.util.ArrayList<Object[]>();
                 try {
@@ -2934,7 +3013,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     AppLog.d("片源", "首页分类行加载失败：" + error.getClass().getSimpleName());
                 }
                 final java.util.List<Object[]> loaded = rows;
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         homeCategoryLoading = false;
                         if (homeCategoryContainer == null) return;
@@ -3434,12 +3513,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 searchStatus.setText("搜索仍在进行，慢站点较多（" + query.keyword + "）…");
             }
         }, 12_000L);
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final SearchResponse response = runtime.getSearchEngine().search(query);
                     runtime.sourceHealthChanged();
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             if (generation != searchGeneration) return;
                             searchStatus.setText(getString(R.string.search_result_summary,
@@ -3453,7 +3532,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             if (generation != searchGeneration) return;
                             searchStatus.setText("搜索失败");
@@ -3482,16 +3561,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             openDrama(item);
             return;
         }
-        Toast.makeText(this, "正在加载“" + item.name + "”", Toast.LENGTH_SHORT).show();        io.execute(new Runnable() {
+        Toast.makeText(this, "正在加载“" + item.name + "”", Toast.LENGTH_SHORT).show();        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final MediaDetail detail = runtime.getContentService()
                             .detail(item.sourceId, item.siteKey, item.vodId);
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showDetail(detail); }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("详情加载失败", error); }
                     });
                 }
@@ -3505,13 +3584,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      */
     private void loadDramaSection(final String keyword, final int generation) {
         if (runtime.getDramaService().registry().enabledProviders().isEmpty()) return;
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 final DramaSearchResult result = runtime.getDramaService().search("", keyword);
                 if (!result.ok || result.items.isEmpty()) return;
                 final List<SearchItem> entries = new ArrayList<SearchItem>();
                 for (DramaItem item : result.items) entries.add(item.toSearchItem());
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         if (generation != searchGeneration || !PAGE_SEARCH.equals(currentPage)) return;
                         // Deliberately not copied into dramaItems: that list backs the 短剧 tab, which
@@ -3531,21 +3610,21 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         final String providerId = entry.siteKey;
         final String dramaId = entry.vodId;
         Toast.makeText(this, "正在加载短剧“" + entry.name + "”", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final DramaDetail detail = runtime.getDramaService().detail(providerId, dramaId);
                     if (detail != null && detail.directPlayable && !detail.episodes.isEmpty()) {
                         // A CMS catalog already carries playable episode URLs, so matching TVBox
                         // lines first would only add latency to a result we already have.
-                        runOnUiThread(new Runnable() {
+                        onUi(new Runnable() {
                             @Override public void run() { showDramaEpisodes(entry, detail); }
                         });
                         return;
                     }
                     final DramaLineResult lines = runtime.getDramaService().lines(
                             providerId, dramaId, "");
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showDramaDetail(entry, detail, lines); }
                     });
                 } catch (final Exception error) {
@@ -3553,7 +3632,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     // says nothing without the identifier that was (or was not) carried by the card.
                     com.nukacast.app.diagnostics.AppLog.w("短剧", "打开失败 目录=" + providerId
                             + " 剧目=" + dramaId + "：" + error.getMessage(), error);
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("短剧加载失败", error); }
                     });
                 }
@@ -3589,16 +3668,16 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void loadDramaLines(final SearchItem entry, final DramaDetail detail) {
         Toast.makeText(this, "正在匹配播放线路", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final DramaLineResult lines = runtime.getDramaService().lines(
                             entry.siteKey, entry.vodId, "");
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showDramaDetail(entry, detail, lines); }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("线路匹配失败", error); }
                     });
                 }
@@ -3608,7 +3687,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void playDramaEpisode(final DramaDetail detail, final DramaEpisode episode) {
         Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final DramaPlayResult result = runtime.getDramaService().play(
@@ -3621,7 +3700,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     info.sniffUrl = result.url;
                     info.direct = true;
                     info.headers.putAll(result.headers);
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             MediaDetail.PlaySource source = media.playSources.get(0);
                             completePlayback(PendingPlayback.episode(result.title, info, 0,
@@ -3629,7 +3708,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("播放失败", error); }
                     });
                 }
@@ -3708,7 +3787,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     private void openDramaLine(final DramaItem drama, final DramaLine line) {
         Toast.makeText(this, "正在读取“" + line.siteName + "”的剧集", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final MediaDetail media = runtime.getContentService()
@@ -3720,11 +3799,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         if (!drama.remark.isEmpty()) media.remarks = drama.remark;
                         media.typeName = joinMeta(drama.category, media.typeName);
                     }
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showDetail(media); }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("剧集加载失败", error); }
                     });
                 }
@@ -3837,14 +3916,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         activeEpisodeName = episode == null ? "" : episode.name;
         lineSwitchAt = System.currentTimeMillis();
         Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
-        io.execute(new Runnable() {
+        inBackground(new Runnable() {
             @Override public void run() {
                 try {
                     final String title = detail.name + " · " + episode.name;
                     final PlaybackInfo info = runtime.getContentService().resolvePlayable(
                             detail.sourceId, detail.siteKey, source.name, episode.id, detail.vodId,
                             title);
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             PendingPlayback pending = PendingPlayback.episode(title, info,
                                     startPositionMs, detail, source, episode);
@@ -3853,7 +3932,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("播放失败", error); }
                     });
                 }
@@ -3875,7 +3954,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     final PlaybackInfo info = runtime.getContentService().resolvePlayable(
                             item.sourceId, item.siteKey, item.playSource, item.episodeId,
                             item.vodId, title);
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() {
                             PendingPlayback pending = PendingPlayback.resume(title, info, item);
                             if (info.direct) completePlayback(pending, info.url);
@@ -3883,7 +3962,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         }
                     });
                 } catch (final Exception error) {
-                    runOnUiThread(new Runnable() {
+                    onUi(new Runnable() {
                         @Override public void run() { showError("续播失败", error); }
                     });
                 }
@@ -3987,7 +4066,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
             @Override public void onRefreshComplete(final int configs, final int sites) {
                 AppLog.i("片源", "配置源刷新完成：" + configs + " 个配置，" + sites + " 个站点");
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         refreshSourcesButton.setEnabled(true);
                         refreshSourcesButton.setText("刷新全部配置源");
@@ -4030,7 +4109,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             @Override public void run() {
                 final com.nukacast.app.update.Updates.Result result =
                         runtime.getUpdateChecker().check(force);
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         if (isFinishing()) return;
                         if (checkUpdateButton != null) checkUpdateButton.setEnabled(true);
@@ -4064,7 +4143,7 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         scanStorageButton.setText(R.string.scanning_library);
         runtime.getStorageLibrary().scanAllAsync(new com.nukacast.app.storage.StorageLibrary.ScanListener() {
             @Override public void onComplete(final int mounts, final int files) {
-                runOnUiThread(new Runnable() {
+                onUi(new Runnable() {
                     @Override public void run() {
                         scanStorageButton.setEnabled(true);
                         scanStorageButton.setText(R.string.scan_library);

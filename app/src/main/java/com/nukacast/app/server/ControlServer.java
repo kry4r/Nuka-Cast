@@ -277,6 +277,19 @@ public final class ControlServer extends NanoHTTPD {
             if (!filter.isEmpty()) payload.put("filter", runtime.selectMovieFilter(filter));
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/home".equals(path)) {
+            final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+            if (activity == null) {
+                return json(Response.Status.OK,
+                        Collections.singletonMap("error", "界面未在前台"));
+            }
+            return json(Response.Status.OK, activity.onUiThreadNow(
+                    new java.util.concurrent.Callable<Object>() {
+                        @Override public Object call() {
+                            return activity.homeSummaryForDebug();
+                        }
+                    }));
+        }
         if ("/api/debug/focus".equals(path)) {
             final String target = safe(session.getParms().get("target"));
             com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
@@ -344,6 +357,11 @@ public final class ControlServer extends NanoHTTPD {
                                 continue;
                             }
                             activity.onBackPressed();
+                            any = true;
+                            continue;
+                        }
+                        // A dialog holds the focus while it is up, so it gets first refusal.
+                        if (activity.dispatchKeyToDialogForDebug(code)) {
                             any = true;
                             continue;
                         }

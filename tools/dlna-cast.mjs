@@ -11,6 +11,9 @@
  *   node tools/dlna-cast.mjs play  <url> [baseUrl]      # cast a URL and start it
  *   node tools/dlna-cast.mjs stop  [baseUrl]
  *
+ *   node tools/dlna-cast.mjs control [baseUrl]          # pause / play / seek / volume, with evidence
+ *
+ *
  * Braces around discovery: SSDP is multicast, which does not cross into an emulator's NAT. In that
  * case pass the device's address directly (for the emulator: http://localhost:19978 after
  * `adb forward tcp:9978 tcp:9978`).
@@ -137,6 +140,61 @@ async function main() {
     const playing = await waitForPlaying(baseUrl);
     log(playing ? "PASS  the TV is playing the cast media" : "FAIL  the TV did not start playing");
     process.exit(playing ? 0 : 1);
+  }
+
+  if (command === "control") {
+    // What a phone's player does once it is casting: pause, resume, jump, change the volume. Each step
+    // is checked against what the renderer reports, so "the phone can control the TV" is evidence, not
+    // an assumption.
+    const baseUrl = rest[0] || "http://localhost:9978";
+    const failures = [];
+    const report = (label, ok, detail) => {
+      log((ok ? "PASS  " : "FAIL  ") + label + " — " + detail);
+      if (!ok) failures.push(label);
+    };
+    const transport = async () => (await soap(baseUrl, AV_TRANSPORT, "GetTransportInfo", { InstanceID: 0 })).CurrentTransportState;
+    const position = async () => (await soap(baseUrl, AV_TRANSPORT, "GetPositionInfo", { InstanceID: 0 })).RelTime;
+    const seconds = (clock) => {
+      const parts = String(clock || "0:00:00").split(":").map(Number);
+      return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : 0;
+    };
+
+    const before = await position();
+    await soap(baseUrl, AV_TRANSPORT, "Pause", { InstanceID: 0 });
+    await new Promise((r) => setTimeout(r, 1500));
+    const paused = await transport();
+    report("暂停生效", paused === "PAUSED_PLAYBACK", `state=${paused}`);
+    const pausedAt = seconds(await position());
+    await new Promise((r) => setTimeout(r, 3000));
+    const stillPausedAt = seconds(await position());
+    report("暂停后位置不动", Math.abs(stillPausedAt - pausedAt) <= 1,
+      `${pausedAt}s → ${stillPausedAt}s`);
+
+    await soap(baseUrl, AV_TRANSPORT, "Play", { InstanceID: 0, Speed: 1 });
+    await new Promise((r) => setTimeout(r, 2500));
+    report("继续播放生效", (await transport()) === "PLAYING",
+      `state=${await transport()} pos=${before} → ${await position()}`);
+
+    await soap(baseUrl, AV_TRANSPORT, "Seek", {
+      InstanceID: 0, Unit: "REL_TIME", Target: "00:00:20",
+    });
+    await new Promise((r) => setTimeout(r, 3000));
+    const sought = seconds(await position());
+    report("跳转到 20 秒生效", sought >= 18 && sought <= 32, `position=${await position()}`);
+
+    const volumeBefore = (await soap(baseUrl, RENDERING_CONTROL, "GetVolume",
+      { InstanceID: 0, Channel: "Master" })).CurrentVolume;
+    await soap(baseUrl, RENDERING_CONTROL, "SetVolume", { InstanceID: 0, Channel: "Master", DesiredVolume: 12 });
+    const volumeAfter = (await soap(baseUrl, RENDERING_CONTROL, "GetVolume",
+      { InstanceID: 0, Channel: "Master" })).CurrentVolume;
+    report("音量可以被手机改", String(volumeAfter) === "12",
+      `${volumeBefore} → ${volumeAfter}`);
+    await soap(baseUrl, RENDERING_CONTROL, "SetVolume",
+      { InstanceID: 0, Channel: "Master", DesiredVolume: volumeBefore });
+
+    log();
+    log(failures.length === 0 ? "结果: 全部通过" : "结果: 失败 " + failures.join(", "));
+    process.exit(failures.length === 0 ? 0 : 1);
   }
 
   if (command === "stop") {

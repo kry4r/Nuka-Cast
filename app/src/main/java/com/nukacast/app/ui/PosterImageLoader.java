@@ -69,27 +69,32 @@ public final class PosterImageLoader {
             target.setImageBitmap(cached);
             return;
         }
-        executor.execute(new Runnable() {
-            @Override public void run() {
-                Bitmap bitmap = download(url, referer, targetWidth, targetHeight);
-                if (bitmap == null) {
-                    if (fallback != null) {
-                        main.post(new Runnable() {
-                            @Override public void run() {
-                                if (key.equals(target.getTag())) fallback.onFailed(url, target);
-                            }
-                        });
+        try {
+            executor.execute(new Runnable() {
+                @Override public void run() {
+                    Bitmap bitmap = download(url, referer, targetWidth, targetHeight);
+                    if (bitmap == null) {
+                        if (fallback != null) {
+                            main.post(new Runnable() {
+                                @Override public void run() {
+                                    if (key.equals(target.getTag())) fallback.onFailed(url, target);
+                                }
+                            });
+                        }
+                        return;
                     }
-                    return;
+                    cache.put(key, bitmap);
+                    main.post(new Runnable() {
+                        @Override public void run() {
+                            if (key.equals(target.getTag())) target.setImageBitmap(bitmap);
+                        }
+                    });
                 }
-                cache.put(key, bitmap);
-                main.post(new Runnable() {
-                    @Override public void run() {
-                        if (key.equals(target.getTag())) target.setImageBitmap(bitmap);
-                    }
-                });
-            }
-        });
+            });
+        } catch (java.util.concurrent.RejectedExecutionException gone) {
+            // The window that owns these posters has closed and the pool was shut down: a late request
+            // is expected, and must not take the process down (it did, on the device).
+        }
     }
 
     /** Notified when a poster could not be loaded, so cards can show a placeholder. */
