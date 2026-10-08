@@ -159,6 +159,22 @@ public final class ControlServer extends NanoHTTPD {
         if ("/api/debug/probe".equals(path) && Method.POST.equals(session.getMethod())) {
             return json(Response.Status.OK, debugProbe(session));
         }
+        if ("/api/debug/tls".equals(path)) {
+            // "Why does this host fail on the television?": the handshake plus each trust store's verdict.
+            String url = safe(session.getParms().get("url"));
+            String host = safe(session.getParms().get("host"));
+            int port = 443;
+            if (!url.isEmpty()) {
+                java.net.URI parsed = java.net.URI.create(url.trim());
+                if (parsed.getHost() != null) host = parsed.getHost();
+                if (parsed.getPort() > 0) port = parsed.getPort();
+            }
+            if (host.isEmpty()) {
+                return json(Response.Status.BAD_REQUEST, errorPayload("需要 url 或 host 参数"));
+            }
+            return json(Response.Status.OK,
+                    com.nukacast.app.net.TlsDiagnostics.check(host, port, 8000));
+        }
         if ("/api/debug/play".equals(path) && Method.POST.equals(session.getMethod())) {
             DebugPlayRequest request = body(session, DebugPlayRequest.class);
             return json(Response.Status.OK, debugPlay(request));

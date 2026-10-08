@@ -65,6 +65,13 @@ public final class HttpStack {
         return CLIENT;
     }
 
+    /** The socket factory the client uses, or null when platform TLS is in play. */
+    public static javax.net.ssl.SSLSocketFactory socketFactory() {
+        return SOCKET_FACTORY;
+    }
+
+    private static volatile javax.net.ssl.SSLSocketFactory SOCKET_FACTORY;
+
     /** True when the legacy TLS 1.2 stack could not be built and platform TLS is in use. */
     public static boolean degraded() {
         return !INIT_ERROR.isEmpty();
@@ -114,14 +121,18 @@ public final class HttpStack {
                 .retryOnConnectionFailure(true);
         if (Build.VERSION.SDK_INT < 22) {
             try {
-                X509TrustManager trustManager = new FallbackTrustManager(
-                        platformTrustManager(), bundledTrustManager());
+                // Order matters: the platform store first (fast path for the roots it knows), then the
+                // bundle, and the pair is wrapped so an old validator cannot dead-end on a trailing
+                // certificate the server did not need to send.
+                X509TrustManager trustManager = new ChainRepairTrustManager(new FallbackTrustManager(
+                        platformTrustManager(), bundledTrustManager()));
                 SSLContext context = usesBundledConscrypt(Build.VERSION.SDK_INT)
                         ? SSLContext.getInstance("TLS", Conscrypt.newProvider())
                         : SSLContext.getInstance("TLS");
                 context.init(null, new TrustManager[] {trustManager}, null);
-                builder.sslSocketFactory(new Tls12SocketFactory(
-                                context.getSocketFactory(), Build.VERSION.SDK_INT), trustManager)
+                SOCKET_FACTORY = new Tls12SocketFactory(
+                        context.getSocketFactory(), Build.VERSION.SDK_INT);
+                builder.sslSocketFactory(SOCKET_FACTORY, trustManager)
                         .connectionSpecs(Arrays.asList(
                                 ConnectionSpec.MODERN_TLS,
                                 ConnectionSpec.COMPATIBLE_TLS,
@@ -164,18 +175,55 @@ public final class HttpStack {
     private static int loadCertificates(KeyStore store, String resource, String prefix)
             throws Exception {
         InputStream input = HttpStack.class.getResourceAsStream(resource);
-        if (input == null) return 0;
+        if (input == null) {
+            BundleNotes.add(resource + "：资源不存在");
+            return 0;
+        }
         try {
-            java.util.Collection<? extends Certificate> certificates =
-                    CertificateFactory.getInstance("X.509").generateCertificates(input);
+            // Parsed here rather than by CertificateFactory.generateCertificates(): on API 19 that call
+            // answers a Mozilla-format bundle with an empty collection and no error (see PemBundle).
+            java.util.List<java.security.cert.X509Certificate> certificates = PemBundle.read(input);
             int index = 0;
             for (Certificate certificate : certificates) {
                 store.setCertificateEntry(prefix + "-" + index, certificate);
                 index++;
             }
+            // Recorded because a bundle that silently contributes nothing looks exactly like a bundle
+            // that is missing the one root a host needs: the number is the difference between the two.
+            BundleNotes.add(resource + "：" + index + " 张");
             return index;
+        } catch (Throwable failure) {
+            BundleNotes.add(resource + "：" + failure.getClass().getSimpleName()
+                    + (failure.getMessage() == null ? "" : "（" + failure.getMessage() + "）"));
+            throw failure;
         } finally {
             input.close();
+        }
+    }
+
+    /** Per-resource result of building the bundled trust store, for the diagnostics endpoint. */
+    public static java.util.List<String> bundleNotes() {
+        return BundleNotes.get();
+    }
+
+    /**
+     * Where the bundle-loading notes live.
+     *
+     * <p>In its own holder class rather than a field of {@link HttpStack}: the static initialiser there
+     * builds the trust store, so a field whose own initialiser sits later in the file is still null when
+     * {@link #loadCertificates} appends to it — which is exactly the NPE that turned TLS 1.2 off for a
+     * whole build. A holder is initialised on first use and cannot be ordered wrongly.
+     */
+    private static final class BundleNotes {
+        private static final java.util.List<String> NOTES =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<String>());
+
+        static void add(String note) {
+            NOTES.add(note);
+        }
+
+        static java.util.List<String> get() {
+            return java.util.Collections.unmodifiableList(new java.util.ArrayList<String>(NOTES));
         }
     }
 
