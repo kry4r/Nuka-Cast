@@ -17,8 +17,10 @@ android {
         minSdk 17
         targetSdk 35
         multiDexEnabled true
-        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 18
-        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.3.8"
+        // The release workflow sets both explicitly; these defaults are what a local or debug build
+        // reports, and they must name the current release or the diagnostics of a debug build lie.
+        versionCode project.hasProperty("versionCode") ? project.property("versionCode").toInteger() : 23
+        versionName project.hasProperty("versionName") ? project.property("versionName") : "0.5.0"
 
         ndk {
             abiFilters(*debugAbis)
