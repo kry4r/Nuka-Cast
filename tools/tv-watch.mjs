@@ -80,6 +80,10 @@ async function main() {
   console.log(`tv-watch: polling ${base} every ${intervalSeconds}s → ${out}`);
   let wasUp = false;
   let emptyPolls = 0;
+  // The app keeps the last Java crash until the viewer clears it, so "there is a crash record" is true
+  // for a long time after the crash. Only a record that *changed* is news (measured: every sample of a
+  // run reported crash=yes because of a crash fixed several versions earlier).
+  let lastCrashSeen = "";
   for (;;) {
     const [status, player, diagnostics] = await Promise.all([
       get("/api/status"),
@@ -96,14 +100,19 @@ async function main() {
       line.event = "app-disappeared";
       console.log(`[${line.at}] app disappeared (${status.error})`);
     }
-    if (up && line.javaCrash) line.event = "java-crash";
+    const crashChanged = !!line.javaCrash && line.javaCrash !== lastCrashSeen;
+    if (line.javaCrash) lastCrashSeen = line.javaCrash;
+    if (up && crashChanged) {
+      line.event = "java-crash";
+      console.log(`[${line.at}] new java crash record: ${line.javaCrash.split(/\r?\n/)[0].slice(0, 120)}`);
+    }
     await appendFile(out, JSON.stringify(line) + "\n", "utf8");
 
     if (up) {
       emptyPolls = 0;
       console.log(
         `[${line.at}] up v${line.version} state=${line.state} pos=${line.positionMs} ` +
-          `title=${String(line.title || "").slice(0, 24)} crash=${line.javaCrash ? "yes" : "no"}`
+          `title=${String(line.title || "").slice(0, 24)} crash=${crashChanged ? "NEW" : line.javaCrash ? "old" : "no"}`
       );
     } else {
       emptyPolls++;
