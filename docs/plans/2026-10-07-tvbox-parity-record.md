@@ -167,3 +167,52 @@ MCP 工具 `nukacast_epg` / `nukacast_live_catalog` / `nukacast_live_search` / `
 
 当前挂机验证：`tools/tv-soak.mjs 180` + `tools/tv-watch.mjs 127.0.0.1 19978 20` 同时运行（看护只读采样），
 15 轮后堆 40–42MB、RSS 99–105MB、线程 64–67，无事件、无掉线。
+
+## 八、播放器音轨与字幕（v0.5.0 之后一轮）
+
+对标主流播放器时，播放器菜单此前只有「上一集／下一集／倍速／画面比例」：媒体里带的多音轨与字幕
+根本用不到，而这正是 TVBox 与主流播放器的标配。
+
+| 项 | 实现 |
+| --- | --- |
+| 音轨 | `PlayerController.audioTrackLabels()` / `selectAudioTrack(i)`；标签形如 `中文 · AAC 2声道`，选中项带勾 |
+| 字幕 | `textTrackLabels()` / `selectTextTrack(i)`，`-1` 关闭字幕（`setTrackTypeDisabled`） |
+| 字幕上屏 | 新增 `ui/SubtitleOverlay`：白字＋阴影、底部居中、最多 3 行、左右各内缩 60dp |
+| 菜单 | 媒体有 2 条以上音轨才出现「音轨 xx」，有字幕轨才出现「字幕 xx」；循环切换后关闭（关闭排最后） |
+
+### 踩过的三个坑（都是实测出来的，不是推断）
+
+1. **字幕不能放在 HUD 里**：HUD 几秒后自动隐藏（`setVisibility(GONE)`），字幕会跟着一起消失。
+   改为独立覆盖层 `SubtitleOverlay`，与 HUD 的显隐无关；截图证据 `.preview/tv-subtitle.png`
+   （HUD 已隐藏，字幕仍在画面上）。
+2. **轨道信息不能从 HTTP 线程读**：`player.getCurrentTracks()` 在非主线程抛
+   `IllegalStateException: Player is accessed on the wrong thread`（`/api/debug/player/track` 直接 500）。
+   改为在 `mirrorPlayerState()`（主线程）里把标签构造成列表，接口只读镜像值。
+3. **HLS 字幕必须是播放列表**：把 `.vtt` 直接写进 `#EXT-X-MEDIA` 的 `URI` 会得到
+   `ERROR_CODE_PARSING_MANIFEST_MALFORMED`（ExoPlayer 会去解析那份 `.vtt` 文本）。正确写法是
+   `#EXT-X-MEDIA:TYPE=SUBTITLES,URI="subs-zh.m3u8"`，播放列表里再指向 `.vtt` 片段。
+
+### 可复现验证（不再靠「看起来没问题」）
+
+```
+python tools/build-subtitle-fixture.py                        # 4 段 mux.dev 测试片段 + 两条 WebVTT 字幕组
+python -m http.server 8899 --bind 0.0.0.0 --directory .fixture/hls
+python tools/verify-subtitle-tracks.py                        # 9/9 通过，失败即非零退出
+```
+
+* 为何要自建测试流：公开测试流要么没有字幕、要么几十 MB；API 19 模拟器 `/sdcard` 只读，
+  推不进设备，因此经 `10.0.2.2` 用 HTTP 提供（这也正是应用真实使用时的形态）。
+* `tv-smoke.mjs` 扩到 **41 项**：新增「字幕上屏」「字幕可关闭」「轨道 API 契约」「非法类型返回 400」；
+  测试流不可达时前两项记为跳过而不是假装通过。
+
+| 检查 | 结果 |
+| --- | --- |
+| `tools/verify-subtitle-tracks.py` | 9/9（两条字幕轨识别、切换生效、关闭清空、字幕真的画在画面上） |
+| `tools/tv-smoke.mjs` | 41/41 |
+| Android 单测 | 71 suites / 301 用例全绿（新增 `PlayerControllerTracksTest`、`PlayerTrackMenuTest`） |
+| lint | 0 错误 / 14 警告 |
+| web | 5 文件 / 16 用例 |
+
+顺带修掉两个设备实测暴露的问题：首页推荐卡偶发「选不中」（首页重建会替换面板，对已脱离的实例
+`requestFocus` 静默失败 → 现在会重新定位当前面板，`tv-smoke` 也会在页面未就绪时重试），
+以及直播源尚未加载完就进直播页导致的空指针（`/api/debug/live` 曾直接 500）。
