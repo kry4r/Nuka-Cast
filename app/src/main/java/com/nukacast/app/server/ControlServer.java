@@ -1441,6 +1441,11 @@ public final class ControlServer extends NanoHTTPD {
         summary.put("startedAt", run.startedAt);
         summary.put("endedAt", run.endedAt);
         summary.put("endedCleanly", run.endedCleanly);
+        // A run replaced by an app update is not a crash; the console must not say it was.
+        summary.put("killedByUpdate",
+                !run.endedCleanly && run.startedAt > 0L
+                        && com.nukacast.app.diagnostics.SessionMarker.packageUpdateTime(
+                                context) > run.startedAt);
         summary.put("durationMs", run.durationMs());
         summary.put("device", run.device);
         summary.put("version", run.version);

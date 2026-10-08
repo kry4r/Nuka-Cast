@@ -126,6 +126,8 @@ export type LastRun = {
   startedAt: number
   endedAt: number
   endedCleanly: boolean
+  /** The previous run was replaced by an app update rather than killed by the system. */
+  killedByUpdate?: boolean
   durationMs: number
   device: string
   version: string

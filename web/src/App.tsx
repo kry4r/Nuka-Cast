@@ -1680,7 +1680,11 @@ function DeviceView({ setError }: { setError: (value: string) => void }) {
           title="上次运行"
           badges={diagnostics?.lastRun
             ? <Badge variant={diagnostics.lastRun.endedCleanly ? "outline" : "destructive"}>
-                {diagnostics.lastRun.endedCleanly ? "正常退出" : "被外部结束"}
+                {diagnostics.lastRun.endedCleanly
+                  ? "正常退出"
+                  : diagnostics.lastRun.killedByUpdate
+                    ? "被应用更新结束"
+                    : "被外部结束"}
               </Badge>
             : <Badge variant="outline">无记录</Badge>}
         >

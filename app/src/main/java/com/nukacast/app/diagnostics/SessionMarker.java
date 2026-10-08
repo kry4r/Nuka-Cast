@@ -76,6 +76,8 @@ public final class SessionMarker {
         public String device = "";
         /** True only when the process shut down through its own code path. */
         public boolean endedCleanly;
+        /** When the installed APK was last replaced; a later update explains an abrupt end. */
+        public long packageUpdateTime;
         public final List<Sample> samples = new ArrayList<Sample>();
 
         public long durationMs() {
@@ -102,11 +104,25 @@ public final class SessionMarker {
 
         public String describeDeath() {
             if (endedCleanly) return "正常退出";
+            if (killedByUpdate()) {
+                // Installing a new APK replaces the process; saying "被系统结束" for that would send a
+                // support request chasing a crash that never happened.
+                return "被应用更新结束（安装新版本时进程被替换）";
+            }
             Sample last = lastSample();
             if (last == null) return "被系统或外部结束";
             return "被系统或外部结束（末次：堆 " + last.heapPercent() + "% · RSS "
                     + (last.vmRssBytes / 1048576L) + "MB · 线程 " + last.threads
                     + " · oom_adj " + last.oomScoreAdj + "）";
+        }
+
+        /**
+         * True when the installed package was replaced after this session started, which is what an
+         * update (or a reinstall from adb) looks like from the old process's point of view.
+         */
+        public boolean killedByUpdate() {
+            if (endedCleanly || startedAt <= 0L || packageUpdateTime <= 0L) return false;
+            return packageUpdateTime > startedAt;
         }
     }
 
@@ -138,6 +154,7 @@ public final class SessionMarker {
         created.run.sdk = Build.VERSION.SDK_INT;
         created.run.version = com.nukacast.app.BuildConfig.VERSION_NAME;
         created.run.device = Build.MANUFACTURER + " " + Build.MODEL;
+        created.run.packageUpdateTime = packageUpdateTime(context);
         instance = created;
         created.start();
         return created;
@@ -151,6 +168,22 @@ public final class SessionMarker {
     public static Run interruptedRun() {
         SessionMarker marker = instance;
         return marker == null ? null : marker.previous;
+    }
+
+    /**
+     * When the installed APK was last replaced, or 0 when that cannot be read.
+     *
+     * <p>Compared with a session's start time this tells an interrupted run apart from one that ended
+     * because a new version was installed.
+     */
+    public static long packageUpdateTime(Context context) {
+        if (context == null) return 0L;
+        try {
+            return context.getPackageManager()
+                    .getPackageInfo(context.getPackageName(), 0).lastUpdateTime;
+        } catch (Throwable error) {
+            return 0L;
+        }
     }
 
     public static Run currentRun() {
