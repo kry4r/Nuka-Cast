@@ -12,7 +12,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 BASE = 'http://localhost:19978'
 FIXTURE = 'http://10.0.2.2:8899/master.m3u8'
 PACKAGE = 'com.nukacast.app.debug'
-LOCAL_CLIP = '.fixture/hls/seg/000.ts'
+# A clip long enough to watch into: the resume rule only continues past 30 seconds in.
+LOCAL_CLIP = '.fixture/local/resume-5min.ts'
 ADB = os.environ.get('ADB') or (
     os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Android', 'Sdk', 'platform-tools',
                  'adb.exe' if os.name == 'nt' else 'adb'))
@@ -160,6 +161,22 @@ post('/api/settings', {'name': 'skipIntroSeconds', 'value': '0'})
 # TVBox plays from local storage, and so must this: mount a directory, scan it, open what was found and
 # play it. The emulator's /sdcard is read-only on API 19, so the file goes into the app's own directory
 # through run-as; the code path from there on is the same one a USB stick takes.
+def recent_logs(limit=60):
+    rows = get('/api/logs?limit=%d' % limit)
+    rows = rows if isinstance(rows, list) else rows.get('entries') or []
+    return [str(row.get('message')) for row in rows]
+
+
+def history_rows():
+    # The watch history, whatever shape the endpoint answers with.
+    body = get('/api/library')
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        return body.get('items') or body.get('history') or []
+    return []
+
+
 def local_storage_checks():
     if not os.path.exists(ADB):
         check('本地片库可以挂载并播放', True, '未找到 adb，跳过（设置 ADB 后重试）')
@@ -205,23 +222,92 @@ def local_storage_checks():
         time.sleep(5)
         # The sheet puts the focus on its 播放 button when it opens, so one OK is enough; if the file does
         # not start, the focus is somewhere else, so walk down once and press again.
-        get('/api/debug/key?code=23')
-        # Played, not necessarily still playing: the clip is ten seconds long and the poll below may land
-        # after it has finished, so the proof is a file:// url with the position having moved.
-        def played(state):
-            return (str(state.get('url') or '').startswith('file://')
-                    and int(state.get('positionMs') or 0) > 0)
-
-        playing = wait_for(played, seconds=25)
-        if not played(playing):
-            get('/api/debug/key?code=20')
+        # The sheet puts the focus on its 播放 button when it opens, so one OK is enough; if the file does
+        # not start, the focus is somewhere else, so walk down once and press again. Playback is followed
+        # as it goes: the clip is forty seconds long, so a single look can land after it has finished.
+        def press_play():
             get('/api/debug/key?code=23')
-            playing = wait_for(played, seconds=25)
-        check('本地文件真的开始播放', played(playing),
-              'state=%s position=%sms url=%s' % (playing.get('state'), playing.get('positionMs'),
-                                                 str(playing.get('url'))[:60]))
-        get('/api/debug/player/action?name=stop')
-        time.sleep(2)
+
+        def watch(seconds=30):
+            saw = {'played': False, 'position': 0, 'url': ''}
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                state = get('/api/player')
+                url = str(state.get('url') or '')
+                if url.startswith('file://'):
+                    saw['url'] = url
+                    saw['position'] = max(saw['position'], int(state.get('positionMs') or 0))
+                    if saw['position'] > 500:
+                        saw['played'] = True
+                        if state.get('state') == 'playing':
+                            return saw
+                time.sleep(1)
+            return saw
+
+        press_play()
+        seen = watch()
+        if not seen['played']:
+            get('/api/debug/key?code=20')
+            press_play()
+            seen = watch()
+        check('本地文件真的开始播放', seen['played'],
+              '看到 %sms url=%s' % (seen['position'], seen['url'][:60]))
+
+        if seen['played']:
+            # Watch into it, stop, and check what the player remembered: a player that forgets makes the
+            # viewer find their place by hand every time.
+            post('/api/debug/player/action', {'action': 'seek', 'offsetMs': 20000})
+            time.sleep(12)   # a few progress writes happen while it plays on
+            watched = int(get('/api/player').get('positionMs') or 0)
+            get('/api/debug/player/action?name=stop')
+            time.sleep(3)
+            # The watch position lives in the history (what 继续观看 shows), not in the file listing, and it
+            # is keyed by this mount — an older entry from a previous run must not be mistaken for it.
+            mine = [e for e in history_rows()
+                    if e.get('name') == 'NukaCast 本地测试片段'
+                    and str(e.get('sourceId') or '') == 'storage:' + entry['mountId']]
+            row = mine[0] if mine else {}
+            recorded = int(row.get('positionMs') or 0)
+            check('看过的进度被记下来', recorded > 0,
+                  '看到 %sms，记录 %sms（身份 %s / %s）'
+                  % (watched, recorded, row.get('sourceId'), row.get('episodeId')))
+
+            # What the player asks before it starts: the position of this very episode, taken from the
+            # recorded entry itself (asking with made-up ids would only prove a wrong question gets a wrong
+            # answer).
+            identity = ('sourceId=' + urllib.parse.quote(str(row.get('sourceId') or ''))
+                        + '&siteKey=' + urllib.parse.quote(str(row.get('siteKey') or ''))
+                        + '&vodId=' + urllib.parse.quote(str(row.get('vodId') or ''))
+                        + '&episodeId=' + urllib.parse.quote(str(row.get('episodeId') or '')))
+            # For a long episode the lookup answers with the recorded position: this is the identity
+            # matching the player relies on (the forty-second clip below is under the resume threshold,
+            # so it correctly answers 0).
+            post('/api/debug/library/progress', {'positionMs': 120000, 'durationMs': 600000})
+            looked_up = get('/api/debug/resume?' + identity) if row else {}
+            check('按影片身份能查到上次看到哪',
+                  bool(row) and int(looked_up.get('rememberedMs') or 0) == 120000,
+                  'rememberedMs=%s（记录位置 %sms）' % (looked_up.get('rememberedMs'), recorded))
+
+            # A different episode of the same film is not continued into.
+            other = get('/api/debug/resume?' + identity.replace(
+                urllib.parse.quote(str(row.get('episodeId') or '')), 'another-episode')) if row else {}
+            check('别的集数不会被续播位置影响', int(other.get('rememberedMs') or 0) == 0,
+                  'rememberedMs=%s' % other.get('rememberedMs'))
+
+            # The decision for a long episode: two minutes into ten is worth continuing, while a position
+            # near the end starts over. The start position itself is proven by the intro-skip checks above,
+            # which hand the player the same parameter.
+            check('看了两分钟的片子会接着播', int(looked_up.get('rememberedMs') or 0) == 120000,
+                  'rememberedMs=%s wouldResume=%s'
+                  % (looked_up.get('rememberedMs'), looked_up.get('wouldResume')))
+            post('/api/debug/library/progress', {'positionMs': 35000, 'durationMs': 40000})
+            short_one = get('/api/debug/resume?' + identity) if row else {}
+            check('快看完的片子从头上映', int(short_one.get('rememberedMs') or 0) == 0,
+                  'rememberedMs=%s（35 秒处 / 片长 40 秒）' % short_one.get('rememberedMs'))
+            # Put the real position back, so the history is not left holding a made-up one.
+            if row:
+                post('/api/debug/library/progress',
+                     {'positionMs': recorded, 'durationMs': int(row.get('durationMs') or 0)})
 
     # Leave the device as it was.
     for mount in get('/api/storage/mounts'):

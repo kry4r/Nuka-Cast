@@ -1302,6 +1302,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
      * way to tell that from a crash.
      */
     private void ensureSomethingFocused() {
+        // A dialog is its own window: putting the cursor on the page behind it leaves the viewer pressing
+        // keys at a sheet that ignores them.
+        View dialog = activeDialogView();
+        if (dialog instanceof android.view.ViewGroup) {
+            android.view.View inside = firstFocusableIn((android.view.ViewGroup) dialog);
+            if (inside != null && inside.requestFocus()) return;
+        }
         android.view.View first = firstFocusableIn(currentPageContainer());
         if (first != null && first.requestFocus()) {
             com.nukacast.app.diagnostics.AppLog.i("焦点", "焦点丢失，已回到页面上的第一个控件");
@@ -1368,6 +1375,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             }
         }
         return null;
+    }
+
+    /** The view of the modal on screen, if any. */
+    private View activeDialogView() {
+        if (activeDialog == null || !activeDialog.isShowing()) return null;
+        android.view.Window window = activeDialog.getWindow();
+        return window == null ? null : window.getDecorView();
     }
 
     /** "Button#navHome" for a report line. */
@@ -1504,6 +1518,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
             if (panel == null) return "no-hero";
             if (!panel.requestFocus()) return "hero-not-focusable";
             return featuredItem == null ? "hero" : "hero:" + featuredItem.name;
+        }
+        if ("dialog".equals(target)) {
+            // A dialog is its own window, so the activity's current focus says nothing about it: ask the
+            // dialog itself, or the report claims "nothing focused" for every sheet.
+            android.view.View decor = activeDialogView();
+            if (decor == null) return "no-dialog";
+            android.view.View focused = decor.findFocus();
+            return focused == null ? "dialog-focus-none" : "dialog:" + widgetName(focused);
         }
         if ("page".equals(target)) {
             android.view.View first = firstFocusableIn(currentPageContainer());
@@ -4184,13 +4206,31 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         scroll.addView(dialog, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         holder[0] = new AlertDialog.Builder(this).setView(scroll).create();
+        // The sheet has to open with a control under the cursor. Requesting the focus while showing it is
+        // lost on this Android — the dialog's window is not ready — so it is asked for again once the
+        // dialog reports itself shown, and once more after layout as a backstop. Without this the first
+        // press of OK on a single-file item does nothing at all.
+        holder[0].setOnShowListener(new android.content.DialogInterface.OnShowListener() {
+            @Override public void onShow(android.content.DialogInterface dialog) {
+                if (firstFocus[0] != null) firstFocus[0].requestFocus();
+            }
+        });
         showDialog(holder[0]);
         Window window = holder[0].getWindow();
         if (window != null) {
             window.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.62f),
                     (int) (getResources().getDisplayMetrics().heightPixels * 0.74f));
         }
-        if (firstFocus[0] != null) firstFocus[0].requestFocus();
+        if (firstFocus[0] != null) {
+            // After the window has taken focus: requesting it during show() is lost on this Android, and the
+            // sheet then opens with nothing focused, where the first press of OK does nothing at all
+            // (measured on the emulator: a single-file item has no line picker, so the episode chip is the
+            // one thing to focus).
+            final View target = firstFocus[0];
+            target.post(new Runnable() {
+                @Override public void run() { target.requestFocus(); }
+            });
+        }
     }
 
     /** Redraws the dialog body; used for the first render and when the line changes. */
@@ -4244,6 +4284,18 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         activeEpisodeId = episode == null ? "" : episode.id;
         activeEpisodeName = episode == null ? "" : episode.name;
         lineSwitchAt = System.currentTimeMillis();
+        // Continue where this episode was left off. Only when the caller did not already decide (retries and
+        // the next-episode path pass their own position).
+        final int wantedPosition = startPositionMs;
+        int rememberedPosition = 0;
+        if (startPositionMs <= 0 && episode != null && !episode.id.isEmpty()) {
+            rememberedPosition = runtime.getMediaLibrary().resumePosition(
+                    detail.sourceId, detail.siteKey, detail.vodId, episode.id);
+        }
+        final int resumeMs = rememberedPosition > 0 ? rememberedPosition : wantedPosition;
+        final String resumeNotice = rememberedPosition > 0
+                ? "已从 " + com.nukacast.app.library.ResumePolicy.clock(rememberedPosition) + " 继续播放"
+                : "";
         Toast.makeText(this, "正在解析“" + episode.name + "”", Toast.LENGTH_SHORT).show();
         inBackground(new Runnable() {
             @Override public void run() {
@@ -4255,7 +4307,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     onUi(new Runnable() {
                         @Override public void run() {
                             PendingPlayback pending = PendingPlayback.episode(title, info,
-                                    startPositionMs, detail, source, episode);
+                                    resumeMs, detail, source, episode);
+                            pending.resumeNotice = resumeNotice;
                             if (info.direct) completePlayback(pending, info.url);
                             else startSniffing(pending);
                         }
@@ -4323,6 +4376,15 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         }
         runtime.getPlayerController().play(this, url, pending.title,
                 pending.info.headers, pending.startPositionMs);
+        if (!pending.resumeNotice.isEmpty()) {
+            // Told, not asked: silent resuming leaves the viewer wondering why the episode starts in the
+            // middle, and a dialog on every press of 播放 is worse. The log is written either way — it is
+            // how the resume is checked on the device.
+            AppLog.i("播放", pending.resumeNotice + "：“" + pending.title + "”");
+            if (playerHud != null) {
+                playerHud.show(pending.title, pending.resumeNotice, "左/右键快退 · 菜单键显示控制", false);
+            }
+        }
         renderHome();
     }
 
@@ -4349,6 +4411,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         MediaDetail.PlaySource source;
         MediaDetail.Episode episode;
         LibraryItem resume;
+        /** Shown once playback starts, when it continued from a remembered position. */
+        String resumeNotice = "";
 
         static PendingPlayback episode(String title, PlaybackInfo info, int startPositionMs,
                                        MediaDetail detail, MediaDetail.PlaySource source,

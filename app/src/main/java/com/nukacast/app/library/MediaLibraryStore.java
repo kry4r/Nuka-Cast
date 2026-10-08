@@ -31,6 +31,23 @@ public final class MediaLibraryStore {
 
     public synchronized List<LibraryItem> history() { return read(HISTORY); }
 
+    /**
+     * Where the given episode should continue from, or 0 when it should start at the beginning.
+     *
+     * <p>History remembers the series and the episode that was being watched, so picking a *different*
+     * episode starts clean while picking the same one carries on.
+     */
+    public synchronized int resumePosition(String sourceId, String siteKey, String vodId,
+                                           String episodeId) {
+        String key = safe(sourceId) + "|" + safe(siteKey) + "|" + safe(vodId);
+        for (LibraryItem item : read(HISTORY)) {
+            if (!key.equals(item.stableKey())) continue;
+            if (!safe(episodeId).equals(safe(item.episodeId))) return 0;
+            return ResumePolicy.resumeFrom(item.positionMs, item.durationMs);
+        }
+        return 0;
+    }
+
     public synchronized List<LibraryItem> favorites() { return read(FAVORITES); }
 
     public synchronized void start(SearchItem item, String playSource, String episodeId,

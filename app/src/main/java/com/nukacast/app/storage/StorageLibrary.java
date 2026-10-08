@@ -193,7 +193,9 @@ public final class StorageLibrary {
         for (MediaEntry entry : related) {
             MediaDetail.Episode episode = new MediaDetail.Episode();
             episode.id = entry.id;
-            episode.name = entry.episode > 0 ? "第 " + entry.episode + " 集" : "播放";
+            // Not "播放": this name is what the watch history and 继续观看 show, and "影片名 · 播放" reads
+            // like a button label rather than an episode. A single file is just the film.
+            episode.name = entry.episode > 0 ? "第 " + entry.episode + " 集" : entry.title;
             source.episodes.add(episode);
         }
         detail.playSources.add(source);

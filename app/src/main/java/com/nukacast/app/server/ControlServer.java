@@ -572,6 +572,29 @@ public final class ControlServer extends NanoHTTPD {
             payload.put("history", history);
             return json(Response.Status.OK, payload);
         }
+        if ("/api/debug/resume".equals(path)) {
+            // What the player would do for one episode: the same two calls playEpisode makes. Checking it
+            // through playback alone is impossible with a short test clip, because a forty-second file is
+            // deliberately never resumed.
+            Map<String, String> query = session.getParms();
+            int remembered = runtime.getMediaLibrary().resumePosition(
+                    safe(query.get("sourceId")), safe(query.get("siteKey")), safe(query.get("vodId")),
+                    safe(query.get("episodeId")));
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("rememberedMs", remembered);
+            payload.put("wouldResume", remembered > 0);
+            return json(Response.Status.OK, payload);
+        }
+        if ("/api/debug/library/progress".equals(path) && Method.POST.equals(session.getMethod())) {
+            // Records a watch position the way the player does every few seconds, so the resume rule can be
+            // checked for a long episode without needing a long file on the device.
+            ProgressRequest request = body(session, ProgressRequest.class);
+            runtime.getMediaLibrary().updateActiveProgress(request.positionMs, request.durationMs);
+            Map<String, Object> payload = new LinkedHashMap<String, Object>();
+            payload.put("positionMs", request.positionMs);
+            payload.put("durationMs", request.durationMs);
+            return json(Response.Status.OK, payload);
+        }
         if ("/api/debug/favorite".equals(path)) {
             // Toggles a favourite exactly like the remote does, so the page and the smoke test agree.
             ContentRequest request = body(session, ContentRequest.class);
@@ -758,6 +781,12 @@ public final class ControlServer extends NanoHTTPD {
         entry.put("episodeName", item.episodeName);
         entry.put("positionMs", item.positionMs);
         entry.put("durationMs", item.durationMs);
+        // The identity, which is what the resume lookup keys on: without it a check cannot tell a wrong
+        // lookup from a wrong question.
+        entry.put("sourceId", item.sourceId);
+        entry.put("siteKey", item.siteKey);
+        entry.put("episodeId", item.episodeId);
+        entry.put("playSource", item.playSource);
         return entry;
     }
 
@@ -2020,6 +2049,12 @@ public final class ControlServer extends NanoHTTPD {
         String username;
         String password;
     }
+    /** A watch position to record, for the resume checks. */
+    private static final class ProgressRequest {
+        int positionMs;
+        int durationMs;
+    }
+
     private static final class ContentRequest {
         String sourceId;
         String siteKey;
