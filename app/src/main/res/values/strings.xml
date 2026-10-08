@@ -3,6 +3,7 @@
     <string name="app_name">NukaCast</string>
     <string name="nav_home">首页</string>
     <string name="nav_movies">影视</string>
+    <string name="nav_live">直播</string>
     <string name="nav_cast">投屏</string>
     <string name="nav_settings">设置</string>
     <string name="status_ready">等待连接</string>

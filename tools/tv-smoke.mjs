@@ -278,6 +278,35 @@ async function main() {
   check("detail with playable lines", lines.length > 0 && episodes > 0,
     `${lines.length} lines, first line “${lines[0]?.name}” with ${episodes} episodes`);
 
+  // The drama catalogue (short-drama CMS): browse → detail → direct episodes. 短剧 is the one content
+  // type that plays without matching a source line, so a break here is a break of the whole feature.
+  const providers = (await call("GET", "/api/drama/providers")).data.providers || [];
+  if (providers.length > 0) {
+    const provider = providers[0];
+    const browsed = (await call("POST", "/api/drama/browse",
+      { providerId: provider.id, categoryId: provider.categoryId, page: 1 })).data;
+    const dramas = browsed.items || [];
+    check("drama catalogue browses", dramas.length > 0,
+      `${provider.name} → ${dramas.length} 部，例如 “${dramas[0]?.title}”`);
+    const drama = dramas[0];
+    if (drama) {
+      const detail = (await call("POST", "/api/drama/detail",
+        { providerId: provider.id, dramaId: drama.dramaId })).data;
+      const episodes = detail.episodes || [];
+      const direct = episodes.filter((e) => e.direct && e.playUrl).length;
+      check("drama detail has playable episodes", episodes.length > 0 && direct > 0,
+        `“${drama.title}” ${episodes.length} 集，可直接播放 ${direct} 集（${episodes[0]?.name}）`);
+    }
+    // A missing id is an answer, not a server fault (this used to be HTTP 500).
+    const missing = await call("POST", "/api/drama/detail", {});
+    check("drama endpoints explain a missing id", missing.status === 400,
+      `HTTP ${missing.status} ${String(missing.data?.error || "").slice(0, 40)}`);
+  } else {
+    check("drama catalogue browses", true, "没有启用短剧目录，已跳过");
+    check("drama detail has playable episodes", true, "没有启用短剧目录，已跳过");
+    check("drama endpoints explain a missing id", true, "没有启用短剧目录，已跳过");
+  }
+
   // The detail page on the TV itself: the episode grid was once unreadable (huge type, everything
   // overlapping), so its layout is inspected rather than assumed.
   const opened = (await call("GET", `/api/debug/open?sourceId=${encodeURIComponent(first.sourceId)}` +

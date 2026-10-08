@@ -94,6 +94,10 @@ public final class ControlServer extends NanoHTTPD {
             return decorate(json(Response.Status.UNAUTHORIZED, error(error.getMessage())));
         } catch (IllegalArgumentException error) {
             return decorate(json(Response.Status.BAD_REQUEST, error(error.getMessage())));
+        } catch (com.nukacast.app.drama.DramaException error) {
+            // A drama catalogue saying "there is no such short drama" is an answer, not a server fault.
+            // Only /api/drama/play used to translate this, so the rest reported 500 for a missing id.
+            return decorate(json(Response.Status.BAD_REQUEST, error(error.getMessage())));
         } catch (Exception error) {
             AppLog.e("网页服务", "请求处理失败 [" + session.getUri() + "]", error);
             return decorate(json(Response.Status.INTERNAL_ERROR, error(message(error))));

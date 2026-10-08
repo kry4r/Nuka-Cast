@@ -52,10 +52,12 @@
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:clipChildren="false"
-                android:orientation="vertical"
-                android:weightSum="4">
+                android:orientation="vertical">
                 <Button android:id="@+id/navHome" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_home" android:text="@string/nav_home" />
                 <Button android:id="@+id/navMovies" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_movies" android:text="@string/nav_movies" />
+                <!-- 直播 sits in the same weighted row as the rest: it used to be added from code with a
+                     fixed 44dp height, which left the five entries unevenly spaced. -->
+                <Button android:id="@+id/navLive" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_live" android:text="@string/nav_live" />
                 <Button android:id="@+id/navCast" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_cast" android:text="@string/nav_cast" />
                 <Button android:id="@+id/navSettings" style="@style/NavButton" android:layout_height="0dp" android:layout_weight="1" android:drawableTop="@drawable/ic_nav_settings" android:text="@string/nav_settings" />
             </LinearLayout>

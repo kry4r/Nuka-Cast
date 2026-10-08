@@ -1659,30 +1659,14 @@ public final class MainActivity extends Activity implements AppState.Listener, S
 
     /** Builds the live page in code: the other pages come from the XML layout, this one is dynamic. */
     private void buildLivePage() {
-        android.view.ViewGroup nav = (android.view.ViewGroup) findViewById(R.id.navHome).getParent();
-        navLive = new Button(this);
-        navLive.setText("直播");
-        navLive.setTextSize(13);
-        navLive.setAllCaps(false);
-        navLive.setFocusable(true);
-        navLive.setGravity(Gravity.CENTER);
-        navLive.setTextColor(TvTheme.primary(this));
-        navLive.setBackgroundDrawable(TvTheme.focusable(this));
-        LinearLayout.LayoutParams navParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
-        navParams.bottomMargin = dp(6);
-        navLive.setLayoutParams(navParams);
-        navLive.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showPage(PAGE_LIVE); }
-        });
-        int navIndex = nav.getChildCount();
-        for (int i = 0; i < nav.getChildCount(); i++) {
-            if (nav.getChildAt(i).getId() == R.id.navMovies) {
-                navIndex = i + 1;
-                break;
-            }
+        // The sidebar entry comes from the layout, next to the other four, so all five share the column
+        // evenly and look alike (icon above the label, same focus background).
+        navLive = (Button) findViewById(R.id.navLive);
+        if (navLive != null) {
+            navLive.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) { showPage(PAGE_LIVE); }
+            });
         }
-        nav.addView(navLive, Math.min(navIndex, nav.getChildCount()));
 
         livePage = new LinearLayout(this);
         livePage.setOrientation(LinearLayout.VERTICAL);
