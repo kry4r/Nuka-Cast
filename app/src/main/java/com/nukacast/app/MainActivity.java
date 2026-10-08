@@ -200,6 +200,13 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private long liveLoadedAt;
     /** Consecutive automatic channel switches after failures, reset on a successful play. */
     private int liveAutoSwitch;
+    /** The channel currently playing and which of its addresses is in use. */
+    private com.nukacast.app.live.model.LiveCatalog.Channel livePlayingChannel;
+    private int liveUrlIndex;
+    private int liveUrlTries;
+
+    /** How many addresses of one channel may be tried before moving on to the next channel. */
+    private static final int MAX_LIVE_URL_TRIES = 3;
     /** Category browsing state: which site and category the movies page is showing. */
     private final java.util.List<com.nukacast.app.tvbox.model.Category> browseCategories =
             new java.util.ArrayList<com.nukacast.app.tvbox.model.Category>();
@@ -2800,12 +2807,57 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         // The 常看 chip is part of the group row, so it has to be rebuilt or the channel just watched
         // would not show up there until the page was reloaded.
         if (liveCatalog != null) renderLiveGroups();
-        runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
+        livePlayingChannel = channel;
+        liveUrlIndex = 0;
+        liveUrlTries = 0;
+        startLiveUrl(channel, 0, false);
+    }
+
+    /**
+     * Plays one address of a channel.
+     *
+     * <p>A free playlist lists a channel once per mirror and plenty of those mirrors are dead; measured on
+     * the device, a channel with three addresses showed "这个频道的地址播不了" without ever trying the
+     * second one. {@code retry} changes the wording, because a viewer who is already watching wants to know
+     * why the picture went away.
+     */
+    private void startLiveUrl(final com.nukacast.app.live.model.LiveCatalog.Channel channel, int index,
+                              boolean retry) {
+        if (channel == null || index < 0 || index >= channel.urls.size()) return;
+        liveUrlIndex = index;
+        liveSwitchAt = System.currentTimeMillis();
+        runtime.getPlayerController().play(this, channel.urls.get(index), channel.name, channel.headers);
         render();
+        String more = channel.urls.size() > 1 ? "（第 " + (index + 1) + "/" + channel.urls.size() + " 个地址）" : "";
         if (playerHud != null) {
-            playerHud.show(channel.name, (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播",
-                    "按返回键退出 · 上/下键换台 · 菜单键显示控制", true);
+            if (retry) {
+                playerHud.show(channel.name, "正在换源" + more, "按返回键退出 · 上/下键换台", true);
+            } else {
+                playerHud.show(channel.name,
+                        (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播" + more,
+                        "按返回键退出 · 上/下键换台 · 菜单键显示控制", true);
+            }
         }
+        if (retry) AppLog.i("直播", "换源：" + channel.name + " 第 " + (index + 1) + " 个地址");
+    }
+
+    /**
+     * Starts a channel by name, for the debug API.
+     *
+     * <p>Goes through the same path a remote press takes, so a check of "does a dead mirror get skipped"
+     * exercises the real code rather than a shortcut.
+     */
+    public String playLiveChannelForDebug(String name) {
+        if (liveCatalog == null) return "直播目录未就绪";
+        for (com.nukacast.app.live.model.LiveCatalog.Group group : liveCatalog.groups) {
+            for (com.nukacast.app.live.model.LiveCatalog.Channel channel : group.channels) {
+                if (channel.name.equals(name) || channel.id.equals(name)) {
+                    playLiveChannel(channel);
+                    return "playing:" + channel.name + "（" + channel.urls.size() + " 个地址）";
+                }
+            }
+        }
+        return "没有这个频道:" + name;
     }
 
     /** Channels behind the buttons currently on screen: the zap list for 上/下键. */
@@ -2831,6 +2883,12 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         com.nukacast.app.player.PlayerController.Snapshot playback =
                 runtime.getPlayerController().snapshot();
         if (!"error".equals(playback.state)) return;
+        if (livePlayingChannel != null && liveUrlIndex + 1 < livePlayingChannel.urls.size()
+                && liveUrlTries < MAX_LIVE_URL_TRIES - 1) {
+            liveUrlTries++;
+            startLiveUrl(livePlayingChannel, liveUrlIndex + 1, true);
+            return;
+        }
         if (liveAutoSwitch >= 3) {
             if (playerHud != null) {
                 playerHud.showError("这个频道的地址播不了，按返回键退出或上/下键换台");
@@ -3000,12 +3058,11 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         com.nukacast.app.live.model.LiveCatalog.Channel channel = livePlaying.get(next);
         if (channel.urls.isEmpty()) return;
         livePlayingIndex = next;
-        runtime.getPlayerController().play(this, channel.urls.get(0), channel.name, channel.headers);
-        if (playerHud != null) {
-            playerHud.show(channel.name,
-                    (liveCatalog == null ? "" : liveCatalog.sourceName) + " · 直播",
-                    "按返回键退出 · 上/下键换台", true);
-        }
+        // Same door as starting a channel: zapping to a channel has to reset which address is being tried,
+        // or a failed address from the previous channel would follow the viewer here.
+        livePlayingChannel = channel;
+        liveUrlTries = 0;
+        startLiveUrl(channel, 0, false);
     }
 
     private void renderDramaMovies() {

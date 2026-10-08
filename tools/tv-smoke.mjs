@@ -668,6 +668,65 @@ async function main() {
   await call("GET", "/api/debug/live?query="); // back to the plain channel list
   await new Promise((r) => setTimeout(r, 1000));
 
+  // A channel whose first two mirrors are dead. Free playlists are full of those, and a player that gives
+  // up on the first address is a player that cannot show a channel the viewer knows is listed.
+  if (fixtureReachable) {
+    const playlist = "http://10.0.2.2:8899/live-failover.m3u";
+    const createdAt = Date.now();
+    const created = (await call("POST", "/api/live/sources", { name: "smoke-回退", url: playlist })).data;
+    // The live page loaded its source list when it was opened, before this playlist existed, so the page is
+    // rebuilt here — otherwise the debug "select this source" step finds nothing and nothing plays.
+    await call("GET", "/api/debug/navigate?page=home");
+    await new Promise((r) => setTimeout(r, 2500));
+    await call("GET", "/api/debug/navigate?page=live");
+    // The page loads its source list asynchronously; asking it to select a source before that list exists
+    // silently does nothing (measured: the channel was then not found and nothing played).
+    for (let attempt = 0; attempt < 15; attempt++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (((await call("GET", "/api/debug/live")).data.sources || []).length > 0) break;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    const catalog = (await call("GET", `/api/live/catalog?sourceId=${encodeURIComponent("user:" + created.id)}`)).data;
+    const channels = (catalog.groups || []).flatMap((group) => group.channels || []);
+    const first = channels.find((channel) => channel.name === "回退测试台");
+    check("one playlist entry keeps all of its mirrors",
+      !!first && (first.urls || []).length === 3 && channels.filter((c) => c.name === "回退测试台").length === 1,
+      `回退测试台：${(first && first.urls || []).length} 个地址，同名条目 ${channels.filter((c) => c.name === "回退测试台").length} 个`);
+
+    const started = (await call("GET", "/api/debug/live?source=" + encodeURIComponent("smoke-回退") +
+      "&query=" + encodeURIComponent("回退测试台") + "&play=" + encodeURIComponent("回退测试台"))).data;
+    // The proof is which address it ended up on, not whether it is still playing: the fixture is a short
+    // clip, so by the time the third address is reached the clip may already have finished.
+    let landed = {};
+    let reachedWorking = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      landed = (await call("GET", "/api/player")).data;
+      if (String(landed.url || "").includes("master.m3u8")) {
+        reachedWorking = true;
+        break;
+      }
+    }
+    // Only this attempt's lines: /api/logs carries older runs too, and a switch from ten minutes ago is
+    // not evidence that this channel failed over now.
+    const switched = (await smokeLogMessages(200))
+      .filter((m) => m.includes("换源") && Number(String(m).split("|")[0]) >= createdAt).slice(-2);
+    check("a dead mirror is skipped for the next one", reachedWorking,
+      `最终地址 ${String(landed.url || "").split("/").pop() || "(无)"} · 换源日志 ${switched.join(" / ") || "(无)"}` +
+      (started.error ? ` · ${started.error}` : ""));
+
+    await call("GET", "/api/debug/player/action?name=stop");
+    await new Promise((r) => setTimeout(r, 2000));
+    await call("GET", "/api/debug/live?source=" + encodeURIComponent("IPTV"));
+    const removed = await call("DELETE", `/api/live/sources/${encodeURIComponent("user:" + created.id)}`);
+    check("a live source added from the console can be removed again", removed.status === 200,
+      `DELETE → HTTP ${removed.status}`);
+  } else {
+    check("one playlist entry keeps all of its mirrors", true, "测试流不可达（本机未起 8899 服务），跳过");
+    check("a dead mirror is skipped for the next one", true, "测试流不可达（本机未起 8899 服务），跳过");
+    check("a live source added from the console can be removed again", true, "测试流不可达，跳过");
+  }
+
 
   // The home page hero: the biggest card on the first screen must be selectable.
   await call("GET", "/api/debug/player/action?name=stop");

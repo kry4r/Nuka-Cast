@@ -21,7 +21,14 @@ public final class LiveCatalog {
         public String epgId = "";
         public String logo = "";
         public String group = "";
+        /** Every mirror of this channel, in the order the playlist listed them. */
         public final List<String> urls = new ArrayList<String>();
         public final Map<String, String> headers = new LinkedHashMap<String, String>();
+        /** Catch-up support as the playlist describes it: {@code append}, {@code default}, {@code shift}… */
+        public String catchup = "";
+        /** The URL template for catch-up playback, with {@code {utc}} / {@code {start}} placeholders. */
+        public String catchupSource = "";
+        /** How many days back the playlist says catch-up goes; 7 when it does not say. */
+        public int catchupDays = 7;
     }
 }

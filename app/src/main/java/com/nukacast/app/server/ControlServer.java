@@ -492,6 +492,7 @@ public final class ControlServer extends NanoHTTPD {
             // remotely (11k channels cannot be scrolled through from here).
             final String query = session.getParms().get("query");
             final String source = session.getParms().get("source");
+            final String play = session.getParms().get("play");
             final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
             if (activity == null) return json(Response.Status.OK, errorPayload("界面未在前台"));
             if (source != null && !source.isEmpty()) {
@@ -526,6 +527,15 @@ public final class ControlServer extends NanoHTTPD {
                             return activity.liveSearchForDebug(query);
                         }
                     });
+            // Watches a channel through the television's own path, which is where a dead mirror gets
+            // skipped for the next one; /api/live/play would play the address directly and prove nothing.
+            if (play != null && !play.isEmpty()) {
+                activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+                    @Override public String call() {
+                        return activity.playLiveChannelForDebug(play);
+                    }
+                });
+            }
             List<String> names = activity.onUiThreadNow(
                     new java.util.concurrent.Callable<List<String>>() {
                         @Override public List<String> call() {
@@ -1179,15 +1189,18 @@ public final class ControlServer extends NanoHTTPD {
             return json(Response.Status.CREATED, created);
         }
         if (path.startsWith("/api/live/sources/") && Method.DELETE.equals(session.getMethod())) {
-            String id = path.substring("/api/live/sources/".length());
+            // The listing hands out "user:<id>" because that is how the live service names a playlist the
+            // viewer added; the store itself keys on the bare id, so the prefix has to come off here or the
+            // delete silently does nothing (measured: HTTP 404 for a source that was plainly on screen).
+            String id = playlistId(path.substring("/api/live/sources/".length()));
             boolean removed = runtime.getTvBoxRepository().getLiveSourceStore().remove(id);
             return json(removed ? Response.Status.OK : Response.Status.NOT_FOUND,
                     Collections.singletonMap("removed", removed));
         }
         if (path.startsWith("/api/live/sources/") && path.endsWith("/enabled")
                 && Method.POST.equals(session.getMethod())) {
-            String id = path.substring("/api/live/sources/".length(),
-                    path.length() - "/enabled".length());
+            String id = playlistId(path.substring("/api/live/sources/".length(),
+                    path.length() - "/enabled".length()));
             DramaEnabledRequest request = body(session, DramaEnabledRequest.class);
             boolean updated = runtime.getTvBoxRepository().getLiveSourceStore()
                     .setEnabled(id, request.enabled);
@@ -1846,6 +1859,18 @@ public final class ControlServer extends NanoHTTPD {
      * the same source two or three times. {@link com.nukacast.app.live.LiveService#sources()} is now
      * the single, de-duplicated source of truth.
      */
+    /**
+     * The id a live playlist store understands.
+     *
+     * <p>{@code /api/live/sources} reports a playlist the viewer added as {@code user:<id>} (that is the id
+     * playback and the catalogue use), while the store keys on the bare id. Sending the prefixed form to the
+     * store made removal and enable/disable miss every time.
+     */
+    private static String playlistId(String id) {
+        if (id == null) return "";
+        return id.startsWith("user:") ? id.substring("user:".length()) : id;
+    }
+
     private List<Map<String, Object>> liveSources() {
         List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
         for (com.nukacast.app.live.model.LiveSourceInfo info : runtime.getLiveService().sources()) {
