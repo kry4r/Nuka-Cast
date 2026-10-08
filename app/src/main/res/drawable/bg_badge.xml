@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <corners android:radius="3dp" />
-    <solid android:color="#D909090B" />
+    <!-- 0xE6 rather than 0xD9: posters often carry their own labels at this corner, and a badge
+         that lets them show through reads as two overlapping labels (measured on the device). -->
+    <solid android:color="#E609090B" />
 </shape>

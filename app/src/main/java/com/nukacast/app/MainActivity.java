@@ -116,6 +116,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private static final String DRAMA_SOURCE_PREFIX = "drama:";
 
     private final List<SearchItem> dramaItems = new ArrayList<SearchItem>();
+    /** Which drama catalogue and which page of its listing the 短剧 tab is showing. */
+    private String dramaBrowseProviderId = "";
+    private int dramaBrowsePage;
+    private boolean dramaBrowseRunning;
     private NukaRuntime runtime;
     private View appShell;
     private View homePage;
@@ -877,6 +881,26 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         else showPage(PAGE_HOME);
     }
 
+    /** Switches the movies page to one of its views; used by the debug API to inspect them. */
+    public void selectMovieFilterByName(String filter) {
+        String wanted = movieFilterSelected.isEmpty() ? "分类浏览" : movieFilterSelected;
+        if (filter != null && !filter.trim().isEmpty()) wanted = filter.trim();
+        if ("分类浏览".equals(wanted)) {
+            showMovies("分类浏览");
+        } else if ("最近更新".equals(wanted)) {
+            showMovies("首页");
+        } else if ("短剧".equals(wanted)) {
+            showMovies("短剧");
+        } else if ("收藏".equals(wanted)) {
+            showMovies("收藏");
+        }
+    }
+
+    /** The movies view currently selected, for the debug API's answer. */
+    public String currentMovieFilterName() {
+        return movieFilterSelected.isEmpty() ? "分类浏览" : movieFilterSelected;
+    }
+
     /** Opens a detail screen on the UI thread; used by the debug API to inspect that screen. */
     public void openDetailForDebug(final MediaDetail detail) {
         if (detail == null) return;
@@ -1232,6 +1256,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     }
 
     private void showPage(String page) {
+        // Entering a page from the sidebar starts at the top: the view is reused, so the previous visit's
+        // scroll position used to leave a half-cut row of cards above the first row (measured on the
+        // device). Returning from a detail dialog does not come through here, so browsing keeps its place.
+        boolean entered = !page.equals(currentPage);
         currentPage = page;
         homePage.setVisibility(PAGE_HOME.equals(page) ? View.VISIBLE : View.GONE);
         moviesPage.setVisibility(PAGE_MOVIES.equals(page) ? View.VISIBLE : View.GONE);
@@ -1249,7 +1277,35 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         if (!PAGE_MOVIES.equals(page)) setFilterSelection("");
         if (PAGE_HOME.equals(page)) renderHome();
         if (PAGE_LIVE.equals(page)) loadLive();
+        // The movies page is a container the filter chips fill in; entering it from the sidebar used to
+        // show only those four chips above an empty screen until one was pressed. It now opens on the
+        // category browser, which is what the page is mostly used for.
+        if (PAGE_MOVIES.equals(page) && moviesContent != null && moviesContent.getChildCount() == 0
+                && !showMoviesMore) {
+            showMoviesMore = true;
+            try {
+                showMovies("分类浏览");
+            } finally {
+                showMoviesMore = false;
+            }
+        }
+        if (entered) scrollPageToTop(page);
         render();
+    }
+
+    /** Guards the "open the category browser when the movies page is empty" call against recursion. */
+    private boolean showMoviesMore;
+
+    /** Puts a page's own scroll view back to the top. */
+    private void scrollPageToTop(String page) {
+        int id = 0;
+        if (PAGE_HOME.equals(page)) id = R.id.homePage;
+        else if (PAGE_MOVIES.equals(page)) id = R.id.moviesScroll;
+        else if (PAGE_CAST.equals(page)) id = R.id.castPage;
+        else if (PAGE_SETTINGS.equals(page)) id = R.id.settingsPage;
+        if (id == 0) return;
+        View view = findViewById(id);
+        if (view instanceof ScrollView) ((ScrollView) view).scrollTo(0, 0);
     }
 
     private void showMovies(String filter) {
@@ -1258,6 +1314,9 @@ public final class MainActivity extends Activity implements AppState.Listener, S
         setFilterSelection(filter);
         if ("短剧".equals(filter)) {
             browseMode = false;
+            // loadDramaBrowse sets its own running flag; setting it here first made the call return
+            // immediately and the tab sat on "正在读取短剧列表…" forever.
+            if (dramaItems.isEmpty() && dramaBrowsePage == 0) loadDramaBrowse(1);
             renderDramaMovies();
             return;
         }
@@ -1297,6 +1356,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                     }
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
+                            // The viewer may have switched to another view of this page (短剧/收藏) while
+                            // the category list was being read; rendering now would put the browser back
+                            // over the view they picked.
+                            if (!browseMode || !PAGE_MOVIES.equals(currentPage)) return;
                             browseSites.clear();
                             browseSites.addAll(sites);
                             if (browseSites.isEmpty()) {
@@ -2605,15 +2668,93 @@ public final class MainActivity extends Activity implements AppState.Listener, S
     private void renderDramaMovies() {
         if (moviesContent == null) return;
         moviesContent.removeAllViews();
-        moviesContent.addView(sectionTitle("短剧目录 · " + dramaItems.size()));
-        if (dramaItems.isEmpty()) {
-            TextView empty = bodyText("使用顶部搜索输入剧名：匹配到的短剧会显示在这里，"
-                    + "并可继续从已启用片源中匹配播放线路。");
-            empty.setPadding(0, dp(22), 0, 0);
-            moviesContent.addView(empty);
+        List<com.nukacast.app.drama.model.DramaProviderConfig> providers =
+                runtime.getDramaService().registry().enabledProviders();
+        if (providers.isEmpty()) {
+            moviesContent.addView(sectionTitle("短剧"));
+            moviesContent.addView(bodyText("还没有短剧目录：网页「短剧」页添加后即可在这里按分类浏览。"));
             return;
         }
+        if (dramaItems.isEmpty()) {
+            moviesContent.addView(sectionTitle("短剧 · " + providers.get(0).name));
+            // A failed load used to leave this line on screen forever: entry retries it.
+            moviesContent.addView(bodyText(dramaBrowseRunning
+                    ? "正在读取短剧列表…" : "短剧列表还没读到，进入本页会重试。"));
+            if (!dramaBrowseRunning) loadDramaBrowse(1);
+            return;
+        }
+        String name = providers.get(0).name;
+        for (com.nukacast.app.drama.model.DramaProviderConfig provider : providers) {
+            if (provider.id.equals(dramaBrowseProviderId)) name = provider.name;
+        }
+        moviesContent.addView(sectionTitle("短剧 · " + name + " · " + dramaItems.size() + " 部"));
+
+        // A chip row rather than a paging footer: on a television the viewer walks the grid with the arrow
+        // keys, so "more" has to be reachable without scrolling past every card.
+        LinearLayout chips = chipRow();
+        for (final com.nukacast.app.drama.model.DramaProviderConfig provider : providers) {
+            Button chip = actionButton(provider.name, 0);
+            chip.setSelected(provider.id.equals(dramaBrowseProviderId));
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View view) {
+                    dramaBrowseProviderId = provider.id;
+                    dramaItems.clear();
+                    dramaBrowsePage = 0;
+                    renderDramaMovies();
+                }
+            });
+            chips.addView(chip);
+        }
+        Button more = actionButton(dramaBrowseRunning ? "正在加载…" : "更多", 0);
+        more.setEnabled(!dramaBrowseRunning);
+        more.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { loadDramaBrowse(dramaBrowsePage + 1); }
+        });
+        chips.addView(more);
+        moviesContent.addView(chipRowHolder(chips));
         appendGrid(moviesContent, dramaItems, gridColumns());
+    }
+
+    /**
+     * Loads one page of a drama catalogue's own listing.
+     *
+     * <p>The television had no way into a short-drama catalogue except by typing a title, which means the
+     * on-screen keyboard: browsing is what makes the tab usable from the sofa. Pages append, so the grid
+     * keeps what is already on screen while the next page arrives.
+     */
+    private void loadDramaBrowse(final int page) {
+        List<com.nukacast.app.drama.model.DramaProviderConfig> providers =
+                runtime.getDramaService().registry().enabledProviders();
+        if (providers.isEmpty() || dramaBrowseRunning) return;
+        final String providerId = dramaBrowseProviderId.isEmpty()
+                ? providers.get(0).id : dramaBrowseProviderId;
+        dramaBrowseProviderId = providerId;
+        dramaBrowseRunning = true;
+        io.execute(new Runnable() {
+            @Override public void run() {
+                final com.nukacast.app.drama.model.DramaSearchResult result =
+                        runtime.getDramaService().browse(providerId, "", page);
+                final List<SearchItem> entries = new ArrayList<SearchItem>();
+                if (result.ok) {
+                    for (DramaItem item : result.items) entries.add(item.toSearchItem());
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        dramaBrowseRunning = false;
+                        if (result.ok) {
+                            dramaBrowsePage = page;
+                            if (page == 1) dramaItems.clear();
+                            dramaItems.addAll(entries);
+                        } else {
+                            Toast.makeText(MainActivity.this,
+                                    result.warning.isEmpty() ? "短剧列表读取失败" : result.warning,
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                        if (PAGE_MOVIES.equals(currentPage)) renderDramaMovies();
+                    }
+                });
+            }
+        });
     }
 
     private void setFilterSelection(String filter) {
@@ -3294,8 +3435,8 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (generation != searchGeneration || !PAGE_SEARCH.equals(currentPage)) return;
-                        dramaItems.clear();
-                        dramaItems.addAll(entries);
+                        // Deliberately not copied into dramaItems: that list backs the 短剧 tab, which
+                        // browses the catalogue. Sharing it made the tab show a previous search's hits.
                         String heading = "短剧目录 · " + entries.size()
                                 + (result.warning.isEmpty() ? "" : "（" + result.warning + "）");
                         searchResults.addView(sectionTitle(heading));
@@ -3329,6 +3470,10 @@ public final class MainActivity extends Activity implements AppState.Listener, S
                         @Override public void run() { showDramaDetail(entry, detail, lines); }
                     });
                 } catch (final Exception error) {
+                    // The reason the television could not open a drama has to be in the log: "缺少短剧目录"
+                    // says nothing without the identifier that was (or was not) carried by the card.
+                    com.nukacast.app.diagnostics.AppLog.w("短剧", "打开失败 目录=" + providerId
+                            + " 剧目=" + dramaId + "：" + error.getMessage(), error);
                     runOnUiThread(new Runnable() {
                         @Override public void run() { showError("短剧加载失败", error); }
                     });

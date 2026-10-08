@@ -90,6 +90,7 @@ public final class CmsDramaCatalog implements DramaCatalog {
         if (item == null) throw new DramaException("parse_error", "详情响应缺少剧目");
         DramaDetail detail = new DramaDetail();
         detail.item = item(item);
+        detail.item.providerId = safe(config.id);
         detail.episodes.addAll(parseEpisodes(item, dramaId));
         applyHeaders(detail.episodes);
         detail.directPlayable = !detail.episodes.isEmpty();
@@ -109,16 +110,29 @@ public final class CmsDramaCatalog implements DramaCatalog {
 
     /** Parses one CMS item list into drama entries without touching episode URLs. */
     private DramaSearchResult parseItems(String body, String keyword) throws DramaException {
+        return parseList(body, safe(config.id), keyword);
+    }
+
+    /**
+     * Parses a CMS {@code ac=detail} listing.
+     *
+     * <p>The provider is stamped on the result and on every item, because that is what the television
+     * routes a card back with: an item without one fails with "缺少短剧目录" when it is opened (measured
+     * on the device: 打开失败 目录= 剧目=99399). Kept static so this rule has a unit test.
+     */
+    static DramaSearchResult parseList(String body, String providerId, String keyword)
+            throws DramaException {
         JsonObject root = object(body);
         JsonArray list = array(root, "list");
         if (list == null) throw new DramaException("parse_error", "响应缺少 list 数组");
         DramaSearchResult result = new DramaSearchResult();
-        result.providerId = safe(config.id);
+        result.providerId = safe(providerId);
         result.keyword = safe(keyword);
         result.total = root.has("total") ? root.get("total").getAsInt() : -1;
         for (JsonElement element : list) {
             if (!element.isJsonObject()) continue;
             DramaItem item = item(element.getAsJsonObject());
+            item.providerId = safe(providerId);
             if (item.dramaId.isEmpty() && item.title.isEmpty()) continue;
             result.items.add(item);
             if (result.items.size() >= DramaCatalogParser.MAX_ITEMS) {

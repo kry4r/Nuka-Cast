@@ -301,6 +301,24 @@ async function main() {
     const missing = await call("POST", "/api/drama/detail", {});
     check("drama endpoints explain a missing id", missing.status === 400,
       `HTTP ${missing.status} ${String(missing.data?.error || "").slice(0, 40)}`);
+
+    // The television's 短剧 tab shows the catalogue's own listing, so a viewer can browse without typing
+    // a title. Checked on the page itself: the tab used to be a dead end with a paragraph of text.
+    await call("GET", "/api/debug/navigate?page=movies&filter=" + encodeURIComponent("短剧"));
+    let dramaTab = null;
+    // The catalogue listing goes out to a real site; on a busy television that reply can take a while.
+    for (let attempt = 0; attempt < 14; attempt++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const layout = await layoutWithContent(3);
+      const texts = (layout.views || []).map((v) => String(v.text || ""));
+      const heading = texts.find((t) => t.startsWith("短剧 · ") && t.endsWith("部"));
+      if (heading) {
+        dramaTab = { heading, cards: texts.filter((t) => t === "短剧目录").length };
+        break;
+      }
+    }
+    check("the 短剧 tab browses the catalogue without a search", !!dramaTab,
+      dramaTab ? `${dramaTab.heading}（${dramaTab.cards} 张卡片）` : "页面上没有出现短剧列表");
   } else {
     check("drama catalogue browses", true, "没有启用短剧目录，已跳过");
     check("drama detail has playable episodes", true, "没有启用短剧目录，已跳过");

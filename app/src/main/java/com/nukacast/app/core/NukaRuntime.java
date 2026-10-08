@@ -232,6 +232,22 @@ public final class NukaRuntime {
         });
     }
 
+    /**
+     * Switches the movies page to one of its four views (debug API).
+     *
+     * <p>{@code filter} is one of 分类浏览/最近更新/短剧/收藏; anything else selects the nearest match.
+     */
+    public String selectMovieFilter(final String filter) {
+        final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();
+        if (activity == null) return "界面未在前台";
+        return activity.onUiThreadNow(new java.util.concurrent.Callable<String>() {
+            @Override public String call() {
+                activity.selectMovieFilterByName(filter);
+                return activity.currentMovieFilterName();
+            }
+        });
+    }
+
     /** Scrolls the visible page by {@code delta} pixels (debug API). */
     public boolean scrollBy(final int delta) {
         final com.nukacast.app.MainActivity activity = com.nukacast.app.MainActivity.onScreen();

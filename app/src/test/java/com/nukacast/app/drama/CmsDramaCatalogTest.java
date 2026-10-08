@@ -23,6 +23,25 @@ public class CmsDramaCatalogTest {
         return JsonParser.parseString(text).getAsJsonObject();
     }
 
+    @Test public void listedItemsCarryTheProviderTheyCameFrom() throws Exception {
+        // The television builds a card per item and routes the card back through the catalog named by
+        // item.providerId. Dropping it here meant every card in the 短剧 tab failed to open with
+        // "缺少短剧目录" (found on the device, not by this test - it only covers the parse).
+        com.nukacast.app.drama.model.DramaSearchResult result = CmsDramaCatalog.parseList(
+                "{\"total\":2,\"list\":["
+                        + "{\"vod_id\":\"99399\",\"vod_name\":\"A\"},"
+                        + "{\"vod_id\":\"99400\",\"vod_name\":\"B\"}]}",
+                "provider-7", "");
+        assertEquals("provider-7", result.providerId);
+        assertEquals(2, result.items.size());
+        for (DramaItem item : result.items) {
+            assertEquals("provider-7", item.providerId);
+            com.nukacast.app.tvbox.model.SearchItem card = item.toSearchItem();
+            assertEquals("provider-7", card.siteKey);
+            assertEquals("drama:provider-7", card.sourceId);
+        }
+    }
+
     @Test public void mapsCmsFieldsIntoDramaItem() {
         DramaItem item = CmsDramaCatalog.item(json("{\"vod_id\":\"172687\",\"vod_name\":\"苦尽甘来遇见你\","
                 + "\"vod_pic\":\"https://pic.test/a.jpg\",\"vod_content\":\"简介\","

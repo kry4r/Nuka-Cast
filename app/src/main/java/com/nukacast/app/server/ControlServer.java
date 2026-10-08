@@ -269,8 +269,12 @@ public final class ControlServer extends NanoHTTPD {
         }
         if ("/api/debug/navigate".equals(path)) {
             String page = session.getParms().get("page");
+            String filter = safe(session.getParms().get("filter"));
             Map<String, Object> payload = new LinkedHashMap<String, Object>();
             payload.put("page", runtime.navigateTo(page));
+            // A filter names one of the movies page's views (分类浏览/最近更新/短剧/收藏): the four are
+            // separate screens on the television and each has to be looked at.
+            if (!filter.isEmpty()) payload.put("filter", runtime.selectMovieFilter(filter));
             return json(Response.Status.OK, payload);
         }
         if ("/api/debug/focus".equals(path)) {
